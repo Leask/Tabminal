@@ -58,6 +58,24 @@ class VirtualScreen {
         this.x = 0;
         this.y = 0;
     }
+
+    newLine() {
+        this.y++;
+        if (this.y >= this.rows) {
+            this._scrollUp();
+            this.y = this.rows - 1;
+        }
+    }
+
+    carriageReturn() {
+        this.x = 0;
+    }
+
+    backspace() {
+        if (this.x > 0) {
+            this.x--;
+        }
+    }
 }
 
 export class TerminalSession {
@@ -82,7 +100,15 @@ export class TerminalSession {
                 }
             },
             inst_o: (s) => { /* Unhandled */ },
-            inst_x: (flag) => { /* Unhandled */ },
+            inst_x: (flag) => {
+                if (flag === '\n') {
+                    this.screen.newLine();
+                } else if (flag === '\r') {
+                    this.screen.carriageReturn();
+                } else if (flag === '\b') {
+                    this.screen.backspace();
+                }
+            },
             inst_c: (collected, params, flag) => {
                 // For simplicity, we only handle basic cursor movements and clearing.
                 switch (flag) {
@@ -215,8 +241,12 @@ export class TerminalSession {
         }
         const safeCols = clampDimension(cols);
         const safeRows = clampDimension(rows);
-        if (safeCols && safeRows && this.manager) {
-            this.manager.resizeAll(safeCols, safeRows);
+        if (safeCols && safeRows) {
+            if (this.manager) {
+                this.manager.resizeAll(safeCols, safeRows);
+            } else {
+                this.resize(safeCols, safeRows);
+            }
         }
     }
 
