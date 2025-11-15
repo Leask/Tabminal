@@ -74,6 +74,7 @@ httpServer.on('upgrade', (request, socket, head) => {
 const snapshotInterval = setInterval(() => {
     const snapshots = terminalManager.getAllSnapshots();
     const payload = JSON.stringify({ type: 'previews', snapshots });
+    console.log(`[Server] Broadcasting ${snapshots.length} snapshots to ${wssPreviews.clients.size} preview clients.`);
     for (const client of wssPreviews.clients) {
         if (client.readyState === 1) { // WebSocket.OPEN
             client.send(payload);

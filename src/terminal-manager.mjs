@@ -42,7 +42,8 @@ export class TerminalManager {
         const session = new TerminalSession(ptyProcess, {
             id,
             historyLimit,
-            createdAt: new Date()
+            createdAt: new Date(),
+            manager: this // Pass manager reference to session
         });
 
         // When a pty process exits, automatically remove it from the manager
@@ -57,6 +58,13 @@ export class TerminalManager {
 
     getSession(id) {
         return this.sessions.get(id);
+    }
+
+    resizeAll(cols, rows) {
+        console.log(`[Manager] Resizing all sessions to ${cols}x${rows}`);
+        for (const session of this.sessions.values()) {
+            session.resize(cols, rows);
+        }
     }
 
     removeSession(id) {

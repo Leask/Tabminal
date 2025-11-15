@@ -48,12 +48,19 @@ class VirtualScreen {
         // In the future, this could include color/style data.
         return this.buffer.map(row => row.join('')).join('\n');
     }
+
+    clear() {
+        this.buffer = Array(this.rows).fill(null).map(() => Array(this.cols).fill(' '));
+        this.x = 0;
+        this.y = 0;
+    }
 }
 
 export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
         this.id = options.id;
+        this.manager = options.manager; // Store a reference to the manager
         this.createdAt = options.createdAt ?? new Date();
         this.historyLimit = Math.max(
             1,
@@ -81,7 +88,7 @@ export class TerminalSession {
                     break;
                 case 'J': // Erase screen
                     if (params[0] === 2) { // Erase entire screen
-                        this.screen = new VirtualScreen(this.pty.cols, this.pty.rows);
+                        this.screen.clear();
                     }
                     break;
                 case 'm': // Graphics mode - could be used for colors later
@@ -155,6 +162,15 @@ export class TerminalSession {
         this.exitSubscription?.dispose?.();
     }
 
+    // Public method for the manager to call
+    resize(cols, rows) {
+        if (this.closed) {
+            return;
+        }
+        this.pty.resize(cols, rows);
+        this.screen.resize(cols, rows);
+    }
+
     _routeIncoming(raw, ws) {
         let payload;
         try {
@@ -188,15 +204,15 @@ export class TerminalSession {
         this.pty.write(data);
     }
 
+    // Internal handler that delegates to the manager
     _handleResize(cols, rows) {
         if (this.closed) {
             return;
         }
         const safeCols = clampDimension(cols);
         const safeRows = clampDimension(rows);
-        if (safeCols && safeRows && this.pty.resize) {
-            this.pty.resize(safeCols, safeRows);
-            this.screen.resize(safeCols, safeRows);
+        if (safeCols && safeRows && this.manager) {
+            this.manager.resizeAll(safeCols, safeRows);
         }
     }
 
