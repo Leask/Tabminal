@@ -18,14 +18,18 @@ class VirtualScreen {
     }
 
     print(char) {
+        // Handle line wrapping
         if (this.x >= this.cols) {
             this.x = 0;
             this.y++;
         }
+        // Handle scrolling
         if (this.y >= this.rows) {
             this._scrollUp();
             this.y = this.rows - 1;
         }
+
+        // Place the character in the buffer
         this.buffer[this.y][this.x] = char;
         this.x++;
     }

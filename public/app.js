@@ -207,20 +207,44 @@ async function createNewSession() {
 // #region UI Rendering
 function renderTabs() {
     if (!tabListEl) return;
-    tabListEl.innerHTML = '';
+
+    const existingTabIds = new Set(
+        [...tabListEl.querySelectorAll('.tab-item')].map(el => el.dataset.sessionId)
+    );
+    const newSessionIds = new Set(state.sessions.map(s => s.id));
+
+    // Remove old tabs
+    for (const tabId of existingTabIds) {
+        if (!newSessionIds.has(tabId)) {
+            tabListEl.querySelector(`[data-session-id="${tabId}"]`)?.remove();
+        }
+    }
+
+    // Add or update tabs
     state.sessions.forEach(session => {
-        const tab = document.createElement('li');
-        tab.className = `tab-item ${session.id === state.activeSessionId ? 'active' : ''}`;
-        tab.dataset.sessionId = session.id;
-        tab.innerHTML = `
-            <div class="preview-container">
-                <pre class="preview-content"></pre>
-            </div>
-            <div class="title">Terminal</div>
-            <div class="meta">ID: ${session.id.substring(0, 8)}...</div>
-            <div class="meta">Created: ${new Date(session.createdAt).toLocaleTimeString()}</div>
-        `;
-        tabListEl.appendChild(tab);
+        let tab = tabListEl.querySelector(`[data-session-id="${session.id}"]`);
+        if (!tab) {
+            // Create new tab if it doesn't exist
+            tab = document.createElement('li');
+            tab.className = 'tab-item';
+            tab.dataset.sessionId = session.id;
+            tab.innerHTML = `
+                <div class="preview-container">
+                    <pre class="preview-content"></pre>
+                </div>
+                <div class="title">Terminal</div>
+                <div class="meta">ID: ${session.id.substring(0, 8)}...</div>
+                <div class="meta">Created: ${new Date(session.createdAt).toLocaleTimeString()}</div>
+            `;
+            tabListEl.appendChild(tab);
+        }
+
+        // Update active state
+        if (session.id === state.activeSessionId) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
     });
 }
 // #endregion
