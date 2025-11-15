@@ -67,29 +67,28 @@ body {
 }
 
 .preview-container {
-    height: 90px; /* Fixed height for the preview */
+    height: 120px; /* Increased height for better visibility */
     background-color: var(--bg-base);
     border-radius: 4px;
     margin-bottom: 8px;
     overflow: hidden;
     position: relative;
+    /* Center the scaled terminal */
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
 }
 
-.preview-content {
-    font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
-    font-size: 10px; /* A small base font size */
-    line-height: 1.2;
-    white-space: pre;
-    color: var(--text-base);
-    position: absolute;
-    top: 0;
-    left: 0;
+.preview-container .xterm-viewport {
+    overflow: hidden !important; /* Hide scrollbars in preview */
+}
+
+/* Scale the preview terminal to fit */
+.preview-terminal-wrapper {
     transform-origin: top left;
-    /* Scale down to fit. The exact scale factor may need tweaking. */
-    /* Assuming a preview width of ~180px and a terminal of 120 cols */
-    transform: scale(0.2);
-    width: 500%; /* 1 / 0.2 */
-    height: 500%; /* 1 / 0.2 */
+    transform: scale(0.25); /* Scale down to 25% */
+    width: 400%; /* Compensate for scale (100% / 0.25) */
+    height: 400%;
 }
 
 

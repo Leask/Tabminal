@@ -1,95 +1,5 @@
-import AnsiParser from 'node-ansiparser';
-
 const WS_STATE_OPEN = 1;
 const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
-
-class VirtualScreen {
-    constructor(cols, rows) {
-        this.cols = cols;
-        this.rows = rows;
-        this.buffer = Array(rows).fill(null).map(() => Array(cols).fill(' '));
-        this.x = 0;
-        this.y = 0;
-    }
-
-    _scrollUp() {
-        this.buffer.shift();
-        this.buffer.push(Array(this.cols).fill(' '));
-    }
-
-    print(char) {
-        // Handle line wrapping
-        if (this.x >= this.cols) {
-            this.x = 0;
-            this.y++;
-        }
-        // Handle scrolling
-        if (this.y >= this.rows) {
-            this._scrollUp();
-            this.y = this.rows - 1;
-        }
-
-        // Place the character in the buffer
-        this.buffer[this.y][this.x] = char;
-        this.x++;
-    }
-
-    resize(newCols, newRows) {
-        if (newCols === this.cols && newRows === this.rows) {
-            return;
-        }
-
-        const newBuffer = Array(newRows).fill(null).map(() => Array(newCols).fill(' '));
-
-        // Keep the cursor in view by shifting the content if necessary
-        const rowOffset = Math.max(0, this.y - newRows + 1);
-        const copyRows = Math.min(newRows, this.rows - rowOffset);
-        const copyCols = Math.min(newCols, this.cols);
-
-        for (let r = 0; r < copyRows; r++) {
-            const srcRow = r + rowOffset;
-            for (let c = 0; c < copyCols; c++) {
-                newBuffer[r][c] = this.buffer[srcRow][c];
-            }
-        }
-
-        this.cols = newCols;
-        this.rows = newRows;
-        this.buffer = newBuffer;
-        this.x = Math.min(this.x, this.cols - 1);
-        this.y = Math.max(0, this.y - rowOffset);
-    }
-
-    getSnapshot() {
-        // Return a simple text representation for now.
-        // In the future, this could include color/style data.
-        return this.buffer.map(row => row.join('')).join('\n');
-    }
-
-    clear() {
-        this.buffer = Array(this.rows).fill(null).map(() => Array(this.cols).fill(' '));
-        this.x = 0;
-        this.y = 0;
-    }
-
-    newLine() {
-        this.y++;
-        if (this.y >= this.rows) {
-            this._scrollUp();
-            this.y = this.rows - 1;
-        }
-    }
-
-    carriageReturn() {
-        this.x = 0;
-    }
-
-    backspace() {
-        if (this.x > 0) {
-            this.x--;
-        }
-    }
-}
 
 export class TerminalSession {
     constructor(pty, options = {}) {
@@ -105,50 +15,12 @@ export class TerminalSession {
         this.clients = new Set();
         this.closed = false;
 
-        this.screen = new VirtualScreen(pty.cols, pty.rows);
-        this.ansiParser = new AnsiParser({
-            inst_p: (text) => {
-                for (const char of text) {
-                    this.screen.print(char);
-                }
-            },
-            inst_o: (s) => { /* Unhandled */ },
-            inst_x: (flag) => {
-                if (flag === '\n') {
-                    this.screen.newLine();
-                } else if (flag === '\r') {
-                    this.screen.carriageReturn();
-                } else if (flag === '\b') {
-                    this.screen.backspace();
-                }
-            },
-            inst_c: (collected, params, flag) => {
-                // For simplicity, we only handle basic cursor movements and clearing.
-                switch (flag) {
-                case 'H': // Cursor position
-                    this.screen.y = (params[0] ?? 1) - 1;
-                    this.screen.x = (params[1] ?? 1) - 1;
-                    break;
-                case 'J': // Erase screen
-                    if (params[0] === 2) { // Erase entire screen
-                        this.screen.clear();
-                    }
-                    break;
-                case 'm': // Graphics mode - could be used for colors later
-                    break;
-                }
-            },
-            inst_e: (collected, flag) => { /* Unhandled */ },
-            inst_d: (collected, params, flag) => { /* Unhandled */ },
-        });
-
         this._handleData = (chunk) => {
             if (typeof chunk !== 'string') {
                 chunk = chunk.toString('utf8');
             }
-            // Update both the raw history and the virtual screen
+            // Update the raw history
             this._appendHistory(chunk);
-            this.ansiParser.parse(chunk);
 
             // Broadcast the raw output to active clients
             this._broadcast({ type: 'output', data: chunk });
@@ -166,15 +38,6 @@ export class TerminalSession {
 
         this.dataSubscription = this.pty.onData(this._handleData);
         this.exitSubscription = this.pty.onExit(this._handleExit);
-    }
-
-    getSnapshot() {
-        return {
-            id: this.id,
-            createdAt: this.createdAt,
-            // In the future, we can add CWD, process name, etc.
-            screen: this.screen.getSnapshot()
-        };
     }
 
     attach(ws) {
@@ -211,7 +74,6 @@ export class TerminalSession {
             return;
         }
         this.pty.resize(cols, rows);
-        this.screen.resize(cols, rows);
     }
 
     _routeIncoming(raw, ws) {

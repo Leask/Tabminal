@@ -93,10 +93,6 @@ export class TerminalManager {
         }));
     }
 
-    getAllSnapshots() {
-        return Array.from(this.sessions.values()).map(s => s.getSnapshot());
-    }
-
     // Ensure at least one session exists at startup
     ensureOneSession() {
         if (this.sessions.size === 0) {

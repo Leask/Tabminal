@@ -34,7 +34,6 @@ app.post('/api/sessions', (_req, res) => {
 
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
-const wssPreviews = new WebSocketServer({ noServer: true });
 
 const terminalManager = new TerminalManager();
 terminalManager.ensureOneSession();
@@ -42,11 +41,7 @@ terminalManager.ensureOneSession();
 httpServer.on('upgrade', (request, socket, head) => {
     const pathname = request.url;
 
-    if (pathname === '/ws/previews') {
-        wssPreviews.handleUpgrade(request, socket, head, (ws) => {
-            wssPreviews.emit('connection', ws);
-        });
-    } else if (pathname.startsWith('/ws/')) {
+    if (pathname.startsWith('/ws/')) {
         // Use regex to extract session ID from URL, e.g., /ws/ca76660e-f5f3-4813-a340-3f334378d16f
         const match = pathname.match(/^\/ws\/([a-zA-Z0-9-]+)$/);
         if (!match) {
@@ -69,18 +64,6 @@ httpServer.on('upgrade', (request, socket, head) => {
         socket.destroy();
     }
 });
-
-// Send snapshots to all preview clients every 5 seconds
-const snapshotInterval = setInterval(() => {
-    const snapshots = terminalManager.getAllSnapshots();
-    const payload = JSON.stringify({ type: 'previews', snapshots });
-    console.log(`[Server] Broadcasting ${snapshots.length} snapshots to ${wssPreviews.clients.size} preview clients.`);
-    for (const client of wssPreviews.clients) {
-        if (client.readyState === 1) { // WebSocket.OPEN
-            client.send(payload);
-        }
-    }
-}, 5000).unref();
 
 wss.on('connection', (socket, session) => {
     socket.isAlive = true;
@@ -122,7 +105,6 @@ function shutdown(signal) {
     isShuttingDown = true;
     console.log(`Shutting down (${signal})...`);
     clearInterval(heartbeatInterval);
-    clearInterval(snapshotInterval);
     wss.close();
     terminalManager.dispose();
 

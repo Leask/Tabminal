@@ -9,138 +9,198 @@ const tabListEl = document.getElementById('tab-list');
 const newTabButton = document.getElementById('new-tab-button');
 // #endregion
 
-// #region Xterm.js Setup
-const terminal = new Terminal({
-    allowTransparency: true,
-    convertEol: true,
-    cursorBlink: true,
-    fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
-    fontSize: 14,
-    theme: {
-        background: '#002b36',
-        foreground: '#839496',
-        cursor: '#93a1a1',
-        cursorAccent: '#002b36',
-        selectionBackground: '#073642',
-        black: '#073642',
-        red: '#dc322f',
-        green: '#859900',
-        yellow: '#b58900',
-        blue: '#268bd2',
-        magenta: '#d33682',
-        cyan: '#2aa198',
-        white: '#eee8d5',
-        brightBlack: '#586e75',
-        brightRed: '#cb4b16',
-        brightGreen: '#586e75',
-        brightYellow: '#657b83',
-        brightBlue: '#839496',
-        brightMagenta: '#6c71c4',
-        brightCyan: '#93a1a1',
-        brightWhite: '#fdf6e3'
-    }
-});
-const fitAddon = new FitAddon();
-const linksAddon = new WebLinksAddon();
-terminal.loadAddon(fitAddon);
-terminal.loadAddon(linksAddon);
-terminal.open(terminalEl);
-// #endregion
-
-// This class is mostly unchanged, but it's kept for its robust reconnection logic.
-class TerminalConnector {
-    constructor({ endpoint, onMessage, onStatus }) {
-        this.endpoint = endpoint;
-        this.onMessage = onMessage;
-        this.onStatus = onStatus;
+// #region Session Management
+class Session {
+    constructor(data) {
+        this.id = data.id;
+        this.createdAt = data.createdAt;
+        this.history = ''; // Client-side history buffer
+        this.socket = null;
         this.reconnectAttempts = 0;
         this.shouldReconnect = true;
-        this.queue = [];
-        this.lastResize = null;
         this.retryTimer = null;
         this.heartbeatInterval = null;
         this.heartbeatTimeout = null;
         this.awaitingPong = false;
+
+        // Preview Terminal (Sidebar)
+        this.previewTerm = new Terminal({
+            allowTransparency: true,
+            cursorBlink: false,
+            disableStdin: true, // Read-only
+            fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
+            fontSize: 10, // Smaller font for preview
+            theme: {
+                background: '#002b36',
+                foreground: '#839496',
+                cursor: 'transparent', // Hide cursor in preview
+                selectionBackground: 'transparent',
+                black: '#073642',
+                red: '#dc322f',
+                green: '#859900',
+                yellow: '#b58900',
+                blue: '#268bd2',
+                magenta: '#d33682',
+                cyan: '#2aa198',
+                white: '#eee8d5',
+                brightBlack: '#586e75',
+                brightRed: '#cb4b16',
+                brightGreen: '#586e75',
+                brightYellow: '#657b83',
+                brightBlue: '#839496',
+                brightMagenta: '#6c71c4',
+                brightCyan: '#93a1a1',
+                brightWhite: '#fdf6e3'
+            },
+            rows: 24, // Default, will be resized by fit addon or content
+            cols: 80
+        });
+        this.previewFitAddon = new FitAddon();
+        this.previewTerm.loadAddon(this.previewFitAddon);
+
+        // Main Terminal (Active View) - Created on demand or kept alive?
+        // To ensure "live" switching without re-buffering, we keep it alive but unmounted.
+        this.mainTerm = new Terminal({
+            allowTransparency: true,
+            convertEol: true,
+            cursorBlink: true,
+            fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
+            fontSize: 14,
+            theme: {
+                background: '#002b36',
+                foreground: '#839496',
+                cursor: '#93a1a1',
+                cursorAccent: '#002b36',
+                selectionBackground: '#073642',
+                black: '#073642',
+                red: '#dc322f',
+                green: '#859900',
+                yellow: '#b58900',
+                blue: '#268bd2',
+                magenta: '#d33682',
+                cyan: '#2aa198',
+                white: '#eee8d5',
+                brightBlack: '#586e75',
+                brightRed: '#cb4b16',
+                brightGreen: '#586e75',
+                brightYellow: '#657b83',
+                brightBlue: '#839496',
+                brightMagenta: '#6c71c4',
+                brightCyan: '#93a1a1',
+                brightWhite: '#fdf6e3'
+            }
+        });
+        this.mainFitAddon = new FitAddon();
+        this.mainLinksAddon = new WebLinksAddon();
+        this.mainTerm.loadAddon(this.mainFitAddon);
+        this.mainTerm.loadAddon(this.mainLinksAddon);
+
+        // Hook up input on main terminal
+        this.mainTerm.onData(data => {
+            this.send({ type: 'input', data });
+        });
+
+        // Handle resizing on main terminal
+        this.mainTerm.onResize(size => {
+            this.send({ type: 'resize', cols: size.cols, rows: size.rows });
+        });
+
         this.connect();
     }
 
     connect() {
-        this.onStatus?.('connecting');
-        const socket = new WebSocket(this.endpoint);
-        this.socket = socket;
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const endpoint = `${protocol}://${window.location.host}/ws/${this.id}`;
+        
+        this.socket = new WebSocket(endpoint);
 
-        socket.addEventListener('open', () => {
+        this.socket.addEventListener('open', () => {
             this.reconnectAttempts = 0;
-            this.onStatus?.('connected');
-            this.flushQueue();
-            this._sendPendingResize();
             this.startHeartbeat();
+            // If this is the active session, report resize immediately
+            if (state.activeSessionId === this.id) {
+                this.reportResize();
+            }
         });
 
-        socket.addEventListener('message', (event) => {
+        this.socket.addEventListener('message', (event) => {
             try {
                 const payload = JSON.parse(event.data);
-                if (payload.type === 'pong') {
-                    this.handlePong();
-                    return;
-                }
-                this.onMessage?.(payload);
+                this.handleMessage(payload);
             } catch (_err) {
-                // swallow malformed payloads
+                // ignore
             }
         });
 
-        socket.addEventListener('close', () => {
+        this.socket.addEventListener('close', () => {
             this.stopHeartbeat();
-            if (!this.shouldReconnect) {
-                this.onStatus?.('terminated');
-                return;
+            if (this.shouldReconnect) {
+                const wait = Math.min(5000, 500 * 2 ** this.reconnectAttempts);
+                this.reconnectAttempts++;
+                this.retryTimer = setTimeout(() => this.connect(), wait);
             }
-            this.onStatus?.('reconnecting');
-            const wait = Math.min(5000, 500 * 2 ** this.reconnectAttempts);
-            this.reconnectAttempts += 1;
-            this.retryTimer = window.setTimeout(() => {
-                this.retryTimer = null;
-                this.connect();
-            }, wait);
-        });
-
-        socket.addEventListener('error', () => {
-            socket.close();
         });
     }
 
-    sendInput(data) {
-        this._send({ type: 'input', data }, { enqueue: true });
-    }
-
-    reportResize(cols, rows) {
-        this.lastResize = { type: 'resize', cols, rows };
-        this._sendPendingResize();
-    }
-
-    dispose() {
-        this.shouldReconnect = false;
-        this.stopHeartbeat();
-        if (this.retryTimer) {
-            window.clearTimeout(this.retryTimer);
-            this.retryTimer = null;
+    handleMessage(message) {
+        switch (message.type) {
+            case 'snapshot':
+                // Reset terminals and write history
+                this.previewTerm.reset();
+                this.mainTerm.reset();
+                this.history = message.data || '';
+                this.writeToTerminals(this.history);
+                break;
+            case 'output':
+                this.history += message.data;
+                this.writeToTerminals(message.data);
+                break;
+            case 'pong':
+                this.awaitingPong = false;
+                break;
+            case 'status':
+                if (state.activeSessionId === this.id) {
+                    setStatus(message.status);
+                }
+                if (message.status === 'terminated') {
+                    this.dispose();
+                    removeSession(this.id);
+                }
+                break;
         }
-        this.socket?.close();
-        this.queue = [];
-        this.lastResize = null;
+    }
+
+    writeToTerminals(data) {
+        this.previewTerm.write(data);
+        this.mainTerm.write(data);
+    }
+
+    send(payload) {
+        if (this.socket?.readyState === WebSocket.OPEN) {
+            this.socket.send(JSON.stringify(payload));
+        }
+    }
+
+    reportResize() {
+        // We only care about the main terminal's size for the PTY
+        if (this.mainTerm.cols && this.mainTerm.rows) {
+            this.send({
+                type: 'resize',
+                cols: this.mainTerm.cols,
+                rows: this.mainTerm.rows
+            });
+        }
     }
 
     startHeartbeat() {
         this.stopHeartbeat();
-        this.heartbeatInterval = window.setInterval(() => {
+        this.heartbeatInterval = setInterval(() => {
             if (this.awaitingPong) return;
-            if (this._send({ type: 'ping' })) {
-                this.awaitingPong = true;
-                this.heartbeatTimeout = window.setTimeout(() => {
-                    if (this.awaitingPong) this.socket?.close();
-                }, 5000);
-            }
+            this.send({ type: 'ping' });
+            this.awaitingPong = true;
+            this.heartbeatTimeout = setTimeout(() => {
+                if (this.awaitingPong) this.socket?.close();
+            }, 5000);
         }, 10000);
     }
 
@@ -152,30 +212,19 @@ class TerminalConnector {
         this.awaitingPong = false;
     }
 
-    flushQueue() {
-        for (const job of this.queue) this._send(job);
-        this.queue = [];
-    }
-
-    _sendPendingResize() {
-        if (this.lastResize) this._send(this.lastResize);
-    }
-
-    _send(payload) {
-        if (this.socket?.readyState === WebSocket.OPEN) {
-            this.socket.send(JSON.stringify(payload));
-            return true;
-        }
-        return false;
+    dispose() {
+        this.shouldReconnect = false;
+        this.stopHeartbeat();
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.socket?.close();
+        this.previewTerm.dispose();
+        this.mainTerm.dispose();
     }
 }
 
-// #region State Management
 const state = {
-    sessions: [],
-    activeSessionId: null,
-    connector: null,
-    isRestoring: false
+    sessions: new Map(), // Map<id, Session>
+    activeSessionId: null
 };
 // #endregion
 
@@ -187,7 +236,6 @@ async function fetchSessions() {
         return await response.json();
     } catch (error) {
         console.error('API Error:', error);
-        setStatus('terminated'); // Show an error state
         return [];
     }
 }
@@ -204,88 +252,69 @@ async function createNewSession() {
 }
 // #endregion
 
-// #region UI Rendering
+// #region UI Logic
 function renderTabs() {
     if (!tabListEl) return;
 
     const existingTabIds = new Set(
         [...tabListEl.querySelectorAll('.tab-item')].map(el => el.dataset.sessionId)
     );
-    const newSessionIds = new Set(state.sessions.map(s => s.id));
+    const currentSessionIds = new Set(state.sessions.keys());
 
     // Remove old tabs
     for (const tabId of existingTabIds) {
-        if (!newSessionIds.has(tabId)) {
-            tabListEl.querySelector(`[data-session-id="${tabId}"]`)?.remove();
+        if (!currentSessionIds.has(tabId)) {
+            const tab = tabListEl.querySelector(`[data-session-id="${tabId}"]`);
+            tab?.remove();
         }
     }
 
     // Add or update tabs
-    state.sessions.forEach(session => {
-        let tab = tabListEl.querySelector(`[data-session-id="${session.id}"]`);
+    for (const [id, session] of state.sessions) {
+        let tab = tabListEl.querySelector(`[data-session-id="${id}"]`);
         if (!tab) {
-            // Create new tab if it doesn't exist
             tab = document.createElement('li');
             tab.className = 'tab-item';
-            tab.dataset.sessionId = session.id;
-            tab.innerHTML = `
-                <div class="preview-container">
-                    <pre class="preview-content"></pre>
-                </div>
-                <div class="title">Terminal</div>
-                <div class="meta">ID: ${session.id.substring(0, 8)}...</div>
-                <div class="meta">Created: ${new Date(session.createdAt).toLocaleTimeString()}</div>
-            `;
+            tab.dataset.sessionId = id;
+            
+            const previewContainer = document.createElement('div');
+            previewContainer.className = 'preview-container';
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'preview-terminal-wrapper';
+            previewContainer.appendChild(wrapper);
+
+            const title = document.createElement('div');
+            title.className = 'title';
+            title.textContent = 'Terminal';
+
+            const metaId = document.createElement('div');
+            metaId.className = 'meta';
+            metaId.textContent = `ID: ${id.substring(0, 8)}...`;
+
+            const metaTime = document.createElement('div');
+            metaTime.className = 'meta';
+            metaTime.textContent = `Created: ${new Date(session.createdAt).toLocaleTimeString()}`;
+
+            tab.appendChild(previewContainer);
+            tab.appendChild(title);
+            tab.appendChild(metaId);
+            tab.appendChild(metaTime);
             tabListEl.appendChild(tab);
+
+            // Mount the preview terminal
+            session.previewTerm.open(wrapper);
+            session.previewFitAddon.fit();
         }
 
-        // Update active state
-        if (session.id === state.activeSessionId) {
+        if (id === state.activeSessionId) {
             tab.classList.add('active');
         } else {
             tab.classList.remove('active');
         }
-    });
-}
-// #endregion
-
-// #region Preview WebSocket
-function connectPreviewSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const endpoint = `${protocol}://${window.location.host}/ws/previews`;
-    const socket = new WebSocket(endpoint);
-
-    socket.addEventListener('message', (event) => {
-        try {
-            const payload = JSON.parse(event.data);
-            if (payload.type === 'previews') {
-                updatePreviews(payload.snapshots);
-            }
-        } catch (error) {
-            console.error('Preview Error:', error);
-        }
-    });
-
-    socket.addEventListener('close', () => {
-        // Reconnect after a short delay
-        setTimeout(connectPreviewSocket, 2000);
-    });
+    }
 }
 
-function updatePreviews(snapshots) {
-    snapshots.forEach(snapshot => {
-        const tabEl = tabListEl.querySelector(`[data-session-id="${snapshot.id}"]`);
-        if (tabEl) {
-            const preEl = tabEl.querySelector('.preview-content');
-            if (preEl) {
-                preEl.textContent = snapshot.screen;
-            }
-        }
-    });
-}
-// #endregion
-
-// #region Core Logic
 function setStatus(status) {
     if (!statusEl) return;
     const labels = {
@@ -303,102 +332,88 @@ function setStatus(status) {
     }
 }
 
-function handleServerMessage(message) {
-    switch (message.type) {
-    case 'snapshot':
-        terminal.reset();
-        if (message.data) {
-            state.isRestoring = true;
-            terminal.write(message.data, () => {
-                state.isRestoring = false;
-            });
-        }
-        break;
-    case 'output':
-        terminal.write(message.data);
-        break;
-    case 'status':
-        setStatus(message.status ?? 'unknown');
-        if (message.status === 'terminated') {
-            state.connector?.dispose();
-            handleSessionTermination(state.activeSessionId);
-        }
-        break;
-    }
-}
-
 async function switchToSession(sessionId) {
-    if (!sessionId || state.activeSessionId === sessionId) {
-        return;
+    if (!sessionId || !state.sessions.has(sessionId)) return;
+
+    // Unmount current terminal if any
+    if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+        const currentSession = state.sessions.get(state.activeSessionId);
+        // We don't dispose, just detach from DOM? xterm doesn't have a simple detach.
+        // But we can clear the container.
     }
 
     state.activeSessionId = sessionId;
-    state.connector?.dispose();
-    terminal.reset();
     renderTabs();
 
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const endpoint = `${protocol}://${window.location.host}/ws/${sessionId}`;
-    state.connector = new TerminalConnector({
-        endpoint,
-        onMessage: handleServerMessage,
-        onStatus: setStatus
-    });
-    state.connector.reportResize(terminal.cols, terminal.rows);
-    terminal.focus();
+    const session = state.sessions.get(sessionId);
+    
+    // Clear the main terminal container
+    terminalEl.innerHTML = '';
+    
+    // Mount the new session's main terminal
+    session.mainTerm.open(terminalEl);
+    session.mainFitAddon.fit();
+    session.mainTerm.focus();
+    
+    // Trigger a resize report to sync PTY size
+    session.reportResize();
 }
 
-async function handleSessionTermination(terminatedId) {
-    state.sessions = state.sessions.filter(s => s.id !== terminatedId);
-    if (state.sessions.length > 0) {
-        // Switch to the first available session
-        await switchToSession(state.sessions[0].id);
-    } else {
-        // All sessions are gone, create a new one
-        const newSession = await createNewSession();
-        if (newSession) {
-            state.sessions.push(newSession);
-            await switchToSession(newSession.id);
-        } else {
-            setStatus('terminated'); // Could not create a new session
+async function removeSession(id) {
+    if (state.sessions.has(id)) {
+        state.sessions.delete(id);
+        renderTabs();
+        
+        if (state.activeSessionId === id) {
+            state.activeSessionId = null;
+            terminalEl.innerHTML = ''; // Clear main view
+            
+            // Switch to another session if available
+            if (state.sessions.size > 0) {
+                await switchToSession(state.sessions.keys().next().value);
+            } else {
+                // Create new session if none left
+                const newSessionData = await createNewSession();
+                if (newSessionData) {
+                    const newSession = new Session(newSessionData);
+                    state.sessions.set(newSession.id, newSession);
+                    await switchToSession(newSession.id);
+                }
+            }
         }
     }
-    renderTabs();
 }
 
 async function initialize() {
-    fitAddon.fit();
-    terminal.focus();
-
-    const sessions = await fetchSessions();
-    if (sessions.length === 0) {
-        // This case should be rare due to backend auto-creation, but handle it.
-        const newSession = await createNewSession();
-        if (newSession) {
-            state.sessions = [newSession];
+    const sessionsData = await fetchSessions();
+    
+    if (sessionsData.length === 0) {
+        const newSessionData = await createNewSession();
+        if (newSessionData) {
+            sessionsData.push(newSessionData);
         }
-    } else {
-        state.sessions = sessions;
     }
 
-    if (state.sessions.length > 0) {
-        await switchToSession(state.sessions[0].id);
-    } else {
-        setStatus('terminated'); // Failed to get or create any session
+    for (const data of sessionsData) {
+        const session = new Session(data);
+        state.sessions.set(session.id, session);
+    }
+
+    renderTabs();
+
+    if (state.sessions.size > 0) {
+        await switchToSession(state.sessions.keys().next().value);
     }
 }
 // #endregion
 
 // #region Event Listeners
-terminal.onData((data) => {
-    if (!state.isRestoring) {
-        state.connector?.sendInput(data);
-    }
-});
-
 const resizeObserver = new ResizeObserver(() => {
-    fitAddon.fit();
-    state.connector?.reportResize(terminal.cols, terminal.rows);
+    if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+        const session = state.sessions.get(state.activeSessionId);
+        session.mainFitAddon.fit();
+        session.reportResize();
+    }
 });
 resizeObserver.observe(terminalEl);
 
@@ -410,21 +425,21 @@ tabListEl.addEventListener('click', (event) => {
 });
 
 newTabButton.addEventListener('click', async () => {
-    const newSession = await createNewSession();
-    if (newSession) {
-        state.sessions.push(newSession);
-        await switchToSession(newSession.id);
+    const newSessionData = await createNewSession();
+    if (newSessionData) {
+        const session = new Session(newSessionData);
+        state.sessions.set(session.id, session);
+        await switchToSession(session.id);
     }
 });
 
 window.addEventListener('beforeunload', () => {
     resizeObserver.disconnect();
-    state.connector?.dispose();
+    for (const session of state.sessions.values()) {
+        session.dispose();
+    }
 });
 // #endregion
 
-// Start the application
-
+// Start
 initialize();
-
-connectPreviewSocket();
