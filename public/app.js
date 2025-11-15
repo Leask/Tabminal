@@ -1,6 +1,7 @@
 import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm';
 import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm';
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
+import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 
 // #region DOM Elements
 const terminalEl = document.getElementById('terminal');
@@ -58,6 +59,7 @@ class Session {
         });
         this.previewFitAddon = new FitAddon();
         this.previewTerm.loadAddon(this.previewFitAddon);
+        this.previewTerm.loadAddon(new CanvasAddon());
 
         // Main Terminal (Active View) - Created on demand or kept alive?
         // To ensure "live" switching without re-buffering, we keep it alive but unmounted.
@@ -95,6 +97,7 @@ class Session {
         this.mainLinksAddon = new WebLinksAddon();
         this.mainTerm.loadAddon(this.mainFitAddon);
         this.mainTerm.loadAddon(this.mainLinksAddon);
+        this.mainTerm.loadAddon(new CanvasAddon());
 
         // Hook up input on main terminal
         this.mainTerm.onData(data => {
