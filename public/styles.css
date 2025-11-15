@@ -1,0 +1,44 @@
+@import url('https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css');
+
+:root {
+    color-scheme: dark;
+    background-color: #050709;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+    background-color: #050709;
+    color: #e6edf3;
+    min-height: 100vh;
+}
+
+main#terminal {
+    width: 100vw;
+    height: 100vh;
+}
+
+#status-pill {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    background: rgba(15, 23, 42, 0.85);
+    color: #cbd5f5;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+#status-pill.visible {
+    opacity: 1;
+}

@@ -1,0 +1,32 @@
+{
+  "name": "tabminal",
+  "version": "1.0.0",
+  "description": "Realtime xterm.js terminal that stays alive across browser sessions.",
+  "type": "module",
+  "main": "src/server.mjs",
+  "scripts": {
+    "dev": "NODE_ENV=development node --watch src/server.mjs",
+    "start": "NODE_ENV=production node src/server.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "terminal",
+    "xterm",
+    "websocket",
+    "node-pty"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.9"
+  }
+}
