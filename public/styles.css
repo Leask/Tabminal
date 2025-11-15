@@ -89,6 +89,7 @@ body {
     transform: scale(0.25); /* Scale down to 25% */
     width: 400%; /* Compensate for scale (100% / 0.25) */
     height: 400%;
+    pointer-events: none; /* Disable interaction, allow clicks to pass through */
 }
 
 
