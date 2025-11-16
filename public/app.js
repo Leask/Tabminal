@@ -341,7 +341,7 @@ function updateSystemStatus(system) {
         { label: 'CPU', value: `${system.cpu.count}x ${system.cpu.speed} ${system.cpu.usagePercent}% ${renderProgressBar(system.cpu.usagePercent)}` },
         { label: 'Mem', value: `${formatBytesPair(system.memory.used, system.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
         { label: 'Up', value: formatUptime(system.uptime) },
-        { label: 'Tabminal', value: formatUptime(system.processUptime) },
+        { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(system.processUptime)}` },
         { label: 'FPS', value: currentFps }
     ];
 
