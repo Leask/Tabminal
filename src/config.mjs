@@ -29,8 +29,8 @@ function generateRandomPassword(length = 32) {
     return crypto.randomBytes(Math.ceil(length / 2)).toString('hex').slice(0, length);
 }
 
-function sha1(input) {
-    return crypto.createHash('sha1').update(input).digest('hex');
+function sha256(input) {
+    return crypto.createHash('sha256').update(input).digest('hex');
 }
 
 function loadConfig() {
@@ -123,8 +123,8 @@ Options:
         console.log('Please save this password or set a custom one using -a/--passwd.\n');
     }
 
-    // Store SHA1 hash in memory
-    finalConfig.passwordHash = sha1(finalConfig.password);
+    // Store SHA256 hash in memory
+    finalConfig.passwordHash = sha256(finalConfig.password);
 
     return finalConfig;
 }
