@@ -7,6 +7,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
+import { SystemMonitor } from './system-monitor.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,9 +20,14 @@ app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok' });
 });
 
+const systemMonitor = new SystemMonitor();
+
 // API routes for session management
 app.get('/api/heartbeat', (_req, res) => {
-    res.json(terminalManager.listSessions());
+    res.json({
+        sessions: terminalManager.listSessions(),
+        system: systemMonitor.getStats()
+    });
 });
 
 app.post('/api/sessions', (_req, res) => {

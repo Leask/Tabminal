@@ -8,14 +8,34 @@ const terminalEl = document.getElementById('terminal');
 const statusEl = document.getElementById('status-pill');
 const tabListEl = document.getElementById('tab-list');
 const newTabButton = document.getElementById('new-tab-button');
+const systemStatusBarEl = document.getElementById('system-status-bar');
 // #endregion
 
 // #region Configuration
 const HEARTBEAT_INTERVAL_MS = 1000;
 // #endregion
 
+// #region FPS Counter
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let currentFps = 0;
+
+function measureFps() {
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 1000) {
+        currentFps = Math.round((frameCount * 1000) / (now - lastFpsTime));
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+    requestAnimationFrame(measureFps);
+}
+measureFps();
+// #endregion
+
 // #region Session Class
 class Session {
+// ... (keep existing Session class) ...
     constructor(data) {
         this.id = data.id;
         this.createdAt = data.createdAt;
@@ -113,16 +133,34 @@ class Session {
             if (!this.wrapperElement) return;
             this.wrapperElement.style.width = '';
             this.wrapperElement.style.height = '';
+            this.wrapperElement.style.transform = '';
+            
             const termWidth = this.previewTerm.element.offsetWidth;
             const termHeight = this.previewTerm.element.offsetHeight;
+            
             if (termWidth === 0 || termHeight === 0) return;
+            
             const container = this.wrapperElement.parentElement;
             const availableWidth = container.clientWidth;
+            const availableHeight = container.clientHeight; // Use clientHeight to respect min-height
+            
+            // Calculate scale to fit width
             const scale = availableWidth / termWidth;
+            
             this.wrapperElement.style.width = `${termWidth}px`;
             this.wrapperElement.style.height = `${termHeight}px`;
-            this.wrapperElement.style.transform = `scale(${scale})`;
-            container.style.height = `${termHeight * scale}px`;
+            
+            const scaledHeight = termHeight * scale;
+            const targetHeight = Math.max(76, scaledHeight); // Match CSS min-height
+            container.style.height = `${targetHeight}px`;
+            
+            if (scaledHeight < targetHeight) {
+                const topOffset = (targetHeight - scaledHeight) / 2;
+                this.wrapperElement.style.transform = `translate(0px, ${topOffset}px) scale(${scale})`;
+            } else {
+                this.wrapperElement.style.transform = `scale(${scale})`;
+            }
+            this.wrapperElement.style.transformOrigin = 'top left';
         });
     }
 
@@ -246,11 +284,73 @@ async function syncSessions() {
     try {
         const response = await fetch('/api/heartbeat');
         if (!response.ok) return;
-        const remoteSessions = await response.json();
-        reconcileSessions(remoteSessions);
+        const data = await response.json();
+        
+        // Handle legacy response (array) or new response (object)
+        const sessions = Array.isArray(data) ? data : data.sessions;
+        const system = data.system;
+
+        reconcileSessions(sessions);
+        if (system) {
+            updateSystemStatus(system);
+        }
     } catch (error) {
         console.error('Heartbeat failed:', error);
     }
+}
+
+function updateSystemStatus(system) {
+    if (!systemStatusBarEl) return;
+
+    const formatBytesPair = (used, total) => {
+        if (total === 0) return '0/0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(total) / Math.log(k));
+        const unit = sizes[i];
+        const usedVal = parseFloat((used / Math.pow(k, i)).toFixed(1));
+        const totalVal = parseFloat((total / Math.pow(k, i)).toFixed(1));
+        return `${usedVal}/${totalVal}${unit}`;
+    };
+
+    const renderProgressBar = (percent) => {
+        return `
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: ${Math.min(100, Math.max(0, percent))}%;"></div>
+            </div>
+        `;
+    };
+
+    const memPercent = (system.memory.used / system.memory.total) * 100;
+
+    const formatUptime = (seconds) => {
+        const d = Math.floor(seconds / (3600 * 24));
+        const h = Math.floor((seconds % (3600 * 24)) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const parts = [];
+        if (d > 0) parts.push(`${d}d`);
+        if (h > 0) parts.push(`${h}h`);
+        parts.push(`${m}m`);
+        return parts.join(' ');
+    };
+
+    const items = [
+        { label: 'Host', value: system.hostname },
+        { label: 'OS', value: system.osName },
+        { label: 'IP', value: system.ip },
+        { label: 'CPU', value: `${system.cpu.usagePercent}% ${renderProgressBar(system.cpu.usagePercent)}` },
+        { label: 'Mem', value: `${formatBytesPair(system.memory.used, system.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
+        { label: 'Up', value: formatUptime(system.uptime) },
+        { label: 'Tabminal', value: formatUptime(system.processUptime) },
+        { label: 'FPS', value: currentFps }
+    ];
+
+    systemStatusBarEl.innerHTML = items.map(item => `
+        <div class="status-item">
+            <span class="status-label">${item.label}:</span>
+            <span class="status-value">${item.value}</span>
+        </div>
+    `).join('');
 }
 
 function reconcileSessions(remoteSessions) {
