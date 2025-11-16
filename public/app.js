@@ -370,11 +370,18 @@ function renderTabs() {
 
             const metaTime = document.createElement('div');
             metaTime.className = 'meta';
-            const dateStr = new Date(session.createdAt).toLocaleString(undefined, {
-                dateStyle: 'short',
-                timeStyle: 'short'
-            });
-            metaTime.textContent = `SINCE: ${dateStr}`;
+            
+            const d = new Date(session.createdAt);
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            let hh = d.getHours();
+            const min = String(d.getMinutes()).padStart(2, '0');
+            const ampm = hh >= 12 ? 'PM' : 'AM';
+            hh = hh % 12;
+            hh = hh ? hh : 12;
+            const hhStr = String(hh).padStart(2, '0');
+            
+            metaTime.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
 
             tab.appendChild(previewContainer);
             tab.appendChild(title);
