@@ -8,7 +8,7 @@ const DEFAULT_CONFIG = {
     port: 9846,
     heartbeatInterval: 30000,
     historyLimit: 524288,
-    accepted_security_warning: false
+    acceptedSecurityWarning: false
 };
 
 function loadJson(filePath) {
@@ -87,7 +87,7 @@ Options:
         }
     }
     if (args.yes) {
-        finalConfig.accepted_security_warning = true;
+        finalConfig.acceptedSecurityWarning = true;
     }
 
     // Environment variables override (for backward compatibility/container usage)
