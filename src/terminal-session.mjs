@@ -10,67 +10,52 @@ export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
         this.id = options.id;
-        this.manager = options.manager; // Store a reference to the manager
+        this.manager = options.manager;
         this.createdAt = options.createdAt ?? new Date();
         this.shell = options.shell;
         this.initialCwd = options.initialCwd;
+        
         this.title = this.shell ? this.shell.split('/').pop() : 'Terminal';
         this.cwd = this.initialCwd;
-        this.historyLimit = Math.max(
-            1,
-            options.historyLimit ?? DEFAULT_HISTORY_LIMIT
-        );
+        
+        // Format the initial environment object into a static string
+        this.env = Object.entries(options.env || {})
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+        
+        this.historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
         this.history = '';
         this.clients = new Set();
         this.closed = false;
         this.pollingInterval = null;
 
         this.ansiParser = new AnsiParser({
-            inst_p: (_s) => {},
             inst_o: (s) => {
-                // OSC Handler
-                // s is the content of the OSC sequence
                 if (s.startsWith('0;') || s.startsWith('2;')) {
-                    // Title change: "0;Title" or "2;Title"
                     const newTitle = s.substring(2);
                     if (newTitle && newTitle !== this.title) {
                         this.title = newTitle;
-                        this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd });
+                        this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env });
                     }
                 } else if (s.startsWith('7;')) {
-                    // CWD change: "7;file://hostname/path"
                     try {
-                        const urlStr = s.substring(2);
-                        const url = new URL(urlStr);
+                        const url = new URL(s.substring(2));
                         if (url.pathname) {
                             const newCwd = decodeURIComponent(url.pathname);
                             if (newCwd !== this.cwd) {
                                 this.cwd = newCwd;
-                                this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd });
+                                this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env });
                             }
                         }
-                    } catch (_e) {
-                        // ignore invalid URLs
-                    }
+                    } catch (_e) { /* ignore */ }
                 }
             },
-            inst_x: (_flag) => {},
-            inst_c: (_collected, _params, _flag) => {},
-            inst_e: (_collected, _flag) => {},
-            inst_d: (_collected, _params, _flag) => {},
         });
 
         this._handleData = (chunk) => {
-            if (typeof chunk !== 'string') {
-                chunk = chunk.toString('utf8');
-            }
-            // Update the raw history
+            if (typeof chunk !== 'string') chunk = chunk.toString('utf8');
             this._appendHistory(chunk);
-            
-            // Parse for metadata updates
             this.ansiParser.parse(chunk);
-
-            // Broadcast the raw output to active clients
             this._broadcast({ type: 'output', data: chunk });
         };
 
@@ -93,64 +78,74 @@ export class TerminalSession {
 
     startTitlePolling() {
         if (this.pollingInterval) return;
-        
-        // Poll every 2 seconds
-        this.pollingInterval = setInterval(async () => {
+
+        const poll = async () => {
             if (this.closed) return;
             try {
                 let currentPid = this.pty.pid;
-                
-                // Traverse down the process tree to find the deepest child (foreground process)
                 while (true) {
                     try {
-                        // pgrep -P <ppid> lists child PIDs
                         const { stdout } = await execAsync(`pgrep -P ${currentPid}`);
                         const pids = stdout.trim().split('\n').filter(Boolean).map(p => parseInt(p, 10));
-                        
                         if (pids.length === 0) break;
-                        
-                        // Assume the child with the highest PID is the most recent/foreground one
                         currentPid = Math.max(...pids);
-                    } catch (e) {
-                        // pgrep returns exit code 1 if no processes found, which throws an error
-                        break;
-                    }
+                    } catch (e) { break; }
                 }
 
-                // If we found a descendant
+                let newTitle;
                 if (currentPid !== this.pty.pid) {
                     const { stdout: argsOut } = await execAsync(`ps -o args= -p ${currentPid}`);
-                    let newTitle = argsOut.trim();
-                    
-                    // If the command starts with a path, use the basename
-                    // e.g. "/usr/bin/vim file.txt" -> "vim file.txt"
-                    const firstSpaceIndex = newTitle.indexOf(' ');
-                    if (firstSpaceIndex > 0) {
-                        const cmd = newTitle.substring(0, firstSpaceIndex);
-                        const args = newTitle.substring(firstSpaceIndex);
-                        if (cmd.includes('/')) {
-                            newTitle = cmd.split('/').pop() + args;
-                        }
-                    } else if (newTitle.includes('/')) {
-                        newTitle = newTitle.split('/').pop();
-                    }
-                    
-                    if (newTitle && newTitle !== this.title) {
-                        this.title = newTitle;
-                        this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd });
+                    newTitle = argsOut.trim();
+                    const firstSpace = newTitle.indexOf(' ');
+                    const cmd = firstSpace > 0 ? newTitle.substring(0, firstSpace) : newTitle;
+                    if (cmd.includes('/')) {
+                        newTitle = cmd.split('/').pop() + (firstSpace > 0 ? newTitle.substring(firstSpace) : '');
                     }
                 } else {
-                    // Revert to shell name if no children found
-                    const shellName = this.shell ? this.shell.split('/').pop() : 'Terminal';
-                    if (this.title !== shellName) {
-                        this.title = shellName;
-                        this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd });
-                    }
+                    newTitle = this.shell ? this.shell.split('/').pop() : 'Terminal';
                 }
-            } catch (_err) {
-                // Ignore polling errors
-            }
-        }, 2000);
+
+                let newEnv = null;
+                try {
+                    const { stdout: envOut } = await execAsync(`ps -p ${currentPid} -wwE`);
+                    const lines = envOut.trim().split('\n');
+                    if (lines.length > 1) {
+                        const rawLine = lines.slice(1).join(' ');
+                        const cmdAndArgs = (await execAsync(`ps -o args= -p ${currentPid}`)).stdout.trim();
+                        const envBlock = rawLine.substring(rawLine.indexOf(cmdAndArgs) + cmdAndArgs.length).trim();
+                        
+                        const regex = /([A-Z_][A-Z0-9_]*=)/g;
+                        const indices = [];
+                        let match;
+                        while ((match = regex.exec(envBlock)) !== null) {
+                            indices.push(match.index);
+                        }
+                        
+                        if (indices.length > 0) {
+                            const envs = [];
+                            for (let i = 0; i < indices.length; i++) {
+                                const start = indices[i];
+                                const end = (i + 1 < indices.length) ? indices[i + 1] : envBlock.length;
+                                envs.push(envBlock.substring(start, end).trim());
+                            }
+                            newEnv = envs.join('\n');
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+
+                const titleChanged = newTitle && newTitle !== this.title;
+                const envChanged = newEnv !== null && newEnv !== this.env;
+
+                if (titleChanged || envChanged) {
+                    if (titleChanged) this.title = newTitle;
+                    if (envChanged) this.env = newEnv;
+                    this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env });
+                }
+            } catch (_err) { /* ignore */ }
+        };
+
+        poll(); // Run immediately
+        this.pollingInterval = setInterval(poll, 2000);
     }
 
     stopTitlePolling() {
@@ -161,21 +156,14 @@ export class TerminalSession {
     }
 
     attach(ws) {
-        if (!ws) {
-            throw new Error('WebSocket instance required');
-        }
-
+        if (!ws) throw new Error('WebSocket instance required');
         this.clients.add(ws);
-        ws.once('close', () => {
-            this.clients.delete(ws);
-        });
+        ws.once('close', () => this.clients.delete(ws));
         ws.on('message', (raw) => this._routeIncoming(raw, ws));
-        ws.on('error', () => {
-            ws.close();
-        });
+        ws.on('error', () => ws.close());
 
         this._send(ws, { type: 'snapshot', data: this.history });
-        this._send(ws, { type: 'meta', title: this.title, cwd: this.cwd });
+        this._send(ws, { type: 'meta', title: this.title, cwd: this.cwd, env: this.env });
         if (this.closed) {
             this._send(ws, { type: 'status', status: 'terminated' });
         } else {
@@ -184,57 +172,37 @@ export class TerminalSession {
     }
 
     dispose() {
+        this.stopTitlePolling();
         this.clients.clear();
         this.dataSubscription?.dispose?.();
         this.exitSubscription?.dispose?.();
     }
 
-    // Public method for the manager to call
     resize(cols, rows) {
-        if (this.closed) {
-            return;
-        }
+        if (this.closed) return;
         this.pty.resize(cols, rows);
     }
 
     _routeIncoming(raw, ws) {
         let payload;
         try {
-            const text = typeof raw === 'string'
-                ? raw
-                : raw.toString('utf8');
-            payload = JSON.parse(text);
-        } catch (_err) {
-            return;
-        }
+            payload = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
+        } catch (_err) { return; }
 
         switch (payload.type) {
-        case 'input':
-            this._handleInput(payload.data);
-            break;
-        case 'resize':
-            this._handleResize(payload.cols, payload.rows);
-            break;
-        case 'ping':
-            this._send(ws, { type: 'pong' });
-            break;
-        default:
-            break;
+            case 'input': this._handleInput(payload.data); break;
+            case 'resize': this._handleResize(payload.cols, payload.rows); break;
+            case 'ping': this._send(ws, { type: 'pong' }); break;
         }
     }
 
     _handleInput(data) {
-        if (this.closed || typeof data !== 'string') {
-            return;
-        }
+        if (this.closed || typeof data !== 'string') return;
         this.pty.write(data);
     }
 
-    // Internal handler that delegates to the manager
     _handleResize(cols, rows) {
-        if (this.closed) {
-            return;
-        }
+        if (this.closed) return;
         const safeCols = clampDimension(cols);
         const safeRows = clampDimension(rows);
         if (safeCols && safeRows) {
@@ -248,9 +216,7 @@ export class TerminalSession {
     _appendHistory(chunk) {
         this.history += chunk;
         if (this.history.length > this.historyLimit) {
-            this.history = this.history.slice(
-                this.history.length - this.historyLimit
-            );
+            this.history = this.history.slice(this.history.length - this.historyLimit);
         }
     }
 
@@ -262,18 +228,13 @@ export class TerminalSession {
     }
 
     _send(ws, message, preEncoded) {
-        if (!ws || ws.readyState !== WS_STATE_OPEN) {
-            return;
-        }
-        const payload = preEncoded ?? JSON.stringify(message);
-        ws.send(payload);
+        if (!ws || ws.readyState !== WS_STATE_OPEN) return;
+        ws.send(preEncoded ?? JSON.stringify(message));
     }
 }
 
 function clampDimension(value) {
     const num = Number.parseInt(value, 10);
-    if (Number.isNaN(num) || num <= 0) {
-        return null;
-    }
+    if (Number.isNaN(num) || num <= 0) return null;
     return Math.min(500, num);
 }

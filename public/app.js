@@ -18,102 +18,55 @@ class Session {
         this.shell = data.shell || 'Terminal';
         this.initialCwd = data.initialCwd || '';
         
-                this.title = data.title || this.shell.split('/').pop();
-                this.cwd = data.cwd || this.initialCwd;
-                this.cols = data.cols || 80;
-                this.rows = data.rows || 24;
-        
-                this.history = ''; // Client-side history buffer
-                this.socket = null;
-                this.reconnectAttempts = 0;
-                this.shouldReconnect = true;
-                this.retryTimer = null;
-                this.heartbeatInterval = null;
-                this.heartbeatTimeout = null;
-                this.awaitingPong = false;
-                this.isRestoring = false;
-        
-                // Preview Terminal (Sidebar)
-                this.previewTerm = new Terminal({
-                    allowTransparency: true,
-                    cursorBlink: false,
-                    disableStdin: true, // Read-only
-                    fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
-                    fontSize: 10, // Smaller font for preview
-                    theme: {
-                        background: '#002b36',
-                        foreground: '#839496',
-                        cursor: 'transparent', // Hide cursor in preview
-                        selectionBackground: 'transparent',
-                        black: '#073642',
-                        red: '#dc322f',
-                        green: '#859900',
-                        yellow: '#b58900',
-                        blue: '#268bd2',
-                        magenta: '#d33682',
-                        cyan: '#2aa198',
-                        white: '#eee8d5',
-                        brightBlack: '#586e75',
-                        brightRed: '#cb4b16',
-                        brightGreen: '#586e75',
-                        brightYellow: '#657b83',
-                        brightBlue: '#839496',
-                        brightMagenta: '#6c71c4',
-                        brightCyan: '#93a1a1',
-                        brightWhite: '#fdf6e3'
-                    },
-                    rows: this.rows,
-                    cols: this.cols
-                });
-                this.previewTerm.loadAddon(new CanvasAddon());
-                this.wrapperElement = null;
-        
-                // Main Terminal (Active View) - Created on demand or kept alive?
-                // To ensure "live" switching without re-buffering, we keep it alive but unmounted.
-                this.mainTerm = new Terminal({
-                    allowTransparency: true,
-                    convertEol: true,
-                    cursorBlink: true,
-                    fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
-                    fontSize: 14,
-                    theme: {
-                        background: '#002b36',
-                        foreground: '#839496',
-                        cursor: '#93a1a1',
-                        cursorAccent: '#002b36',
-                        selectionBackground: '#073642',
-                        black: '#073642',
-                        red: '#dc322f',
-                        green: '#859900',
-                        yellow: '#b58900',
-                        blue: '#268bd2',
-                        magenta: '#d33682',
-                        cyan: '#2aa198',
-                        white: '#eee8d5',
-                        brightBlack: '#586e75',
-                        brightRed: '#cb4b16',
-                        brightGreen: '#586e75',
-                        brightYellow: '#657b83',
-                        brightBlue: '#839496',
-                        brightMagenta: '#6c71c4',
-                        brightCyan: '#93a1a1',
-                        brightWhite: '#fdf6e3'
-                    },
-                    rows: this.rows,
-                    cols: this.cols
-                });        this.mainFitAddon = new FitAddon();
+        this.title = data.title || this.shell.split('/').pop();
+        this.cwd = data.cwd || this.initialCwd;
+        this.env = data.env || ''; // Initialize from API
+        this.cols = data.cols || 80;
+        this.rows = data.rows || 24;
+
+        this.history = '';
+        this.socket = null;
+        this.reconnectAttempts = 0;
+        this.shouldReconnect = true;
+        this.retryTimer = null;
+        this.heartbeatInterval = null;
+        this.heartbeatTimeout = null;
+        this.awaitingPong = false;
+        this.isRestoring = false;
+
+        this.previewTerm = new Terminal({
+            disableStdin: true,
+            cursorBlink: false,
+            allowTransparency: true,
+            fontSize: 10,
+            rows: this.rows,
+            cols: this.cols,
+            theme: { background: '#002b36', foreground: '#839496', cursor: 'transparent', selectionBackground: 'transparent' }
+        });
+        this.previewTerm.loadAddon(new CanvasAddon());
+        this.wrapperElement = null;
+
+        this.mainTerm = new Terminal({
+            allowTransparency: true,
+            convertEol: true,
+            cursorBlink: true,
+            fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
+            fontSize: 14,
+            rows: this.rows,
+            cols: this.cols,
+            theme: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642' }
+        });
+        this.mainFitAddon = new FitAddon();
         this.mainLinksAddon = new WebLinksAddon();
         this.mainTerm.loadAddon(this.mainFitAddon);
         this.mainTerm.loadAddon(this.mainLinksAddon);
         this.mainTerm.loadAddon(new CanvasAddon());
 
-        // Hook up input on main terminal
         this.mainTerm.onData(data => {
             if (this.isRestoring) return;
             this.send({ type: 'input', data });
         });
 
-        // Handle resizing on main terminal
         this.mainTerm.onResize(size => {
             this.previewTerm.resize(size.cols, size.rows);
             this.updatePreviewScale();
@@ -125,35 +78,20 @@ class Session {
 
     updatePreviewScale() {
         if (!this.wrapperElement) return;
-
-        // Clear constraints to allow xterm to report its true intrinsic size
-        this.wrapperElement.style.width = '';
-        this.wrapperElement.style.height = '';
-
-        // Wait for next frame to ensure xterm has rendered and calculated dimensions
         requestAnimationFrame(() => {
             if (!this.wrapperElement) return;
-            
-            // Get the actual width of the terminal content
-            // We can use the element's offsetWidth, but we need to ensure it's not constrained.
-            // Since wrapper has no width set, it should expand to fit content.
+            this.wrapperElement.style.width = '';
+            this.wrapperElement.style.height = '';
             const termWidth = this.previewTerm.element.offsetWidth;
             const termHeight = this.previewTerm.element.offsetHeight;
-            
             if (termWidth === 0 || termHeight === 0) return;
-
-            const sidebarWidth = 200;
-            const padding = 20; // 10px padding on each side
-            const availableWidth = sidebarWidth - padding;
-
+            const container = this.wrapperElement.parentElement;
+            const availableWidth = container.clientWidth;
             const scale = availableWidth / termWidth;
-
             this.wrapperElement.style.width = `${termWidth}px`;
             this.wrapperElement.style.height = `${termHeight}px`;
             this.wrapperElement.style.transform = `scale(${scale})`;
-            
-            // Adjust container height to match scaled height
-            this.wrapperElement.parentElement.style.height = `${termHeight * scale}px`;
+            container.style.height = `${termHeight * scale}px`;
         });
     }
 
@@ -161,43 +99,36 @@ class Session {
         const tab = tabListEl.querySelector(`[data-session-id="${this.id}"]`);
         if (!tab) return;
 
-        const titleEl = tab.querySelector('.title');
-        const metaEl = tab.querySelector('.meta-cwd');
-
-        if (titleEl) {
-            titleEl.textContent = this.title;
-            titleEl.title = this.title; // Tooltip
+        if (this.env) {
+            tab.title = this.env; // Set tooltip on the main tab element
         }
 
+        const titleEl = tab.querySelector('.title');
+        if (titleEl) titleEl.textContent = this.title;
+
+        const metaEl = tab.querySelector('.meta-cwd');
         if (metaEl) {
             const shortened = shortenPath(this.cwd);
             metaEl.textContent = `PWD: ${shortened}`;
-            metaEl.title = this.cwd; // Tooltip
+            metaEl.title = this.cwd;
         }
     }
 
     connect() {
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const endpoint = `${protocol}://${window.location.host}/ws/${this.id}`;
-        
         this.socket = new WebSocket(endpoint);
 
         this.socket.addEventListener('open', () => {
             this.reconnectAttempts = 0;
             this.startHeartbeat();
-            // If this is the active session, report resize immediately
-            if (state.activeSessionId === this.id) {
-                this.reportResize();
-            }
+            if (state.activeSessionId === this.id) this.reportResize();
         });
 
         this.socket.addEventListener('message', (event) => {
             try {
-                const payload = JSON.parse(event.data);
-                this.handleMessage(payload);
-            } catch (_err) {
-                // ignore
-            }
+                this.handleMessage(JSON.parse(event.data));
+            } catch (_err) { /* ignore */ }
         });
 
         this.socket.addEventListener('close', () => {
@@ -213,16 +144,12 @@ class Session {
     handleMessage(message) {
         switch (message.type) {
             case 'snapshot':
-                // Reset terminals and write history
                 this.previewTerm.reset();
                 this.mainTerm.reset();
                 this.history = message.data || '';
-                
                 this.isRestoring = true;
                 this.previewTerm.write(this.history);
-                this.mainTerm.write(this.history, () => {
-                    this.isRestoring = false;
-                });
+                this.mainTerm.write(this.history, () => { this.isRestoring = false; });
                 break;
             case 'output':
                 this.history += message.data;
@@ -231,15 +158,14 @@ class Session {
             case 'meta':
                 if (message.title) this.title = message.title;
                 if (message.cwd) this.cwd = message.cwd;
+                if (message.env) this.env = message.env; // Update env from message
                 this.updateTabUI();
                 break;
             case 'pong':
                 this.awaitingPong = false;
                 break;
             case 'status':
-                if (state.activeSessionId === this.id) {
-                    setStatus(message.status);
-                }
+                if (state.activeSessionId === this.id) setStatus(message.status);
                 if (message.status === 'terminated') {
                     this.dispose();
                     removeSession(this.id);
@@ -260,13 +186,8 @@ class Session {
     }
 
     reportResize() {
-        // We only care about the main terminal's size for the PTY
         if (this.mainTerm.cols && this.mainTerm.rows) {
-            this.send({
-                type: 'resize',
-                cols: this.mainTerm.cols,
-                rows: this.mainTerm.rows
-            });
+            this.send({ type: 'resize', cols: this.mainTerm.cols, rows: this.mainTerm.rows });
         }
     }
 
@@ -283,8 +204,8 @@ class Session {
     }
 
     stopHeartbeat() {
-        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-        if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
+        clearInterval(this.heartbeatInterval);
+        clearTimeout(this.heartbeatTimeout);
         this.heartbeatInterval = null;
         this.heartbeatTimeout = null;
         this.awaitingPong = false;
@@ -293,7 +214,7 @@ class Session {
     dispose() {
         this.shouldReconnect = false;
         this.stopHeartbeat();
-        if (this.retryTimer) clearTimeout(this.retryTimer);
+        clearTimeout(this.retryTimer);
         this.socket?.close();
         this.previewTerm.dispose();
         this.mainTerm.dispose();

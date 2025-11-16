@@ -34,13 +34,14 @@ export class TerminalManager {
         const id = crypto.randomUUID();
         const shell = resolveShell();
         const initialCwd = process.env.TABMINAL_CWD || process.cwd();
-        
+        const env = process.env; // Capture the environment
+
         const ptyProcess = pty.spawn(shell, [], {
             name: 'xterm-256color',
-            cols: this.lastCols, // Use the last known size
-            rows: this.lastRows, // Use the last known size
+            cols: this.lastCols,
+            rows: this.lastRows,
             cwd: initialCwd,
-            env: process.env,
+            env: env,
             encoding: 'utf8'
         });
 
@@ -48,18 +49,18 @@ export class TerminalManager {
             id,
             historyLimit,
             createdAt: new Date(),
-            manager: this, // Pass manager reference to session
+            manager: this,
             shell,
-            initialCwd
+            initialCwd,
+            env: env // Pass the captured env
         });
 
-        // When a pty process exits, automatically remove it from the manager
         ptyProcess.onExit(() => {
             this.removeSession(id);
         });
 
         this.sessions.set(id, session);
-        console.log(`[Manager] Created session ${id} with size ${this.lastCols}x${this.lastRows}`);
+        console.log(`[Manager] Created session ${id}`);
         return session;
     }
 
@@ -103,6 +104,7 @@ export class TerminalManager {
             initialCwd: s.initialCwd,
             title: s.title,
             cwd: s.cwd,
+            env: s.env,
             cols: s.pty.cols,
             rows: s.pty.rows
         }));
