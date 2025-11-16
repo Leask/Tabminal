@@ -523,6 +523,7 @@ function updateSystemStatus(system) {
         { label: 'Mem', value: `${formatBytesPair(system.memory.used, system.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
         { label: 'Up', value: formatUptime(system.uptime) },
         { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(system.processUptime)}` },
+        { label: 'Synced', value: new Date().toLocaleTimeString() },
         { label: 'FPS', value: currentFps }
     ];
 
