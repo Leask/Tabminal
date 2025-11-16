@@ -166,6 +166,11 @@ body {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    transition: transform 0.3s ease; /* Smooth slide transition */
+}
+
+.tab-item:hover .tab-info-overlay {
+    transform: translateY(100%); /* Slide down out of view */
 }
 
 .tab-info-overlay .meta {
