@@ -4,7 +4,7 @@ tests/
 .history/
 
 # Configuration
-config.json
+/config.json
 .gitignore
 .npmignore
 .DS_Store

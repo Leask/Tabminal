@@ -122,6 +122,4 @@ dist
 .DS_Store
 
 # Tabminal specific
-debug_*.mjs
-*.png
-config.json
+/config.json
