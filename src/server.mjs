@@ -97,14 +97,14 @@ httpServer.on('upgrade', (request, socket, head) => {
         }
 
         const sessionId = match[1];
-        const session = terminalManager.getSession(sessionId);
-        if (!session) {
-            console.warn(`[Server] Session not found for ID: ${sessionId}`);
-            socket.destroy();
-            return;
-        }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
+            const session = terminalManager.getSession(sessionId);
+            if (!session) {
+                console.warn(`[Server] Session not found for ID: ${sessionId}`);
+                ws.close(); // Close the WebSocket connection
+                return;
+            }
             wss.emit('connection', ws, session);
         });
     } else {
