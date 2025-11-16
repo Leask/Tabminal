@@ -1,25 +1,30 @@
 {
   "name": "tabminal",
-  "version": "1.0.0",
-  "description": "Realtime xterm.js terminal that stays alive across browser sessions.",
+  "version": "1.1.0",
+  "description": "A modern, persistent web terminal with multi-tab support and real-time system monitoring.",
   "type": "module",
   "main": "src/server.mjs",
   "scripts": {
-    "dev": "NODE_ENV=development node --watch src/server.mjs",
-    "start": "NODE_ENV=production node src/server.mjs",
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "eslint ."
   },
   "keywords": [
     "terminal",
-    "xterm",
+    "web-terminal",
+    "xterm.js",
+    "node-pty",
     "websocket",
-    "node-pty"
+    "monitoring",
+    "dashboard",
+    "cli"
   ],
-  "author": "",
+  "author": "Leask Wong",
   "license": "MIT",
   "engines": {
-    "node": ">=18.18"
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "express": "^5.1.0",
@@ -29,5 +34,13 @@
   },
   "devDependencies": {
     "vitest": "^4.0.9"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leask/tabminal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leask/tabminal/issues"
+  },
+  "homepage": "https://github.com/leask/tabminal#readme"
 }
