@@ -164,7 +164,7 @@ class Session {
 
         if (metaEl) {
             const shortened = shortenPath(this.cwd);
-            metaEl.textContent = shortened;
+            metaEl.textContent = `PWD: ${shortened}`;
             metaEl.title = this.cwd; // Tooltip
         }
     }
@@ -359,18 +359,28 @@ function renderTabs() {
             title.className = 'title';
             // Initial content will be set by updateTabUI
 
+            const metaId = document.createElement('div');
+            metaId.className = 'meta';
+            const shortId = id.split('-').pop();
+            metaId.textContent = `ID: ${shortId}`;
+
             const metaCwd = document.createElement('div');
             metaCwd.className = 'meta meta-cwd';
             // Initial content will be set by updateTabUI
 
-            const metaId = document.createElement('div');
-            metaId.className = 'meta';
-            metaId.textContent = `ID: ${id.substring(0, 8)}...`;
+            const metaTime = document.createElement('div');
+            metaTime.className = 'meta';
+            const dateStr = new Date(session.createdAt).toLocaleString(undefined, {
+                dateStyle: 'short',
+                timeStyle: 'short'
+            });
+            metaTime.textContent = `SINCE: ${dateStr}`;
 
             tab.appendChild(previewContainer);
             tab.appendChild(title);
-            tab.appendChild(metaCwd);
             tab.appendChild(metaId);
+            tab.appendChild(metaCwd);
+            tab.appendChild(metaTime);
             tabListEl.appendChild(tab);
 
             // Mount the preview terminal
