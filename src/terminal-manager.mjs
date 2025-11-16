@@ -102,7 +102,9 @@ export class TerminalManager {
             shell: s.shell,
             initialCwd: s.initialCwd,
             title: s.title,
-            cwd: s.cwd
+            cwd: s.cwd,
+            cols: s.pty.cols,
+            rows: s.pty.rows
         }));
     }
 

@@ -28,7 +28,13 @@ app.post('/api/sessions', (_req, res) => {
     const session = terminalManager.createSession();
     res.status(201).json({
         id: session.id,
-        createdAt: session.createdAt
+        createdAt: session.createdAt,
+        shell: session.shell,
+        initialCwd: session.initialCwd,
+        title: session.title,
+        cwd: session.cwd,
+        cols: session.pty.cols,
+        rows: session.pty.rows
     });
 });
 

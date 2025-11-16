@@ -18,87 +18,90 @@ class Session {
         this.shell = data.shell || 'Terminal';
         this.initialCwd = data.initialCwd || '';
         
-        this.title = data.title || this.shell.split('/').pop();
-        this.cwd = data.cwd || this.initialCwd;
-
-        this.history = ''; // Client-side history buffer
-        this.socket = null;
-        this.reconnectAttempts = 0;
-        this.shouldReconnect = true;
-        this.retryTimer = null;
-        this.heartbeatInterval = null;
-        this.heartbeatTimeout = null;
-        this.awaitingPong = false;
-        this.isRestoring = false;
-
-        // Preview Terminal (Sidebar)
-        this.previewTerm = new Terminal({
-            allowTransparency: true,
-            cursorBlink: false,
-            disableStdin: true, // Read-only
-            fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
-            fontSize: 10, // Smaller font for preview
-            theme: {
-                background: '#002b36',
-                foreground: '#839496',
-                cursor: 'transparent', // Hide cursor in preview
-                selectionBackground: 'transparent',
-                black: '#073642',
-                red: '#dc322f',
-                green: '#859900',
-                yellow: '#b58900',
-                blue: '#268bd2',
-                magenta: '#d33682',
-                cyan: '#2aa198',
-                white: '#eee8d5',
-                brightBlack: '#586e75',
-                brightRed: '#cb4b16',
-                brightGreen: '#586e75',
-                brightYellow: '#657b83',
-                brightBlue: '#839496',
-                brightMagenta: '#6c71c4',
-                brightCyan: '#93a1a1',
-                brightWhite: '#fdf6e3'
-            },
-            rows: 24, // Default, will be resized by fit addon or content
-            cols: 80
-        });
-        this.previewTerm.loadAddon(new CanvasAddon());
-        this.wrapperElement = null;
-
-        // Main Terminal (Active View) - Created on demand or kept alive?
-        // To ensure "live" switching without re-buffering, we keep it alive but unmounted.
-        this.mainTerm = new Terminal({
-            allowTransparency: true,
-            convertEol: true,
-            cursorBlink: true,
-            fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
-            fontSize: 14,
-            theme: {
-                background: '#002b36',
-                foreground: '#839496',
-                cursor: '#93a1a1',
-                cursorAccent: '#002b36',
-                selectionBackground: '#073642',
-                black: '#073642',
-                red: '#dc322f',
-                green: '#859900',
-                yellow: '#b58900',
-                blue: '#268bd2',
-                magenta: '#d33682',
-                cyan: '#2aa198',
-                white: '#eee8d5',
-                brightBlack: '#586e75',
-                brightRed: '#cb4b16',
-                brightGreen: '#586e75',
-                brightYellow: '#657b83',
-                brightBlue: '#839496',
-                brightMagenta: '#6c71c4',
-                brightCyan: '#93a1a1',
-                brightWhite: '#fdf6e3'
-            }
-        });
-        this.mainFitAddon = new FitAddon();
+                this.title = data.title || this.shell.split('/').pop();
+                this.cwd = data.cwd || this.initialCwd;
+                this.cols = data.cols || 80;
+                this.rows = data.rows || 24;
+        
+                this.history = ''; // Client-side history buffer
+                this.socket = null;
+                this.reconnectAttempts = 0;
+                this.shouldReconnect = true;
+                this.retryTimer = null;
+                this.heartbeatInterval = null;
+                this.heartbeatTimeout = null;
+                this.awaitingPong = false;
+                this.isRestoring = false;
+        
+                // Preview Terminal (Sidebar)
+                this.previewTerm = new Terminal({
+                    allowTransparency: true,
+                    cursorBlink: false,
+                    disableStdin: true, // Read-only
+                    fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
+                    fontSize: 10, // Smaller font for preview
+                    theme: {
+                        background: '#002b36',
+                        foreground: '#839496',
+                        cursor: 'transparent', // Hide cursor in preview
+                        selectionBackground: 'transparent',
+                        black: '#073642',
+                        red: '#dc322f',
+                        green: '#859900',
+                        yellow: '#b58900',
+                        blue: '#268bd2',
+                        magenta: '#d33682',
+                        cyan: '#2aa198',
+                        white: '#eee8d5',
+                        brightBlack: '#586e75',
+                        brightRed: '#cb4b16',
+                        brightGreen: '#586e75',
+                        brightYellow: '#657b83',
+                        brightBlue: '#839496',
+                        brightMagenta: '#6c71c4',
+                        brightCyan: '#93a1a1',
+                        brightWhite: '#fdf6e3'
+                    },
+                    rows: this.rows,
+                    cols: this.cols
+                });
+                this.previewTerm.loadAddon(new CanvasAddon());
+                this.wrapperElement = null;
+        
+                // Main Terminal (Active View) - Created on demand or kept alive?
+                // To ensure "live" switching without re-buffering, we keep it alive but unmounted.
+                this.mainTerm = new Terminal({
+                    allowTransparency: true,
+                    convertEol: true,
+                    cursorBlink: true,
+                    fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, monospace',
+                    fontSize: 14,
+                    theme: {
+                        background: '#002b36',
+                        foreground: '#839496',
+                        cursor: '#93a1a1',
+                        cursorAccent: '#002b36',
+                        selectionBackground: '#073642',
+                        black: '#073642',
+                        red: '#dc322f',
+                        green: '#859900',
+                        yellow: '#b58900',
+                        blue: '#268bd2',
+                        magenta: '#d33682',
+                        cyan: '#2aa198',
+                        white: '#eee8d5',
+                        brightBlack: '#586e75',
+                        brightRed: '#cb4b16',
+                        brightGreen: '#586e75',
+                        brightYellow: '#657b83',
+                        brightBlue: '#839496',
+                        brightMagenta: '#6c71c4',
+                        brightCyan: '#93a1a1',
+                        brightWhite: '#fdf6e3'
+                    },
+                    rows: this.rows,
+                    cols: this.cols
+                });        this.mainFitAddon = new FitAddon();
         this.mainLinksAddon = new WebLinksAddon();
         this.mainTerm.loadAddon(this.mainFitAddon);
         this.mainTerm.loadAddon(this.mainLinksAddon);
@@ -122,6 +125,10 @@ class Session {
 
     updatePreviewScale() {
         if (!this.wrapperElement) return;
+
+        // Clear constraints to allow xterm to report its true intrinsic size
+        this.wrapperElement.style.width = '';
+        this.wrapperElement.style.height = '';
 
         // Wait for next frame to ensure xterm has rendered and calculated dimensions
         requestAnimationFrame(() => {
