@@ -5,6 +5,7 @@ import AnsiParser from 'node-ansiparser';
 const execAsync = promisify(exec);
 const WS_STATE_OPEN = 1;
 const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
+const EXIT_CODE_REGEX = /\u001b\]1337;ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)\u0007/g;
 
 export class TerminalSession {
     constructor(pty, options = {}) {
@@ -54,6 +55,26 @@ export class TerminalSession {
 
         this._handleData = (chunk) => {
             if (typeof chunk !== 'string') chunk = chunk.toString('utf8');
+
+            // DEBUG: Inspect raw data if it contains our keyword
+            if (chunk.includes('ExitCode')) {
+                console.log('[DEBUG] Raw chunk with ExitCode:', JSON.stringify(chunk));
+            }
+
+            // Intercept and strip exit code sequences
+            chunk = chunk.replace(EXIT_CODE_REGEX, (match, code, cmdB64) => {
+                const exitCode = parseInt(code, 10);
+                if (!isNaN(exitCode) && exitCode !== 0) {
+                    try {
+                        const command = Buffer.from(cmdB64, 'base64').toString('utf8').trim();
+                        console.log(`[Terminal Error] Exit Code: ${exitCode} | Command: "${command}"`);
+                    } catch (e) {
+                        console.error('[Terminal Error] Failed to decode command:', e);
+                    }
+                }
+                return ''; // Remove the sequence from the output
+            });
+
             this._appendHistory(chunk);
             this.ansiParser.parse(chunk);
             this._broadcast({ type: 'output', data: chunk });

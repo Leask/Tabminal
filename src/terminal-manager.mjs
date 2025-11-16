@@ -1,5 +1,8 @@
 import process from 'node:process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import pty from 'node-pty';
 import { TerminalSession } from './terminal-session.mjs';
 
@@ -34,9 +37,71 @@ export class TerminalManager {
         const id = crypto.randomUUID();
         const shell = resolveShell();
         const initialCwd = process.env.TABMINAL_CWD || process.cwd();
-        const env = process.env; // Capture the environment
+        const env = { ...process.env }; // Clone env to modify it safely
 
-        const ptyProcess = pty.spawn(shell, [], {
+        let args = [];
+        let initFilePath = null;
+        let initDirPath = null;
+
+        try {
+            const shellName = path.basename(shell);
+            if (shellName === 'bash') {
+                initFilePath = path.join(os.tmpdir(), `tabminal-init-${id}.bashrc`);
+                const bashScript = `
+[ -f ~/.bashrc ] && source ~/.bashrc
+
+_tabminal_bash_preexec() {
+  # Prevent capturing any of our own internal or setup commands.
+  if [[ "$BASH_COMMAND" == *"_tabminal_"* || "$BASH_COMMAND" == "$PROMPT_COMMAND" ]]; then
+    return
+  fi
+  _tabminal_last_command="$BASH_COMMAND"
+}
+trap '_tabminal_bash_preexec' DEBUG
+
+_tabminal_bash_postexec() {
+  local EC="$?"
+  if [[ -n "$_tabminal_last_command" ]]; then
+    local CMD=$(echo -n "$_tabminal_last_command" | base64 | tr -d '\\n')
+    printf "\\033]1337;ExitCode=%s;CommandB64=%s\\007" "$EC" "$CMD"
+    _tabminal_last_command="" # Reset after use
+  fi
+}
+export PROMPT_COMMAND="_tabminal_bash_postexec; $PROMPT_COMMAND"
+`;
+                fs.writeFileSync(initFilePath, bashScript);
+                args = ['--rcfile', initFilePath];
+            } else if (shellName === 'zsh') {
+                initDirPath = path.join(os.tmpdir(), `tabminal-zsh-${id}`);
+                fs.mkdirSync(initDirPath, { recursive: true });
+                initFilePath = path.join(initDirPath, '.zshrc');
+                
+                const zshScript = `
+unset ZDOTDIR
+[ -f ~/.zshrc ] && source ~/.zshrc
+
+_tabminal_zsh_preexec() {
+  _tabminal_last_command="$1"
+}
+_tabminal_zsh_postexec() {
+  local EC="$?"
+  if [[ -n "$_tabminal_last_command" ]]; then
+    local CMD=$(echo -n "$_tabminal_last_command" | base64 | tr -d '\\n')
+    printf "\\03d]1337;ExitCode=%s;CommandB64=%s\\007" "$EC" "$CMD"
+  fi
+  _tabminal_last_command="" # Reset after use
+}
+preexec_functions+=(_tabminal_zsh_preexec)
+precmd_functions+=(_tabminal_zsh_postexec)
+`;
+                fs.writeFileSync(initFilePath, zshScript);
+                env.ZDOTDIR = initDirPath;
+            }
+        } catch (err) {
+            console.error('[Manager] Failed to create init script:', err);
+        }
+
+        const ptyProcess = pty.spawn(shell, args, {
             name: 'xterm-256color',
             cols: this.lastCols,
             rows: this.lastRows,
@@ -52,11 +117,16 @@ export class TerminalManager {
             manager: this,
             shell,
             initialCwd,
-            env: env // Pass the captured env
+            env: env
         });
 
         ptyProcess.onExit(() => {
             this.removeSession(id);
+            // Cleanup temp files
+            try {
+                if (initFilePath && fs.existsSync(initFilePath)) fs.unlinkSync(initFilePath);
+                if (initDirPath && fs.existsSync(initDirPath)) fs.rmSync(initDirPath, { recursive: true, force: true });
+            } catch (e) { /* ignore cleanup errors */ }
         });
 
         this.sessions.set(id, session);
