@@ -78,6 +78,31 @@ router.delete('/api/sessions/:id', (ctx) => {
     ctx.status = 204;
 });
 
+router.post('/api/chat', async (ctx) => {
+    const { message } = ctx.request.body;
+    
+    ctx.set('Content-Type', 'text/plain');
+    ctx.set('Transfer-Encoding', 'chunked');
+    ctx.status = 200;
+
+    const stream = new require('stream').PassThrough();
+    ctx.body = stream;
+
+    const responseText = `I received your message: "${message}". \n\nThis is a simulated streaming response from the Tabminal AI Assistant. I can help you with terminal commands, system monitoring, or just chat!`;
+    const chunks = responseText.split(' ');
+
+    let i = 0;
+    const interval = setInterval(() => {
+        if (i >= chunks.length) {
+            clearInterval(interval);
+            stream.end();
+            return;
+        }
+        stream.write(chunks[i] + ' ');
+        i++;
+    }, 50); // Simulate typing speed
+});
+
 // Middleware
 app.use(router.routes());
 app.use(router.allowedMethods());

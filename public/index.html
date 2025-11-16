@@ -24,6 +24,7 @@
                 <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
                 <div id="status-pill" role="status" aria-live="polite"></div>
             </main>
+            <aside id="chat-sidebar" class="chat-sidebar"></aside>
         </div>
         <div id="login-modal" class="modal" style="display: none;">
             <div class="modal-content">
@@ -37,6 +38,12 @@
                 <p id="login-error" class="error-message"></p>
             </div>
         </div>
-        <script type="module" src="./app.js"></script>
+        <script type="module">
+            import './app.js';
+            import { ChatManager } from './chat.js';
+            
+            // Initialize Chat
+            new ChatManager('chat-sidebar');
+        </script>
     </body>
 </html>
