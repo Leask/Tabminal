@@ -3,7 +3,9 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 
-import express from 'express';
+import Koa from 'koa';
+import serve from 'koa-static';
+import Router from '@koa/router';
 import { WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
@@ -13,26 +15,30 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, '..', 'public');
 
-const app = express();
-app.disable('x-powered-by');
-app.use(express.static(publicDir));
-app.get('/healthz', (_req, res) => {
-    res.json({ status: 'ok' });
+const app = new Koa();
+const router = new Router();
+
+// Health check
+router.get('/healthz', (ctx) => {
+    ctx.body = { status: 'ok' };
 });
 
 const systemMonitor = new SystemMonitor();
+const terminalManager = new TerminalManager();
+terminalManager.ensureOneSession();
 
 // API routes for session management
-app.get('/api/heartbeat', (_req, res) => {
-    res.json({
+router.get('/api/heartbeat', (ctx) => {
+    ctx.body = {
         sessions: terminalManager.listSessions(),
         system: systemMonitor.getStats()
-    });
+    };
 });
 
-app.post('/api/sessions', (_req, res) => {
+router.post('/api/sessions', (ctx) => {
     const session = terminalManager.createSession();
-    res.status(201).json({
+    ctx.status = 201;
+    ctx.body = {
         id: session.id,
         createdAt: session.createdAt,
         shell: session.shell,
@@ -41,20 +47,22 @@ app.post('/api/sessions', (_req, res) => {
         cwd: session.cwd,
         cols: session.pty.cols,
         rows: session.pty.rows
-    });
+    };
 });
 
-app.delete('/api/sessions/:id', (req, res) => {
-    const { id } = req.params;
+router.delete('/api/sessions/:id', (ctx) => {
+    const { id } = ctx.params;
     terminalManager.removeSession(id);
-    res.status(204).send();
+    ctx.status = 204;
 });
 
-const httpServer = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+// Middleware
+app.use(serve(publicDir));
+app.use(router.routes());
+app.use(router.allowedMethods());
 
-const terminalManager = new TerminalManager();
-terminalManager.ensureOneSession();
+const httpServer = createServer(app.callback());
+const wss = new WebSocketServer({ noServer: true });
 
 httpServer.on('upgrade', (request, socket, head) => {
     const pathname = request.url;

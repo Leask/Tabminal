@@ -27,7 +27,9 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "express": "^5.1.0",
+    "@koa/router": "^14.0.0",
+    "koa": "^3.1.1",
+    "koa-static": "^5.0.0",
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.0.0",
     "ws": "^8.18.3"
