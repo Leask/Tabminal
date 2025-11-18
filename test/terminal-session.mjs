@@ -118,8 +118,8 @@ describe('TerminalSession', () => {
         assert.ok(session.lastExecution);
         assert.strictEqual(session.lastExecution.command, 'ls');
         assert.strictEqual(session.lastExecution.exitCode, 0);
-        assert.strictEqual(session.lastExecution.input, 'ls\n');
-        assert.strictEqual(session.lastExecution.output, 'file.txt\n');
+        assert.strictEqual(session.lastExecution.input, 'ls');
+        assert.strictEqual(session.lastExecution.output, 'file.txt');
     });
 
     it('resets the capture buffer for consecutive commands', () => {
@@ -136,8 +136,8 @@ describe('TerminalSession', () => {
         assert.ok(session.lastExecution);
         assert.strictEqual(session.lastExecution.command, 'pwd');
         assert.strictEqual(session.lastExecution.exitCode, 0);
-        assert.strictEqual(session.lastExecution.input, 'pwd\n');
-        assert.strictEqual(session.lastExecution.output, '/bar\n');
+        assert.strictEqual(session.lastExecution.input, 'pwd');
+        assert.strictEqual(session.lastExecution.output, '/bar');
     });
 
     it('drops elaborate prompt decorations from captured output', () => {
@@ -156,7 +156,7 @@ describe('TerminalSession', () => {
         assert.ok(session.lastExecution);
         assert.strictEqual(session.lastExecution.command, 'ls');
         assert.strictEqual(session.lastExecution.input.includes('ls'), true);
-        assert.strictEqual(session.lastExecution.output, 'client\n');
+        assert.strictEqual(session.lastExecution.output, 'client');
     });
 
     it('captures multi-line commands that use continuation prompts', () => {
@@ -172,8 +172,9 @@ describe('TerminalSession', () => {
 
         assert.ok(session.lastExecution);
         assert.strictEqual(session.lastExecution.command, 'echo first second third');
-        assert.strictEqual(session.lastExecution.input, multiLineInput);
-        assert.strictEqual(session.lastExecution.output, 'first second third\n');
+        const normalizedInput = multiLineInput.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+        assert.strictEqual(session.lastExecution.input, normalizedInput);
+        assert.strictEqual(session.lastExecution.output, 'first second third');
     });
 
     it('normalizes backspaces and clears within the echoed command line', () => {
@@ -185,8 +186,8 @@ describe('TerminalSession', () => {
 
         assert.ok(session.lastExecution);
         assert.strictEqual(session.lastExecution.command, 'ls -BB');
-        assert.strictEqual(session.lastExecution.input, 'ls -BB\r\n');
-        assert.strictEqual(session.lastExecution.output, 'item\n');
+        assert.strictEqual(session.lastExecution.input, 'ls -BB');
+        assert.strictEqual(session.lastExecution.output, 'item');
     });
 
     it('logs each execution summary once it completes', () => {
@@ -208,8 +209,8 @@ describe('TerminalSession', () => {
         assert.deepStrictEqual(calls[0][1], {
             command: 'echo hi',
             exitCode: 0,
-            input: 'echo hi\n',
-            output: 'hi\n',
+            input: 'echo hi',
+            output: 'hi',
             startedAt: session.lastExecution.startedAt.toISOString(),
             completedAt: session.lastExecution.completedAt.toISOString(),
             duration: session.lastExecution.completedAt.getTime() - session.lastExecution.startedAt.getTime(),

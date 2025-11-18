@@ -62,11 +62,12 @@ test("strips terminal escape sequences from captured IO", async () => {
         await waitForInitialExecution(session);
         const entry = await runCommand(
             session,
-            "python3 -c 'print(\"\\x1b[35m__TABMINAL_COLOR__\\x1b[0m\")'"
+            "python3 -c 'import sys; sys.stdout.write(\"\\x1b[35mline1\\r\\nline2\\r\\n\\x1b[0m\")'"
         );
-        assert.ok(
-            entry.output.startsWith("__TABMINAL_COLOR__"),
-            "should keep plain output text"
+        assert.strictEqual(
+            entry.output,
+            "line1\nline2",
+            "should normalize CRLF pairs to LF"
         );
         assert.ok(
             !/\u001b/.test(entry.output),
@@ -75,6 +76,18 @@ test("strips terminal escape sequences from captured IO", async () => {
         assert.ok(
             !/\u001b/.test(entry.input),
             "should remove escape codes from input"
+        );
+        assert.ok(
+            !/\r/.test(entry.output),
+            "should not contain carriage returns"
+        );
+        assert.ok(
+            entry.input === "" || !/\s$/.test(entry.input),
+            "should trim trailing whitespace from input"
+        );
+        assert.ok(
+            entry.output === "" || !/\s$/.test(entry.output),
+            "should trim trailing whitespace from output"
         );
     } finally {
         manager.dispose();

@@ -305,8 +305,8 @@ export class TerminalSession {
         if (!entry) return entry;
         return {
             ...entry,
-            input: this._stripTerminalSequences(entry.input ?? ''),
-            output: this._stripTerminalSequences(entry.output ?? '')
+            input: this._cleanCapturedText(entry.input),
+            output: this._cleanCapturedText(entry.output)
         };
     }
 
@@ -533,6 +533,15 @@ export class TerminalSession {
         result = result.replace(CSI_SEQUENCE_REGEX, '');
         result = result.replace(TWO_CHAR_ESCAPE_REGEX, '');
         result = result.replace(CONTROL_CHAR_REGEX, '');
+        return result;
+    }
+
+    _cleanCapturedText(value) {
+        if (!value) return '';
+        let result = this._stripTerminalSequences(value ?? '');
+        result = result.replace(/\r\n/g, '\n');
+        result = result.replace(/\r/g, '');
+        result = result.replace(/\s+$/, '');
         return result;
     }
 
