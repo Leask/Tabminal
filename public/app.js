@@ -1091,7 +1091,7 @@ function createTabElement(session) {
 
     const toggleEditorBtn = document.createElement('button');
     toggleEditorBtn.className = 'toggle-editor-btn';
-    toggleEditorBtn.innerHTML = '&#128193;'; // Folder icon
+    toggleEditorBtn.innerHTML = '<img src="/icons/folder-src.svg" style="width: 14px; height: 14px; vertical-align: middle;">';
     toggleEditorBtn.title = 'Toggle File Editor';
     toggleEditorBtn.onclick = (e) => {
         e.stopPropagation();
