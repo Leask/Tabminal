@@ -13,6 +13,7 @@ import { TerminalManager } from './terminal-manager.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import { authMiddleware, verifyClient } from './auth.mjs';
+import { setupFsRoutes } from './fs-routes.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,9 @@ app.use(authMiddleware);
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
 terminalManager.ensureOneSession();
+
+// Setup FS Routes
+setupFsRoutes(router);
 
 // API routes for session management
 router.get('/api/heartbeat', (ctx) => {

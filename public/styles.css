@@ -368,3 +368,242 @@ body {
     font-size: 0.9rem;
     min-height: 1.2em;
 }
+
+/* Editor & Split View Styles */
+
+.terminal-wrapper {
+    flex: 1 1 0%; /* Strictly 1 part */
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+}
+
+.editor-pane {
+    flex: 2 1 0%; /* Strictly 2 parts */
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-base);
+    min-height: 200px;
+    position: relative;
+}
+
+.editor-resizer {
+    height: 4px;
+    background-color: var(--bg-surface);
+    cursor: row-resize;
+    width: 100%;
+    flex-shrink: 0;
+}
+
+.editor-resizer:hover {
+    background-color: var(--accent-color);
+}
+
+.editor-layout {
+    display: flex;
+    flex-grow: 1;
+    height: 0; /* Allow scrolling */
+}
+
+.file-tree-container {
+    width: 220px;
+    background-color: var(--bg-surface);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.file-tree-header {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border-color);
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.file-tree {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+    font-size: 0.85rem;
+}
+
+.file-tree ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+.file-tree li {
+    padding: 0;
+    margin: 0;
+}
+
+.file-tree-item {
+    padding: 4px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-base);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-tree-item:hover {
+    background-color: rgba(88, 110, 117, 0.2);
+    color: var(--text-highlight);
+}
+
+.file-tree-item.active {
+    background-color: rgba(38, 139, 210, 0.15);
+    color: var(--accent-color);
+}
+
+.file-tree-item .icon {
+    width: 14px;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.file-tree-item.is-dir {
+    font-weight: bold;
+}
+
+.editor-workspace {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-base);
+    min-width: 0; /* Prevent flex overflow */
+}
+
+.editor-tabs {
+    display: flex;
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    overflow-x: auto;
+    height: 36px;
+    flex-shrink: 0;
+}
+
+.editor-tab {
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    border-right: 1px solid var(--border-color);
+    cursor: pointer;
+    min-width: 100px;
+    max-width: 200px;
+    background-color: var(--bg-surface);
+}
+
+.editor-tab:hover {
+    background-color: var(--bg-base);
+}
+
+.editor-tab.active {
+    background-color: var(--bg-base);
+    color: var(--text-highlight);
+    border-top: 2px solid var(--accent-color);
+}
+
+.editor-tab .close-btn {
+    margin-left: auto;
+    font-size: 14px;
+    opacity: 0;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.editor-tab:hover .close-btn {
+    opacity: 1;
+}
+
+.editor-tab .close-btn:hover {
+    background-color: rgba(220, 50, 47, 0.8);
+    color: white;
+}
+
+.editor-content {
+    flex-grow: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.monaco-container {
+    width: 100%;
+    height: 100%;
+}
+
+.image-preview-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #00212b; /* Slightly darker for image contrast */
+    overflow: auto;
+}
+
+.image-preview-container img {
+    max-width: 95%;
+    max-height: 95%;
+    object-fit: contain;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+.empty-editor-state {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Toggle Editor Button Style */
+.toggle-editor-btn {
+    position: absolute;
+    top: 4px;
+    right: 28px; /* Left of close button */
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background-color: transparent;
+    color: var(--text-muted);
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease, color 0.2s ease;
+    z-index: 10;
+    font-size: 12px;
+    padding: 0;
+}
+
+.tab-item:hover .toggle-editor-btn {
+    opacity: 1;
+}
+
+.toggle-editor-btn:hover {
+    color: var(--text-highlight);
+    background-color: rgba(255, 255, 255, 0.1);
+}

@@ -6,6 +6,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="preconnect" href="https://cdn.jsdelivr.net">
         <link rel="stylesheet" href="./styles.css">
+        <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
     </head>
     <body>
         <div id="system-status-bar" class="system-status-bar">
@@ -21,8 +22,34 @@
                 </ul>
             </aside>
             <main id="terminal-container" class="terminal-container">
-                <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
-                <div id="status-pill" role="status" aria-live="polite"></div>
+                <div id="editor-pane" class="editor-pane" style="display: none;">
+                    <div class="editor-layout">
+                        <aside class="file-tree-container">
+                            <div class="file-tree-header">FILES</div>
+                            <div id="file-tree" class="file-tree"></div>
+                        </aside>
+                        <div class="editor-workspace">
+                            <div id="editor-tabs" class="editor-tabs">
+                                <!-- Editor tabs injected here -->
+                            </div>
+                            <div id="editor-content" class="editor-content">
+                                <div id="monaco-container" class="monaco-container"></div>
+                                <div id="image-preview-container" class="image-preview-container" style="display: none;">
+                                    <img id="image-preview" src="" alt="Preview">
+                                </div>
+                                <div id="empty-editor-state" class="empty-editor-state">
+                                    Select a file to view
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="editor-resizer" id="editor-resizer"></div>
+                </div>
+
+                <div id="terminal-wrapper" class="terminal-wrapper">
+                    <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
+                    <div id="status-pill" role="status" aria-live="polite"></div>
+                </div>
             </main>
         </div>
         <div id="login-modal" class="modal" style="display: none;">

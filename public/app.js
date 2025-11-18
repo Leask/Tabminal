@@ -13,6 +13,8 @@ const loginModal = document.getElementById('login-modal');
 const loginForm = document.getElementById('login-form');
 const passwordInput = document.getElementById('password-input');
 const loginError = document.getElementById('login-error');
+const terminalWrapper = document.getElementById('terminal-wrapper');
+const editorPane = document.getElementById('editor-pane');
 // #endregion
 
 // #region Configuration
@@ -118,6 +120,308 @@ class AuthManager {
 }
 
 const auth = new AuthManager();
+// #endregion
+
+// #region Editor Manager
+class EditorManager {
+    constructor() {
+        this.isVisible = false;
+        this.monacoInstance = null;
+        this.editor = null;
+        this.currentPath = null;
+        this.openFiles = new Map(); // path -> { model, viewState, type: 'text'|'image' }
+        this.activeTabPath = null;
+        this.fileTreeRoot = '.';
+        
+        // DOM Elements
+        this.pane = document.getElementById('editor-pane');
+        this.resizer = document.getElementById('editor-resizer');
+        this.fileTree = document.getElementById('file-tree');
+        this.tabsContainer = document.getElementById('editor-tabs');
+        this.monacoContainer = document.getElementById('monaco-container');
+        this.imagePreviewContainer = document.getElementById('image-preview-container');
+        this.imagePreview = document.getElementById('image-preview');
+        this.emptyState = document.getElementById('empty-editor-state');
+        
+        this.initResizer();
+        this.initMonaco();
+    }
+
+    initResizer() {
+        let startY, startHeight;
+        const onMouseMove = (e) => {
+            const dy = e.clientY - startY; // Dragging down increases height
+            const newHeight = startHeight + dy;
+            if (newHeight > 100 && newHeight < window.innerHeight - 100) {
+                this.pane.style.height = `${newHeight}px`;
+                this.layout();
+            }
+        };
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+        };
+        this.resizer.addEventListener('mousedown', (e) => {
+            startY = e.clientY;
+            startHeight = this.pane.offsetHeight;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'row-resize';
+        });
+    }
+
+    initMonaco() {
+        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' }});
+        require(['vs/editor/editor.main'], (monaco) => {
+            this.monacoInstance = monaco;
+            this.editor = monaco.editor.create(this.monacoContainer, {
+                value: '',
+                language: 'plaintext',
+                theme: 'vs-dark', // We will customize this to Solarized Dark later if needed, or use built-in
+                automaticLayout: false, // We handle layout manually for performance
+                minimap: { enabled: false },
+                fontSize: 13,
+                fontFamily: '"JetBrains Mono", "SFMono-Regular", Menlo, monospace',
+                scrollBeyondLastLine: false,
+            });
+            
+            // Define Solarized Dark theme
+            monaco.editor.defineTheme('solarized-dark', {
+                base: 'vs-dark',
+                inherit: true,
+                rules: [
+                    { token: '', background: '002b36', foreground: '839496' },
+                    { token: 'keyword', foreground: '859900' },
+                    { token: 'string', foreground: '2aa198' },
+                    { token: 'number', foreground: 'd33682' },
+                    { token: 'comment', foreground: '586e75' },
+                ],
+                colors: {
+                    'editor.background': '#002b36',
+                    'editor.foreground': '#839496',
+                    'editorCursor.foreground': '#93a1a1',
+                    'editor.lineHighlightBackground': '#073642',
+                    'editorLineNumber.foreground': '#586e75',
+                }
+            });
+            monaco.editor.setTheme('solarized-dark');
+        });
+    }
+
+    toggle() {
+        this.isVisible = !this.isVisible;
+        this.pane.style.display = this.isVisible ? 'flex' : 'none';
+        
+        if (this.isVisible) {
+            this.refreshFileTree();
+            this.layout();
+        } else {
+            // Reset terminal size
+            if (state.activeSessionId) {
+                const session = state.sessions.get(state.activeSessionId);
+                if (session) {
+                    setTimeout(() => session.mainFitAddon.fit(), 50);
+                }
+            }
+        }
+    }
+
+    layout() {
+        if (!this.isVisible) return;
+        
+        // Trigger terminal resize
+        if (state.activeSessionId) {
+            const session = state.sessions.get(state.activeSessionId);
+            if (session) session.mainFitAddon.fit();
+        }
+
+        // Trigger editor resize
+        if (this.editor) {
+            this.editor.layout();
+        }
+    }
+
+    async refreshFileTree(path = '.') {
+        this.fileTree.innerHTML = '';
+        await this.renderTree(path, this.fileTree);
+    }
+
+    async renderTree(dirPath, container) {
+        try {
+            const res = await auth.fetch(`/api/fs/list?path=${encodeURIComponent(dirPath)}`);
+            if (!res.ok) return;
+            const files = await res.json();
+
+            const ul = document.createElement('ul');
+            
+            for (const file of files) {
+                const li = document.createElement('li');
+                const div = document.createElement('div');
+                div.className = 'file-tree-item';
+                if (file.isDirectory) div.classList.add('is-dir');
+                
+                const icon = document.createElement('span');
+                icon.className = 'icon';
+                icon.textContent = file.isDirectory ? '▸' : '•';
+                
+                const name = document.createElement('span');
+                name.textContent = file.name;
+                
+                div.appendChild(icon);
+                div.appendChild(name);
+                
+                div.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (file.isDirectory) {
+                        if (li.classList.contains('expanded')) {
+                            li.classList.remove('expanded');
+                            icon.textContent = '▸';
+                            const childUl = li.querySelector('ul');
+                            if (childUl) childUl.remove();
+                        } else {
+                            li.classList.add('expanded');
+                            icon.textContent = '▾';
+                            await this.renderTree(file.path, li);
+                        }
+                    } else {
+                        this.openFile(file.path);
+                    }
+                });
+
+                li.appendChild(div);
+                ul.appendChild(li);
+            }
+            container.appendChild(ul);
+        } catch (err) {
+            console.error('Failed to render tree:', err);
+        }
+    }
+
+    async openFile(filePath) {
+        if (this.openFiles.has(filePath)) {
+            this.activateTab(filePath);
+            return;
+        }
+
+        const ext = filePath.split('.').pop().toLowerCase();
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
+        
+        let content = null;
+        let model = null;
+
+        if (!isImage) {
+            try {
+                const res = await auth.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
+                if (!res.ok) throw new Error('Failed to read file');
+                const data = await res.json();
+                content = data.content;
+                
+                if (this.monacoInstance) {
+                    model = this.monacoInstance.editor.createModel(content, undefined, this.monacoInstance.Uri.file(filePath));
+                }
+            } catch (err) {
+                console.error(err);
+                return;
+            }
+        }
+
+        this.openFiles.set(filePath, {
+            type: isImage ? 'image' : 'text',
+            model: model,
+            viewState: null
+        });
+
+        this.renderEditorTabs();
+        this.activateTab(filePath);
+    }
+
+    closeFile(filePath) {
+        const file = this.openFiles.get(filePath);
+        if (file && file.model) {
+            file.model.dispose();
+        }
+        this.openFiles.delete(filePath);
+        this.renderEditorTabs();
+        
+        if (this.activeTabPath === filePath) {
+            const keys = Array.from(this.openFiles.keys());
+            if (keys.length > 0) {
+                this.activateTab(keys[keys.length - 1]);
+            } else {
+                this.activeTabPath = null;
+                this.showEmptyState();
+            }
+        }
+    }
+
+    renderEditorTabs() {
+        this.tabsContainer.innerHTML = '';
+        for (const [path, file] of this.openFiles) {
+            const tab = document.createElement('div');
+            tab.className = 'editor-tab';
+            if (path === this.activeTabPath) tab.classList.add('active');
+            
+            const name = path.split('/').pop();
+            const span = document.createElement('span');
+            span.textContent = name;
+            
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'close-btn';
+            closeBtn.innerHTML = '&times;';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.closeFile(path);
+            };
+            
+            tab.onclick = () => this.activateTab(path);
+            
+            tab.appendChild(span);
+            tab.appendChild(closeBtn);
+            this.tabsContainer.appendChild(tab);
+        }
+    }
+
+    activateTab(filePath) {
+        // Save current view state if switching away
+        if (this.activeTabPath && this.openFiles.has(this.activeTabPath)) {
+            const currentFile = this.openFiles.get(this.activeTabPath);
+            if (currentFile.type === 'text' && this.editor) {
+                currentFile.viewState = this.editor.saveViewState();
+            }
+        }
+
+        this.activeTabPath = filePath;
+        const file = this.openFiles.get(filePath);
+        
+        this.renderEditorTabs();
+        this.emptyState.style.display = 'none';
+
+        if (file.type === 'image') {
+            this.monacoContainer.style.display = 'none';
+            this.imagePreviewContainer.style.display = 'flex';
+            this.imagePreview.src = `/api/fs/raw?path=${encodeURIComponent(filePath)}`;
+        } else {
+            this.imagePreviewContainer.style.display = 'none';
+            this.monacoContainer.style.display = 'block';
+            if (this.editor && file.model) {
+                this.editor.setModel(file.model);
+                if (file.viewState) {
+                    this.editor.restoreViewState(file.viewState);
+                }
+                this.editor.focus();
+            }
+        }
+    }
+
+    showEmptyState() {
+        this.monacoContainer.style.display = 'none';
+        this.imagePreviewContainer.style.display = 'none';
+        this.emptyState.style.display = 'flex';
+    }
+}
+
+const editorManager = new EditorManager();
 // #endregion
 
 // #region FPS Counter
@@ -645,6 +949,16 @@ function createTabElement(session) {
     closeBtn.innerHTML = '&times;';
     closeBtn.title = 'Close Terminal';
     tab.appendChild(closeBtn);
+
+    const toggleEditorBtn = document.createElement('button');
+    toggleEditorBtn.className = 'toggle-editor-btn';
+    toggleEditorBtn.innerHTML = '&#128193;'; // Folder icon
+    toggleEditorBtn.title = 'Toggle File Editor';
+    toggleEditorBtn.onclick = (e) => {
+        e.stopPropagation();
+        editorManager.toggle();
+    };
+    tab.appendChild(toggleEditorBtn);
     
     const previewContainer = document.createElement('div');
     previewContainer.className = 'preview-container';
@@ -728,6 +1042,11 @@ async function switchToSession(sessionId) {
     session.mainTerm.focus();
     
     session.reportResize();
+    
+    // Ensure editor layout is correct if visible
+    if (editorManager.isVisible) {
+        editorManager.layout();
+    }
 }
 
 function shortenPath(path) {
@@ -782,8 +1101,11 @@ const resizeObserver = new ResizeObserver(() => {
         session.mainFitAddon.fit();
         session.reportResize();
     }
+    if (editorManager && editorManager.isVisible) {
+        editorManager.layout();
+    }
 });
-resizeObserver.observe(terminalEl);
+resizeObserver.observe(terminalWrapper); // Observe wrapper instead of terminalEl
 
 tabListEl.addEventListener('click', (event) => {
     const closeBtn = event.target.closest('.close-tab-button');
