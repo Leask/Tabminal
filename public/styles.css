@@ -574,19 +574,20 @@ body {
     right: 28px; /* Left of close button */
     width: 20px;
     height: 20px;
-    border-radius: 4px;
-    background-color: transparent;
-    color: var(--text-muted);
+    border-radius: 50%;
+    background-color: rgba(0, 0, 0, 0.3);
+    color: var(--text-highlight);
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.2s ease, color 0.2s ease;
+    transition: opacity 0.2s ease, background-color 0.2s ease;
     z-index: 10;
-    font-size: 12px;
+    font-size: 11px; /* Slightly smaller icon */
     padding: 0;
+    line-height: 1;
 }
 
 .tab-item:hover .toggle-editor-btn {
@@ -594,6 +595,10 @@ body {
 }
 
 .toggle-editor-btn:hover {
-    color: var(--text-highlight);
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: var(--accent-color);
+    color: white;
+}
+
+.toggle-editor-btn:active {
+    transform: scale(0.95);
 }

@@ -125,13 +125,8 @@ const auth = new AuthManager();
 // #region Editor Manager
 class EditorManager {
     constructor() {
-        this.isVisible = false;
-        this.monacoInstance = null;
-        this.editor = null;
-        this.currentPath = null;
-        this.openFiles = new Map(); // path -> { model, viewState, type: 'text'|'image' }
-        this.activeTabPath = null;
-        this.fileTreeRoot = '.';
+        this.currentSession = null;
+        this.globalModels = new Map(); // path -> { model, type: 'text'|'image' }
         
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
@@ -150,7 +145,7 @@ class EditorManager {
     initResizer() {
         let startY, startHeight;
         const onMouseMove = (e) => {
-            const dy = e.clientY - startY; // Dragging down increases height
+            const dy = e.clientY - startY;
             const newHeight = startHeight + dy;
             if (newHeight > 100 && newHeight < window.innerHeight - 100) {
                 this.pane.style.height = `${newHeight}px`;
@@ -178,15 +173,14 @@ class EditorManager {
             this.editor = monaco.editor.create(this.monacoContainer, {
                 value: '',
                 language: 'plaintext',
-                theme: 'vs-dark', // We will customize this to Solarized Dark later if needed, or use built-in
-                automaticLayout: false, // We handle layout manually for performance
+                theme: 'solarized-dark',
+                automaticLayout: false,
                 minimap: { enabled: false },
                 fontSize: 13,
                 fontFamily: '"JetBrains Mono", "SFMono-Regular", Menlo, monospace',
                 scrollBeyondLastLine: false,
             });
             
-            // Define Solarized Dark theme
             monaco.editor.defineTheme('solarized-dark', {
                 base: 'vs-dark',
                 inherit: true,
@@ -206,43 +200,75 @@ class EditorManager {
                 }
             });
             monaco.editor.setTheme('solarized-dark');
+            
+            if (this.currentSession) {
+                this.switchTo(this.currentSession);
+            }
         });
     }
 
     toggle() {
-        this.isVisible = !this.isVisible;
-        this.pane.style.display = this.isVisible ? 'flex' : 'none';
+        if (!this.currentSession) return;
+        const state = this.currentSession.editorState;
+        state.isVisible = !state.isVisible;
         
-        if (this.isVisible) {
-            this.refreshFileTree();
+        this.pane.style.display = state.isVisible ? 'flex' : 'none';
+        
+        if (state.isVisible) {
+            this.refreshFileTree(state.root);
+            this.renderEditorTabs();
+            if (state.activeFilePath) {
+                this.activateTab(state.activeFilePath, true);
+            } else {
+                this.showEmptyState();
+            }
             this.layout();
         } else {
-            // Reset terminal size
-            if (state.activeSessionId) {
-                const session = state.sessions.get(state.activeSessionId);
-                if (session) {
-                    setTimeout(() => session.mainFitAddon.fit(), 50);
-                }
+            if (this.currentSession) {
+                setTimeout(() => this.currentSession.mainFitAddon.fit(), 50);
             }
         }
     }
 
-    layout() {
-        if (!this.isVisible) return;
-        
-        // Trigger terminal resize
-        if (state.activeSessionId) {
-            const session = state.sessions.get(state.activeSessionId);
-            if (session) session.mainFitAddon.fit();
+    switchTo(session) {
+        if (this.currentSession && this.editor && this.currentSession.editorState.activeFilePath) {
+            const prevState = this.currentSession.editorState;
+            const prevFile = this.globalModels.get(prevState.activeFilePath);
+            if (prevFile && prevFile.type === 'text') {
+                prevState.viewStates.set(prevState.activeFilePath, this.editor.saveViewState());
+            }
         }
 
-        // Trigger editor resize
+        this.currentSession = session;
+        if (!session) {
+            this.pane.style.display = 'none';
+            return;
+        }
+
+        const state = session.editorState;
+        this.pane.style.display = state.isVisible ? 'flex' : 'none';
+
+        if (state.isVisible) {
+            this.refreshFileTree(state.root);
+            this.renderEditorTabs();
+            if (state.activeFilePath) {
+                this.activateTab(state.activeFilePath, true);
+            } else {
+                this.showEmptyState();
+            }
+            this.layout();
+        }
+    }
+
+    layout() {
+        if (!this.currentSession || !this.currentSession.editorState.isVisible) return;
+        this.currentSession.mainFitAddon.fit();
         if (this.editor) {
             this.editor.layout();
         }
     }
 
-    async refreshFileTree(path = '.') {
+    async refreshFileTree(path) {
         this.fileTree.innerHTML = '';
         await this.renderTree(path, this.fileTree);
     }
@@ -276,13 +302,13 @@ class EditorManager {
                     if (file.isDirectory) {
                         if (li.classList.contains('expanded')) {
                             li.classList.remove('expanded');
+                            icon.textContent = '▾';
+                            await this.renderTree(file.path, li);
+                        } else {
+                            li.classList.remove('expanded');
                             icon.textContent = '▸';
                             const childUl = li.querySelector('ul');
                             if (childUl) childUl.remove();
-                        } else {
-                            li.classList.add('expanded');
-                            icon.textContent = '▾';
-                            await this.renderTree(file.path, li);
                         }
                     } else {
                         this.openFile(file.path);
@@ -298,69 +324,74 @@ class EditorManager {
         }
     }
 
-    async openFile(filePath) {
-        if (this.openFiles.has(filePath)) {
-            this.activateTab(filePath);
-            return;
+    async openFile(filePath, restoreOnly = false) {
+        if (!this.currentSession) return;
+        const state = this.currentSession.editorState;
+
+        if (!state.openFiles.includes(filePath)) {
+            state.openFiles.push(filePath);
+            this.renderEditorTabs();
         }
 
-        const ext = filePath.split('.').pop().toLowerCase();
-        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
-        
-        let content = null;
-        let model = null;
-
-        if (!isImage) {
-            try {
-                const res = await auth.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
-                if (!res.ok) throw new Error('Failed to read file');
-                const data = await res.json();
-                content = data.content;
-                
-                if (this.monacoInstance) {
-                    model = this.monacoInstance.editor.createModel(content, undefined, this.monacoInstance.Uri.file(filePath));
+        if (!this.globalModels.has(filePath)) {
+            const ext = filePath.split('.').pop().toLowerCase();
+            const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
+            
+            let model = null;
+            if (!isImage) {
+                try {
+                    const res = await auth.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
+                    if (!res.ok) throw new Error('Failed to read file');
+                    const data = await res.json();
+                    
+                    if (this.monacoInstance) {
+                        model = this.monacoInstance.editor.createModel(data.content, undefined, this.monacoInstance.Uri.file(filePath));
+                    }
+                } catch (err) {
+                    console.error(err);
+                    return;
                 }
-            } catch (err) {
-                console.error(err);
-                return;
             }
+
+            this.globalModels.set(filePath, {
+                type: isImage ? 'image' : 'text',
+                model: model
+            });
         }
 
-        this.openFiles.set(filePath, {
-            type: isImage ? 'image' : 'text',
-            model: model,
-            viewState: null
-        });
-
-        this.renderEditorTabs();
         this.activateTab(filePath);
     }
 
     closeFile(filePath) {
-        const file = this.openFiles.get(filePath);
-        if (file && file.model) {
-            file.model.dispose();
+        if (!this.currentSession) return;
+        const state = this.currentSession.editorState;
+
+        const index = state.openFiles.indexOf(filePath);
+        if (index > -1) {
+            state.openFiles.splice(index, 1);
         }
-        this.openFiles.delete(filePath);
+
         this.renderEditorTabs();
         
-        if (this.activeTabPath === filePath) {
-            const keys = Array.from(this.openFiles.keys());
-            if (keys.length > 0) {
-                this.activateTab(keys[keys.length - 1]);
+        if (state.activeFilePath === filePath) {
+            if (state.openFiles.length > 0) {
+                this.activateTab(state.openFiles[state.openFiles.length - 1]);
             } else {
-                this.activeTabPath = null;
+                state.activeFilePath = null;
                 this.showEmptyState();
             }
         }
     }
 
     renderEditorTabs() {
+        if (!this.currentSession) return;
+        const state = this.currentSession.editorState;
+
         this.tabsContainer.innerHTML = '';
-        for (const [path, file] of this.openFiles) {
+        for (const path of state.openFiles) {
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
-            if (path === this.activeTabPath) tab.classList.add('active');
+            if (path === state.activeFilePath) tab.classList.add('active');
             
             const name = path.split('/').pop();
             const span = document.createElement('span');
@@ -382,20 +413,27 @@ class EditorManager {
         }
     }
 
-    activateTab(filePath) {
-        // Save current view state if switching away
-        if (this.activeTabPath && this.openFiles.has(this.activeTabPath)) {
-            const currentFile = this.openFiles.get(this.activeTabPath);
-            if (currentFile.type === 'text' && this.editor) {
-                currentFile.viewState = this.editor.saveViewState();
+    activateTab(filePath, isRestore = false) {
+        if (!this.currentSession) return;
+        const state = this.currentSession.editorState;
+
+        if (!isRestore && state.activeFilePath && state.activeFilePath !== filePath) {
+            const currentGlobal = this.globalModels.get(state.activeFilePath);
+            if (currentGlobal && currentGlobal.type === 'text' && this.editor) {
+                state.viewStates.set(state.activeFilePath, this.editor.saveViewState());
             }
         }
 
-        this.activeTabPath = filePath;
-        const file = this.openFiles.get(filePath);
+        state.activeFilePath = filePath;
+        const file = this.globalModels.get(filePath);
         
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
+
+        if (!file) {
+            this.showEmptyState();
+            return;
+        }
 
         if (file.type === 'image') {
             this.monacoContainer.style.display = 'none';
@@ -406,8 +444,10 @@ class EditorManager {
             this.monacoContainer.style.display = 'block';
             if (this.editor && file.model) {
                 this.editor.setModel(file.model);
-                if (file.viewState) {
-                    this.editor.restoreViewState(file.viewState);
+                
+                const savedViewState = state.viewStates.get(filePath);
+                if (savedViewState) {
+                    this.editor.restoreViewState(savedViewState);
                 }
                 this.editor.focus();
             }
@@ -463,6 +503,15 @@ class Session {
         this.shouldReconnect = true;
         this.retryTimer = null;
         this.isRestoring = false;
+
+        // Editor State (Per Session)
+        this.editorState = {
+            isVisible: false,
+            root: this.cwd || '.',
+            openFiles: [], // Array of file paths
+            activeFilePath: null,
+            viewStates: new Map() // path -> viewState
+        };
 
         // Preview Terminal (Canvas renderer for performance)
         this.previewTerm = new Terminal({
@@ -1043,10 +1092,8 @@ async function switchToSession(sessionId) {
     
     session.reportResize();
     
-    // Ensure editor layout is correct if visible
-    if (editorManager.isVisible) {
-        editorManager.layout();
-    }
+    // Sync editor state
+    editorManager.switchTo(session);
 }
 
 function shortenPath(path) {
