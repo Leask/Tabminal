@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background: Deep Terminal Gradient -->
+    <rect width="512" height="512" rx="128" fill="url(#bg_gradient)"/>
+    
+    <!-- The Prompt (>): Cyan -->
+    <path d="M120 140L240 256L120 372" stroke="#22D3EE" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- The AI Spark (Cursor): Magenta/Pink -->
+    <!-- A bold 4-pointed star representing AI magic/generation -->
+    <path d="M370 160L395 230L465 256L395 282L370 352L345 282L275 256L345 230L370 160Z" fill="#E879F9"/>
+    
+    <!-- Definitions -->
+    <defs>
+        <linearGradient id="bg_gradient" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#0F172A"/> <!-- Slate 900 -->
+            <stop offset="1" stop-color="#334155"/> <!-- Slate 700 -->
+        </linearGradient>
+    </defs>
+</svg>
