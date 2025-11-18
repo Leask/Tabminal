@@ -238,6 +238,7 @@ class EditorManager {
                 theme: 'solarized-dark',
                 automaticLayout: false,
                 minimap: { enabled: true },
+                rulers: [80, 120],
                 fontSize: 12,
                 fontFamily: '"SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
                 scrollBeyondLastLine: false,
