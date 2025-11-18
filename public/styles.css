@@ -17,7 +17,7 @@
 
 body {
     margin: 0;
-    font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+    font-family: "SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     background-color: var(--bg-base);
     color: var(--text-base);
     height: 100vh;
@@ -420,7 +420,7 @@ body {
 
 .file-tree {
     flex-grow: 1;
-    overflow-y: auto;
+    overflow: auto; /* Allow both scroll */
     padding: 8px 0;
     font-size: 0.85rem;
 }
@@ -448,8 +448,9 @@ body {
     gap: 6px;
     color: var(--text-base);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* Removed overflow: hidden and text-overflow: ellipsis */
+    min-width: 100%; /* Ensure background covers full width */
+    width: fit-content; /* Allow width to grow */
 }
 
 .file-tree-item:hover {
@@ -510,6 +511,7 @@ body {
     min-width: 100px;
     max-width: 200px;
     background-color: var(--bg-surface);
+    flex-shrink: 0; /* Prevent shrinking, force scroll */
 }
 
 .editor-tab:hover {

@@ -211,8 +211,8 @@ class EditorManager {
                 theme: 'solarized-dark',
                 automaticLayout: false,
                 minimap: { enabled: false },
-                fontSize: 13,
-                fontFamily: '"JetBrains Mono", "SFMono-Regular", Menlo, monospace',
+                fontSize: 12,
+                fontFamily: '"SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
                 scrollBeyondLastLine: false,
             });
             
@@ -586,7 +586,7 @@ class Session {
             allowTransparency: true,
             convertEol: true,
             cursorBlink: true,
-            fontFamily: '"SF Mono Terminal", "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace',
+            fontFamily: '"SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
             fontSize: 12,
             rows: this.rows,
             cols: this.cols,
