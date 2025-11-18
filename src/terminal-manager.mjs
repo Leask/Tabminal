@@ -1,5 +1,6 @@
 import process from 'node:process';
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -11,6 +12,10 @@ function resolveShell() {
     if (process.platform === 'win32') {
         return process.env.COMSPEC || 'cmd.exe';
     }
+    try {
+        const inshellisense = execSync('which inshellisense', { encoding: 'utf8' }).trim();
+        if (inshellisense) return inshellisense;
+    } catch (e) {}
     return process.env.SHELL || '/bin/bash';
 }
 
@@ -47,7 +52,9 @@ export class TerminalManager {
 
         try {
             const shellName = path.basename(shell);
-            if (shellName === 'bash') {
+            if (shellName === 'inshellisense') {
+                // Skip init scripts for inshellisense
+            } else if (shellName === 'bash') {
                 initFilePath = path.join(os.tmpdir(), `tabminal-init-${id}.bashrc`);
                 const bashScript = `
 [ -f ~/.bashrc ] && source ~/.bashrc
