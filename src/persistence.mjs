@@ -22,9 +22,6 @@ export const saveSession = async (id, data) => {
     await init();
     const filePath = path.join(SESSIONS_DIR, `${id}.json`);
     try {
-        if (data.editorState && Object.keys(data.editorState).length > 0) {
-             console.log(`[Persistence] Saving session ${id} with editorState:`, JSON.stringify(data.editorState));
-        }
         // We only save serializable data
         const serializable = {
             id: data.id,
@@ -68,7 +65,6 @@ export const loadSessions = async () => {
                 }
             }
         }
-        console.log(`[Persistence] Loaded ${sessions.length} sessions.`);
         // Sort by creation time if possible, or just return
         return sessions.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     } catch (e) {

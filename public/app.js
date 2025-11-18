@@ -181,7 +181,10 @@ class EditorManager {
         const onMouseMove = (e) => {
             const dy = e.clientY - startY;
             const newHeight = startHeight + dy;
-            if (newHeight > 100 && newHeight < window.innerHeight - 100) {
+            const containerHeight = this.pane.parentElement.clientHeight;
+            const resizerHeight = this.resizer.offsetHeight;
+            
+            if (newHeight > 100 && newHeight < containerHeight - resizerHeight - 50) {
                 const flex = `0 0 ${newHeight}px`;
                 this.pane.style.flex = flex;
                 if (this.currentSession) {
@@ -194,6 +197,8 @@ class EditorManager {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
             document.body.style.cursor = '';
+            const termWrapper = document.getElementById('terminal-wrapper');
+            if (termWrapper) termWrapper.style.pointerEvents = '';
         };
         this.resizer.addEventListener('mousedown', (e) => {
             startY = e.clientY;
@@ -201,6 +206,8 @@ class EditorManager {
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
             document.body.style.cursor = 'row-resize';
+            const termWrapper = document.getElementById('terminal-wrapper');
+            if (termWrapper) termWrapper.style.pointerEvents = 'none';
         });
     }
 
@@ -282,7 +289,7 @@ class EditorManager {
         const shouldShow = state.isVisible && hasOpenFiles;
         
         this.pane.style.display = shouldShow ? 'flex' : 'none';
-        this.resizer.style.display = shouldShow ? 'block' : 'none';
+        this.resizer.style.display = shouldShow ? 'flex' : 'none';
         
         if (shouldShow) {
             this.layout();

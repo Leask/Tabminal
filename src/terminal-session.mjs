@@ -34,7 +34,6 @@ export class TerminalSession {
             .join('\n');
         
         this.editorState = options.editorState || {};
-        console.log(`[Session] Initialized ${this.id} editorState:`, JSON.stringify(this.editorState));
 
         this.historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
         this.history = '';

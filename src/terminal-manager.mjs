@@ -37,9 +37,6 @@ export class TerminalManager {
 
     createSession(restoredData = null) {
         const id = restoredData ? restoredData.id : crypto.randomUUID();
-        if (restoredData) {
-             console.log(`[Manager] Restoring session ${id} with editorState:`, JSON.stringify(restoredData.editorState));
-        }
         const shell = resolveShell();
         const initialCwd = restoredData ? restoredData.cwd : (process.env.TABMINAL_CWD || process.cwd());
         const env = { ...process.env }; // Clone env to modify it safely
