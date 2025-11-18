@@ -426,8 +426,12 @@ body {
 
 .file-tree ul {
     list-style: none;
-    padding-left: 0;
+    padding-left: 14px; /* Indentation for nested levels */
     margin: 0;
+}
+
+.file-tree > ul {
+    padding-left: 0; /* No indentation for root level */
 }
 
 .file-tree li {
@@ -458,9 +462,18 @@ body {
 }
 
 .file-tree-item .icon {
-    width: 14px;
+    width: 16px;
     text-align: center;
     color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.file-icon {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
 }
 
 .file-tree-item.is-dir {

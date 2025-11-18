@@ -127,6 +127,7 @@ class EditorManager {
     constructor() {
         this.currentSession = null;
         this.globalModels = new Map(); // path -> { model, type: 'text'|'image' }
+        this.iconMap = null;
         
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
@@ -140,6 +141,40 @@ class EditorManager {
         
         this.initResizer();
         this.initMonaco();
+        this.loadIconMap();
+    }
+
+    async loadIconMap() {
+        try {
+            const res = await fetch('/icons/map.json');
+            this.iconMap = await res.json();
+        } catch (e) {
+            console.error('Failed to load icon map', e);
+        }
+    }
+
+    getIcon(name, isDirectory, isExpanded) {
+        if (!this.iconMap) return isDirectory ? (isExpanded ? '📂' : '📁') : '📄';
+        
+        if (isDirectory) {
+            const folderIcon = isExpanded ? (this.iconMap.folderOpen || 'folder-src-open') : (this.iconMap.folder || 'folder-src');
+            return `<img src="/icons/${folderIcon}.svg" class="file-icon" alt="folder">`;
+        }
+
+        const lowerName = name.toLowerCase();
+        if (this.iconMap.filenames[lowerName]) {
+            return `<img src="/icons/${this.iconMap.filenames[lowerName]}.svg" class="file-icon" alt="file">`;
+        }
+
+        const parts = name.split('.');
+        if (parts.length > 1) {
+            const ext = parts.pop().toLowerCase();
+            if (this.iconMap.extensions[ext]) {
+                return `<img src="/icons/${this.iconMap.extensions[ext]}.svg" class="file-icon" alt="file">`;
+            }
+        }
+
+        return `<img src="/icons/${this.iconMap.default || 'document'}.svg" class="file-icon" alt="file">`;
     }
 
     initResizer() {
@@ -201,6 +236,13 @@ class EditorManager {
             });
             monaco.editor.setTheme('solarized-dark');
             
+            // Process pending models
+            for (const [path, file] of this.globalModels) {
+                if (file.type === 'text' && !file.model && file.content !== null) {
+                    file.model = monaco.editor.createModel(file.content, undefined, monaco.Uri.file(path));
+                }
+            }
+
             if (this.currentSession) {
                 this.switchTo(this.currentSession);
             }
@@ -261,6 +303,7 @@ class EditorManager {
     }
 
     layout() {
+        // console.log('[Editor] layout called');
         if (!this.currentSession || !this.currentSession.editorState.isVisible) return;
         this.currentSession.mainFitAddon.fit();
         if (this.editor) {
@@ -289,7 +332,7 @@ class EditorManager {
                 
                 const icon = document.createElement('span');
                 icon.className = 'icon';
-                icon.textContent = file.isDirectory ? '▸' : '•';
+                icon.innerHTML = this.getIcon(file.name, file.isDirectory, false);
                 
                 const name = document.createElement('span');
                 name.textContent = file.name;
@@ -302,13 +345,13 @@ class EditorManager {
                     if (file.isDirectory) {
                         if (li.classList.contains('expanded')) {
                             li.classList.remove('expanded');
-                            icon.textContent = '▾';
-                            await this.renderTree(file.path, li);
-                        } else {
-                            li.classList.remove('expanded');
-                            icon.textContent = '▸';
+                            icon.innerHTML = this.getIcon(file.name, true, false);
                             const childUl = li.querySelector('ul');
                             if (childUl) childUl.remove();
+                        } else {
+                            li.classList.add('expanded');
+                            icon.innerHTML = this.getIcon(file.name, true, true);
+                            await this.renderTree(file.path, li);
                         }
                     } else {
                         this.openFile(file.path);
@@ -325,6 +368,7 @@ class EditorManager {
     }
 
     async openFile(filePath, restoreOnly = false) {
+        console.log('[Editor] openFile', filePath);
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
@@ -338,24 +382,30 @@ class EditorManager {
             const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
             
             let model = null;
+            let content = null;
+
             if (!isImage) {
                 try {
                     const res = await auth.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
                     if (!res.ok) throw new Error('Failed to read file');
                     const data = await res.json();
+                    content = data.content;
+                    console.log('[Editor] fetched content length:', content ? content.length : 0);
                     
                     if (this.monacoInstance) {
-                        model = this.monacoInstance.editor.createModel(data.content, undefined, this.monacoInstance.Uri.file(filePath));
+                        model = this.monacoInstance.editor.createModel(content, undefined, this.monacoInstance.Uri.file(filePath));
                     }
                 } catch (err) {
                     console.error(err);
+                    alert(`Failed to open file: ${err.message}`);
                     return;
                 }
             }
 
             this.globalModels.set(filePath, {
                 type: isImage ? 'image' : 'text',
-                model: model
+                model: model,
+                content: content
             });
         }
 
@@ -414,6 +464,7 @@ class EditorManager {
     }
 
     activateTab(filePath, isRestore = false) {
+        console.log('[Editor] activateTab', filePath);
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
@@ -426,6 +477,7 @@ class EditorManager {
 
         state.activeFilePath = filePath;
         const file = this.globalModels.get(filePath);
+        console.log('[Editor] file entry:', file);
         
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
@@ -442,6 +494,13 @@ class EditorManager {
         } else {
             this.imagePreviewContainer.style.display = 'none';
             this.monacoContainer.style.display = 'block';
+            
+            if (!file.model && file.content !== null && this.monacoInstance) {
+                console.log('[Editor] lazy creating model');
+                file.model = this.monacoInstance.editor.createModel(file.content, undefined, this.monacoInstance.Uri.file(filePath));
+            }
+
+            console.log('[Editor] setting model. Editor:', !!this.editor, 'Model:', !!file.model);
             if (this.editor && file.model) {
                 this.editor.setModel(file.model);
                 
@@ -450,6 +509,8 @@ class EditorManager {
                     this.editor.restoreViewState(savedViewState);
                 }
                 this.editor.focus();
+                // Force layout to ensure content is visible
+                setTimeout(() => this.editor.layout(), 50);
             }
         }
     }

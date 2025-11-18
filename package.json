@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",
+    "build": "node build.mjs",
     "test": "node --test",
     "test:watch": "node --test --watch",
     "lint": "eslint ."
