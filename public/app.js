@@ -1076,6 +1076,13 @@ function renderTabs() {
             session.updateTabUI();
         }
 
+        // Force sync editor state class
+        if (session.editorState && session.editorState.isVisible) {
+            tab.classList.add('editor-open');
+        } else {
+            tab.classList.remove('editor-open');
+        }
+
         if (id === state.activeSessionId) {
             tab.classList.add('active');
         } else {
