@@ -183,7 +183,7 @@ class EditorManager {
             const dy = e.clientY - startY;
             const newHeight = startHeight + dy;
             if (newHeight > 100 && newHeight < window.innerHeight - 100) {
-                this.pane.style.height = `${newHeight}px`;
+                this.pane.style.flex = `0 0 ${newHeight}px`;
                 this.layout();
             }
         };
