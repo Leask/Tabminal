@@ -237,7 +237,7 @@ class EditorManager {
                 language: 'plaintext',
                 theme: 'solarized-dark',
                 automaticLayout: false,
-                minimap: { enabled: false },
+                minimap: { enabled: true },
                 fontSize: 12,
                 fontFamily: '"SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
                 scrollBeyondLastLine: false,
