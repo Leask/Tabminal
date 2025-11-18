@@ -54,3 +54,29 @@ test("captures real shell output without prompt noise", async () => {
         manager.dispose();
     }
 });
+
+test("strips terminal escape sequences from captured IO", async () => {
+    const manager = new TerminalManager();
+    try {
+        const session = manager.createSession();
+        await waitForInitialExecution(session);
+        const entry = await runCommand(
+            session,
+            "python3 -c 'print(\"\\x1b[35m__TABMINAL_COLOR__\\x1b[0m\")'"
+        );
+        assert.ok(
+            entry.output.startsWith("__TABMINAL_COLOR__"),
+            "should keep plain output text"
+        );
+        assert.ok(
+            !/\u001b/.test(entry.output),
+            "should remove escape codes from output"
+        );
+        assert.ok(
+            !/\u001b/.test(entry.input),
+            "should remove escape codes from input"
+        );
+    } finally {
+        manager.dispose();
+    }
+});

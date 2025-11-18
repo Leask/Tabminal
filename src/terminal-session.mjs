@@ -8,6 +8,12 @@ const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
 const PROMPT_MARKER = '\u001b]1337;TabminalPrompt\u0007';
 const OSC_SEQUENCE_REGEX =
     /\u001b\]1337;(ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)|TabminalPrompt)\u0007/g;
+const CSI_SEQUENCE_REGEX = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g;
+const OSC_STRIP_REGEX = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g;
+const DCS_SEQUENCE_REGEX = /\u001bP[\s\S]*?(?:\u0007|\u001b\\)/g;
+const SOS_PM_APC_SEQUENCE_REGEX = /\u001b[\^_][\s\S]*?\u001b\\/g;
+const TWO_CHAR_ESCAPE_REGEX = /\u001b[@-Z\\-_]/g;
+const CONTROL_CHAR_REGEX = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
 export class TerminalSession {
     constructor(pty, options = {}) {
@@ -279,7 +285,7 @@ export class TerminalSession {
         const command = this._decodeCommandSafe(cmdB64);
 
         const completedAt = new Date();
-        const entry = {
+        const entry = this._postProcessExecutionEntry({
             command,
             exitCode: Number.isNaN(exitCode) ? null : exitCode,
             ...this._splitInputOutput(
@@ -287,12 +293,21 @@ export class TerminalSession {
             ),
             startedAt: this.captureStartedAt ?? completedAt,
             completedAt,
-        };
+        });
 
         this.lastExecution = entry;
         this._logCommandExecution(entry);
         this.captureBuffer = '';
         this.captureStartedAt = null;
+    }
+
+    _postProcessExecutionEntry(entry) {
+        if (!entry) return entry;
+        return {
+            ...entry,
+            input: this._stripTerminalSequences(entry.input ?? ''),
+            output: this._stripTerminalSequences(entry.output ?? '')
+        };
     }
 
     _decodeCommandSafe(encoded) {
@@ -506,10 +521,19 @@ export class TerminalSession {
 
     _stripAnsi(value) {
         if (!value) return value;
-        return value.replace(
-            /\u001b\[[0-9;?]*[ -\/]*[@-~]/g,
-            ''
-        );
+        return value.replace(CSI_SEQUENCE_REGEX, '');
+    }
+
+    _stripTerminalSequences(value) {
+        if (!value) return '';
+        let result = value;
+        result = result.replace(OSC_STRIP_REGEX, '');
+        result = result.replace(DCS_SEQUENCE_REGEX, '');
+        result = result.replace(SOS_PM_APC_SEQUENCE_REGEX, '');
+        result = result.replace(CSI_SEQUENCE_REGEX, '');
+        result = result.replace(TWO_CHAR_ESCAPE_REGEX, '');
+        result = result.replace(CONTROL_CHAR_REGEX, '');
+        return result;
     }
 
     _findCommandIndexBySimulation(text, target) {
