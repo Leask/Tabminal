@@ -132,6 +132,8 @@ class EditorManager {
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
         this.resizer = document.getElementById('editor-resizer');
+        this.fileTreeResizer = document.getElementById('file-tree-resizer');
+        this.fileTreeContainer = document.querySelector('.file-tree-container');
         this.fileTree = document.getElementById('file-tree');
         this.tabsContainer = document.getElementById('editor-tabs');
         this.monacoContainer = document.getElementById('monaco-container');
@@ -140,6 +142,7 @@ class EditorManager {
         this.emptyState = document.getElementById('empty-editor-state');
         
         this.initResizer();
+        this.initFileTreeResizer();
         this.initMonaco();
         this.loadIconMap();
     }
@@ -198,6 +201,30 @@ class EditorManager {
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
             document.body.style.cursor = 'row-resize';
+        });
+    }
+
+    initFileTreeResizer() {
+        let startX, startWidth;
+        const onMouseMove = (e) => {
+            const dx = e.clientX - startX;
+            const newWidth = startWidth + dx;
+            if (newWidth > 100 && newWidth < 600) {
+                this.fileTreeContainer.style.width = `${newWidth}px`;
+                this.layout();
+            }
+        };
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+        };
+        this.fileTreeResizer.addEventListener('mousedown', (e) => {
+            startX = e.clientX;
+            startWidth = this.fileTreeContainer.offsetWidth;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'col-resize';
         });
     }
 
