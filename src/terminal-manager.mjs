@@ -68,10 +68,16 @@ _tabminal_bash_postexec() {
     _tabminal_last_command="" # Reset after use
   fi
 }
+_tabminal_apply_prompt_marker() {
+  local marker=$'\\[\\e]1337;TabminalPrompt\\a\\]'
+  if [[ "$PS1" != *"TabminalPrompt"* ]]; then
+    PS1="$PS1$marker"
+  fi
+}
 if [[ -n "$PROMPT_COMMAND" ]]; then
-  printf -v PROMPT_COMMAND "_tabminal_bash_postexec; %s" "$PROMPT_COMMAND"
+  printf -v PROMPT_COMMAND "_tabminal_bash_postexec; %s; _tabminal_apply_prompt_marker" "$PROMPT_COMMAND"
 else
-  PROMPT_COMMAND="_tabminal_bash_postexec"
+  PROMPT_COMMAND="_tabminal_bash_postexec; _tabminal_apply_prompt_marker"
 fi
 export PROMPT_COMMAND
 `;
@@ -97,8 +103,15 @@ _tabminal_zsh_postexec() {
   fi
   _tabminal_last_command="" # Reset after use
 }
+_tabminal_zsh_apply_prompt_marker() {
+  local marker=$'%{\e]1337;TabminalPrompt\a%}'
+  if [[ "$PROMPT" != *"TabminalPrompt"* ]]; then
+    PROMPT="$PROMPT$marker"
+  fi
+}
 preexec_functions+=(_tabminal_zsh_preexec)
 precmd_functions+=(_tabminal_zsh_postexec)
+precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
 `;
                 fs.writeFileSync(initFilePath, zshScript);
                 env.ZDOTDIR = initDirPath;

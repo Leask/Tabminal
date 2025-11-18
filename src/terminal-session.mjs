@@ -5,8 +5,9 @@ import AnsiParser from 'node-ansiparser';
 const execAsync = promisify(exec);
 const WS_STATE_OPEN = 1;
 const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
-const EXIT_SEQUENCE_REGEX =
-    /\u001b\]1337;ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)\u0007/g;
+const PROMPT_MARKER = '\u001b]1337;TabminalPrompt\u0007';
+const OSC_SEQUENCE_REGEX =
+    /\u001b\]1337;(ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)|TabminalPrompt)\u0007/g;
 
 export class TerminalSession {
     constructor(pty, options = {}) {
@@ -62,21 +63,26 @@ export class TerminalSession {
 
             let cleaned = '';
             let lastIndex = 0;
-            EXIT_SEQUENCE_REGEX.lastIndex = 0;
+            OSC_SEQUENCE_REGEX.lastIndex = 0;
 
             let match;
-            while ((match = EXIT_SEQUENCE_REGEX.exec(chunk)) !== null) {
+            while ((match = OSC_SEQUENCE_REGEX.exec(chunk)) !== null) {
                 const plain = chunk.slice(lastIndex, match.index);
                 if (plain) {
                     cleaned += plain;
                     this._appendCapturedOutput(plain);
                 }
 
-                const exitCodeStr = match[1];
-                const cmdB64 = match[2];
-                this._handleExitCodeSequence(exitCodeStr, cmdB64);
+                const sequence = match[1];
+                if (sequence.startsWith('ExitCode=')) {
+                    const exitCodeStr = match[2];
+                    const cmdB64 = match[3];
+                    this._handleExitCodeSequence(exitCodeStr, cmdB64);
+                } else {
+                    this._handlePromptMarker();
+                }
 
-                lastIndex = EXIT_SEQUENCE_REGEX.lastIndex;
+                lastIndex = OSC_SEQUENCE_REGEX.lastIndex;
             }
 
             const tail = chunk.slice(lastIndex);
@@ -261,6 +267,11 @@ export class TerminalSession {
         if (!this.captureStartedAt) {
             this.captureStartedAt = new Date();
         }
+    }
+
+    _handlePromptMarker() {
+        this.captureBuffer = '';
+        this.captureStartedAt = null;
     }
 
     _handleExitCodeSequence(exitCodeStr, cmdB64) {

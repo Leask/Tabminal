@@ -7,6 +7,7 @@ function buildExitSequence(exitCode, command) {
     const encoded = Buffer.from(command, 'utf8').toString('base64');
     return `\u001b]1337;ExitCode=${exitCode};CommandB64=${encoded}\u0007`;
 }
+const PROMPT_MARKER = '\u001b]1337;TabminalPrompt\u0007';
 
 describe('TerminalSession', () => {
     let pty;
@@ -110,7 +111,7 @@ describe('TerminalSession', () => {
 
     it('captures execution output between exit markers', () => {
         session = new TerminalSession(pty);
-        pty.emitData('leask@Flora$ ');
+        pty.emitData('leask@Flora$ ' + PROMPT_MARKER);
         pty.emitData('ls\nfile.txt\n');
         pty.emitData(buildExitSequence(0, 'ls'));
 
@@ -123,11 +124,11 @@ describe('TerminalSession', () => {
     it('resets the capture buffer for consecutive commands', () => {
         session = new TerminalSession(pty);
 
-        pty.emitData('prompt$ ');
+        pty.emitData('prompt$ ' + PROMPT_MARKER);
         pty.emitData('ls\nfoo\n');
         pty.emitData(buildExitSequence(2, 'ls'));
 
-        pty.emitData('prompt$ ');
+        pty.emitData('prompt$ ' + PROMPT_MARKER);
         pty.emitData('pwd\n/bar\n');
         pty.emitData(buildExitSequence(0, 'pwd'));
 
@@ -146,7 +147,7 @@ describe('TerminalSession', () => {
             '⎨ Paths: /vols/cache\r\n' +
             '⎩ [33m$ ❯[0m ';
 
-        pty.emitData(fancyPrompt);
+        pty.emitData(fancyPrompt + PROMPT_MARKER);
         pty.emitData('ls\nclient\n');
         pty.emitData(buildExitSequence(0, 'ls'));
 
@@ -158,7 +159,7 @@ describe('TerminalSession', () => {
     it('normalizes backspaces and clears within the echoed command line', () => {
         session = new TerminalSession(pty);
 
-        pty.emitData('prompt$ ');
+        pty.emitData('prompt$ ' + PROMPT_MARKER);
         pty.emitData('ls -XXXX\b\b\b\b[KBB\r\nitem\n');
         pty.emitData(buildExitSequence(0, 'ls -BB'));
 
@@ -174,7 +175,7 @@ describe('TerminalSession', () => {
         console.log = (...args) => { calls.push(args); };
 
         try {
-            pty.emitData('prompt$ ');
+            pty.emitData('prompt$ ' + PROMPT_MARKER);
             pty.emitData('echo hi\nhi\n');
             pty.emitData(buildExitSequence(0, 'echo hi'));
         } finally {
@@ -200,16 +201,15 @@ describe('TerminalSession', () => {
         session.attach(client);
         client.sent = [];
 
-        pty.emitData(
-            `prompt$ echo hi
+        pty.emitData('prompt$ ' + PROMPT_MARKER);
+        pty.emitData(`echo hi
 hi
-${buildExitSequence(0, 'echo hi')}`
-        );
+${buildExitSequence(0, 'echo hi')}`);
 
         const payloads = client.sent.map((raw) => JSON.parse(raw));
-        const outputMsg = payloads.find((p) => p.type === 'output');
+        const outputMsg = payloads.find((p) => p.type === 'output' && p.data.includes('echo hi'));
         assert.ok(outputMsg);
-        assert.ok(outputMsg.data.includes('echo hi\nhi\n'));
+        assert.ok(outputMsg.data.includes('\nhi\n'));
     });
 });
 
