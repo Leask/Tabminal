@@ -1304,8 +1304,14 @@ function createTabElement(session) {
     return tab;
 }
 
+let currentConnectionStatus = null;
+
 function setStatus(status) {
     if (!statusEl) return;
+    if (status === currentConnectionStatus) return;
+    
+    currentConnectionStatus = status;
+
     const labels = {
         connecting: 'Connecting',
         connected: 'Connected',
@@ -1315,9 +1321,16 @@ function setStatus(status) {
         unknown: 'Unknown'
     };
     statusEl.textContent = labels[status] ?? labels.unknown;
-    statusEl.classList.add('visible');
-    if (status === 'connected' || status === 'ready') {
-        setTimeout(() => statusEl.classList.remove('visible'), 1500);
+    
+    if (status !== 'connected' && status !== 'ready') {
+        statusEl.classList.add('visible');
+    } else {
+        statusEl.classList.add('visible');
+        setTimeout(() => {
+            if (currentConnectionStatus === 'connected' || currentConnectionStatus === 'ready') {
+                statusEl.classList.remove('visible');
+            }
+        }, 1500);
     }
 }
 
