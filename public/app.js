@@ -368,7 +368,6 @@ class EditorManager {
     }
 
     async openFile(filePath, restoreOnly = false) {
-        console.log('[Editor] openFile', filePath);
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
@@ -390,7 +389,6 @@ class EditorManager {
                     if (!res.ok) throw new Error('Failed to read file');
                     const data = await res.json();
                     content = data.content;
-                    console.log('[Editor] fetched content length:', content ? content.length : 0);
                     
                     if (this.monacoInstance) {
                         model = this.monacoInstance.editor.createModel(content, undefined, this.monacoInstance.Uri.file(filePath));
@@ -464,7 +462,6 @@ class EditorManager {
     }
 
     activateTab(filePath, isRestore = false) {
-        console.log('[Editor] activateTab', filePath);
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
@@ -477,7 +474,6 @@ class EditorManager {
 
         state.activeFilePath = filePath;
         const file = this.globalModels.get(filePath);
-        console.log('[Editor] file entry:', file);
         
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
@@ -496,11 +492,9 @@ class EditorManager {
             this.monacoContainer.style.display = 'block';
             
             if (!file.model && file.content !== null && this.monacoInstance) {
-                console.log('[Editor] lazy creating model');
                 file.model = this.monacoInstance.editor.createModel(file.content, undefined, this.monacoInstance.Uri.file(filePath));
             }
 
-            console.log('[Editor] setting model. Editor:', !!this.editor, 'Model:', !!file.model);
             if (this.editor && file.model) {
                 this.editor.setModel(file.model);
                 

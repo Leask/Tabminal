@@ -29,14 +29,16 @@ export const setupFsRoutes = (router) => {
 
             const dirents = await fs.readdir(fullPath, { withFileTypes: true });
             
-            const files = dirents.map(dirent => {
-                return {
-                    name: dirent.name,
-                    isDirectory: dirent.isDirectory(),
-                    path: path.join(dirPath, dirent.name),
-                    // Add basic icon/type hint logic here if needed later
-                };
-            });
+            const files = dirents
+                .filter(dirent => dirent.name !== '.DS_Store')
+                .map(dirent => {
+                    return {
+                        name: dirent.name,
+                        isDirectory: dirent.isDirectory(),
+                        path: path.join(dirPath, dirent.name),
+                        // Add basic icon/type hint logic here if needed later
+                    };
+                });
 
             // Sort: Directories first, then files
             files.sort((a, b) => {
