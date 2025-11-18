@@ -410,27 +410,17 @@ body {
 
 .file-tree-container {
     width: 220px;
-    background-color: var(--bg-surface);
+    background-color: var(--bg-base);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
 }
 
-.file-tree-header {
-    padding: 8px 12px;
-    font-size: 0.75rem;
-    font-weight: bold;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    border-bottom: 1px solid var(--border-color);
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
 .file-tree {
     flex-grow: 1;
     overflow-y: auto;
-    padding: 4px 0;
+    padding: 8px 0;
     font-size: 0.85rem;
 }
 
