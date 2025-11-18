@@ -132,9 +132,6 @@ class EditorManager {
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
         this.resizer = document.getElementById('editor-resizer');
-        this.fileTreeResizer = document.getElementById('file-tree-resizer');
-        this.fileTreeContainer = document.querySelector('.file-tree-container');
-        this.fileTree = document.getElementById('file-tree');
         this.tabsContainer = document.getElementById('editor-tabs');
         this.monacoContainer = document.getElementById('monaco-container');
         this.imagePreviewContainer = document.getElementById('image-preview-container');
@@ -142,7 +139,6 @@ class EditorManager {
         this.emptyState = document.getElementById('empty-editor-state');
         
         this.initResizer();
-        this.initFileTreeResizer();
         this.initMonaco();
         this.loadIconMap();
     }
@@ -204,28 +200,10 @@ class EditorManager {
         });
     }
 
-    initFileTreeResizer() {
-        let startX, startWidth;
-        const onMouseMove = (e) => {
-            const dx = e.clientX - startX;
-            const newWidth = startWidth + dx;
-            if (newWidth > 100 && newWidth < 600) {
-                this.fileTreeContainer.style.width = `${newWidth}px`;
-                this.layout();
-            }
-        };
-        const onMouseUp = () => {
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-            document.body.style.cursor = '';
-        };
-        this.fileTreeResizer.addEventListener('mousedown', (e) => {
-            startX = e.clientX;
-            startWidth = this.fileTreeContainer.offsetWidth;
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-            document.body.style.cursor = 'col-resize';
-        });
+    refreshSessionTree(session) {
+        if (!session || !session.fileTreeElement) return;
+        session.fileTreeElement.innerHTML = '';
+        this.renderTree(session.cwd, session.fileTreeElement);
     }
 
     initMonaco() {
@@ -289,9 +267,10 @@ class EditorManager {
         }
         
         this.pane.style.display = state.isVisible ? 'flex' : 'none';
+        this.resizer.style.display = state.isVisible ? 'block' : 'none';
         
         if (state.isVisible) {
-            this.refreshFileTree(state.root);
+            this.refreshSessionTree(this.currentSession);
             this.renderEditorTabs();
             if (state.activeFilePath) {
                 this.activateTab(state.activeFilePath, true);
@@ -318,22 +297,24 @@ class EditorManager {
         this.currentSession = session;
         if (!session) {
             this.pane.style.display = 'none';
+            this.resizer.style.display = 'none';
             return;
         }
 
         const state = session.editorState;
         this.pane.style.display = state.isVisible ? 'flex' : 'none';
+        this.resizer.style.display = state.isVisible ? 'block' : 'none';
 
         if (state.isVisible) {
-            this.refreshFileTree(state.root);
+            this.refreshSessionTree(session);
             this.renderEditorTabs();
             if (state.activeFilePath) {
                 this.activateTab(state.activeFilePath, true);
-            } else {
-                this.showEmptyState();
             }
-            this.layout();
+        } else {
+            this.showEmptyState();
         }
+        this.layout();
     }
 
     layout() {
@@ -343,11 +324,6 @@ class EditorManager {
         if (this.editor) {
             this.editor.layout();
         }
-    }
-
-    async refreshFileTree(path) {
-        this.fileTree.innerHTML = '';
-        await this.renderTree(path, this.fileTree);
     }
 
     async renderTree(dirPath, container) {
@@ -659,8 +635,8 @@ class Session {
             
             if (this.editorState) {
                 this.editorState.root = this.cwd;
-                if (state.activeSessionId === this.id && this.editorState.isVisible) {
-                    editorManager.refreshFileTree(this.cwd);
+                if (this.editorState.isVisible) {
+                    editorManager.refreshSessionTree(this);
                 }
             }
         }
@@ -1103,6 +1079,10 @@ function createTabElement(session) {
     closeBtn.className = 'close-tab-button';
     closeBtn.innerHTML = '&times;';
     closeBtn.title = 'Close Terminal';
+    closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        auth.fetch(`/api/sessions/${session.id}`, { method: 'DELETE' });
+    };
     tab.appendChild(closeBtn);
 
     const toggleEditorBtn = document.createElement('button');
@@ -1111,9 +1091,22 @@ function createTabElement(session) {
     toggleEditorBtn.title = 'Toggle File Editor';
     toggleEditorBtn.onclick = (e) => {
         e.stopPropagation();
-        editorManager.toggle();
+        if (state.activeSessionId !== session.id) {
+            switchToSession(session.id).then(() => editorManager.toggle());
+        } else {
+            editorManager.toggle();
+        }
     };
     tab.appendChild(toggleEditorBtn);
+    
+    const fileTree = document.createElement('div');
+    fileTree.className = 'tab-file-tree';
+    session.fileTreeElement = fileTree;
+    
+    if (session.editorState && session.editorState.isVisible) {
+        editorManager.renderTree(session.cwd, fileTree);
+    }
+    tab.appendChild(fileTree);
     
     const previewContainer = document.createElement('div');
     previewContainer.className = 'preview-container';
@@ -1158,6 +1151,8 @@ function createTabElement(session) {
 
     tab.appendChild(previewContainer);
     tab.appendChild(overlay);
+    
+    tab.onclick = () => switchToSession(session.id);
     
     return tab;
 }

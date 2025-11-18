@@ -23,23 +23,17 @@
             </aside>
             <main id="terminal-container" class="terminal-container">
                 <div id="editor-pane" class="editor-pane" style="display: none;">
-                    <div class="editor-layout">
-                        <aside class="file-tree-container">
-                            <div id="file-tree" class="file-tree"></div>
-                        </aside>
-                        <div class="file-tree-resizer" id="file-tree-resizer"></div>
-                        <div class="editor-workspace">
-                            <div id="editor-tabs" class="editor-tabs">
-                                <!-- Editor tabs injected here -->
+                    <div class="editor-workspace">
+                        <div id="editor-tabs" class="editor-tabs">
+                            <!-- Editor tabs injected here -->
+                        </div>
+                        <div id="editor-content" class="editor-content">
+                            <div id="monaco-container" class="monaco-container"></div>
+                            <div id="image-preview-container" class="image-preview-container" style="display: none;">
+                                <img id="image-preview" src="" alt="Preview">
                             </div>
-                            <div id="editor-content" class="editor-content">
-                                <div id="monaco-container" class="monaco-container"></div>
-                                <div id="image-preview-container" class="image-preview-container" style="display: none;">
-                                    <img id="image-preview" src="" alt="Preview">
-                                </div>
-                                <div id="empty-editor-state" class="empty-editor-state">
-                                    Select a file to view
-                                </div>
+                            <div id="empty-editor-state" class="empty-editor-state">
+                                Select a file to view
                             </div>
                         </div>
                     </div>
