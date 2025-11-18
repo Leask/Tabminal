@@ -658,7 +658,7 @@ body {
 }
 
 .tab-item:not(.active) .tab-file-tree {
-    max-height: 110px; /* Approx 5 items */
+    max-height: 65px; /* Approx 3 items */
     pointer-events: none;
     opacity: 0.6;
     overflow: hidden;
