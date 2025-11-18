@@ -458,7 +458,7 @@ body {
 }
 
 .file-tree-item {
-    padding: 2px 12px;
+    padding: 2px 6px;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -665,6 +665,10 @@ body {
     list-style: none;
     padding-left: 12px;
     margin: 0;
+}
+
+.tab-file-tree > ul {
+    padding-left: 0;
 }
 
 .tab-file-tree li {
