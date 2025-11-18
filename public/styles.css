@@ -424,8 +424,8 @@ body {
     cursor: col-resize;
     height: 100%;
     flex-shrink: 0;
-    border-left: 2px solid transparent;
-    border-right: 2px solid transparent;
+    border-left: 4px solid transparent;
+    border-right: 0;
     background-clip: content-box;
 }
 
