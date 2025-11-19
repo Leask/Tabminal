@@ -469,7 +469,7 @@ class EditorManager {
                     }
                 } catch (err) {
                     console.error(err);
-                    alert(`Failed to open file: ${err.message}`);
+                    toastManager.show('Error', `Failed to open file: ${err.message}`, 'error');
                     return;
                 }
             }
@@ -1322,6 +1322,89 @@ function createTabElement(session) {
     
     return tab;
 }
+
+document.addEventListener('click', () => {
+    notificationManager.requestPermission();
+}, { once: true });
+// #endregion
+
+// #region Toast Manager
+class ToastManager {
+    constructor() {
+        this.container = document.getElementById('notification-container');
+    }
+
+    show(title, message, type = 'info') {
+        if (!this.container) return;
+        
+        // Handle legacy call: show(message, type)
+        if (message === undefined || (typeof message === 'string' && ['info', 'warning', 'error', 'success'].includes(message))) {
+            type = message || 'info';
+            message = title;
+            title = 'Tabminal';
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        
+        const content = document.createElement('div');
+        content.className = 'toast-content';
+        
+        const titleEl = document.createElement('div');
+        titleEl.className = 'toast-title';
+        titleEl.textContent = title;
+        
+        const msgEl = document.createElement('div');
+        msgEl.className = 'toast-message';
+        msgEl.textContent = message;
+        
+        content.appendChild(titleEl);
+        content.appendChild(msgEl);
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.onclick = () => this.dismiss(toast);
+        
+        toast.appendChild(content);
+        toast.appendChild(closeBtn);
+        
+        this.container.insertBefore(toast, this.container.firstChild);
+        
+        requestAnimationFrame(() => this.prune());
+
+        setTimeout(() => this.dismiss(toast), 10000);
+    }
+
+    prune() {
+        const viewportHeight = window.innerHeight;
+        const bottomLimit = viewportHeight - 20;
+        const toasts = Array.from(this.container.children);
+        
+        for (const toast of toasts) {
+            const rect = toast.getBoundingClientRect();
+            if (rect.bottom > bottomLimit) {
+                this.dismiss(toast);
+            }
+        }
+    }
+
+    dismiss(toast) {
+        if (!toast || toast.classList.contains('hiding')) return;
+        toast.classList.add('hiding');
+        
+        const remove = () => {
+            if (toast.parentElement) toast.remove();
+        };
+        
+        toast.addEventListener('transitionend', remove, { once: true });
+        // Fallback in case transitionend doesn't fire
+        setTimeout(remove, 550);
+    }
+}
+const toastManager = new ToastManager();
+window.alert = (msg) => toastManager.show('Alert', msg, 'warning');
+// #endregion
 
 let currentConnectionStatus = null;
 

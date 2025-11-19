@@ -61,7 +61,12 @@ export const loadSessions = async () => {
                     const content = await fs.readFile(path.join(SESSIONS_DIR, file), 'utf-8');
                     sessions.push(JSON.parse(content));
                 } catch (e) {
-                    console.warn(`[Persistence] Failed to parse session file ${file}:`, e);
+                    console.warn(`[Persistence] Failed to parse session file ${file}, deleting it:`, e);
+                    try {
+                        await fs.unlink(path.join(SESSIONS_DIR, file));
+                    } catch (delErr) {
+                        console.error(`[Persistence] Failed to delete corrupted file ${file}:`, delErr);
+                    }
                 }
             }
         }
