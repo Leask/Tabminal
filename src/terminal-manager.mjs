@@ -153,6 +153,12 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             executions: restoredData ? restoredData.executions : undefined
         });
 
+        if (restoredData) {
+            persistence.loadSessionLog(id).then(log => {
+                if (log) session.history = log;
+            });
+        }
+
         // Initial save
         this.saveSessionState(session);
 
@@ -193,6 +199,10 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             }
             this.saveSessionState(session);
         }
+    }
+
+    appendLog(id, chunk) {
+        persistence.appendSessionLog(id, chunk);
     }
 
     getSession(id) {

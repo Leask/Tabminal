@@ -131,3 +131,37 @@ export const getExpandedFolders = async () => {
     const memory = await loadMemory();
     return (memory.expandedFolders || []).map(item => item.path);
 };
+
+// --- Raw Log Persistence ---
+
+export const appendSessionLog = async (id, chunk) => {
+    await init();
+    const filePath = path.join(SESSIONS_DIR, `${id}.log`);
+    try {
+        await fs.appendFile(filePath, chunk);
+    } catch (e) {
+        console.error(`[Persistence] Failed to append log for ${id}:`, e);
+    }
+};
+
+export const loadSessionLog = async (id, limit = 1024 * 1024) => {
+    const filePath = path.join(SESSIONS_DIR, `${id}.log`);
+    try {
+        const stats = await fs.stat(filePath);
+        const size = stats.size;
+        const start = Math.max(0, size - limit);
+        const length = size - start;
+        
+        if (length <= 0) return '';
+
+        const handle = await fs.open(filePath, 'r');
+        const buffer = Buffer.alloc(length);
+        await handle.read(buffer, 0, length, start);
+        await handle.close();
+        
+        return buffer.toString('utf-8');
+    } catch (e) {
+        if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to load log for ${id}:`, e);
+        return '';
+    }
+};

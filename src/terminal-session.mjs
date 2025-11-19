@@ -71,6 +71,10 @@ export class TerminalSession {
         this._handleData = (chunk) => {
             if (typeof chunk !== 'string') chunk = chunk.toString('utf8');
 
+            if (this.manager) {
+                this.manager.appendLog(this.id, chunk);
+            }
+
             let cleaned = '';
             let lastIndex = 0;
             OSC_SEQUENCE_REGEX.lastIndex = 0;
