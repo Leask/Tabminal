@@ -1327,6 +1327,44 @@ document.addEventListener('click', () => {
 }, { once: true });
 // #endregion
 
+// #region Notification Manager
+class NotificationManager {
+    constructor() {
+        this.hasPermission = false;
+        if ('Notification' in window) {
+            this.hasPermission = Notification.permission === 'granted';
+        }
+    }
+
+    requestPermission() {
+        if (!('Notification' in window)) return;
+        if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+            Notification.requestPermission().then(permission => {
+                this.hasPermission = permission === 'granted';
+            });
+        }
+    }
+
+    send(title, body) {
+        if (!this.hasPermission) return;
+        try {
+            new Notification(title, {
+                body: body,
+                icon: '/favicon.svg',
+                tag: 'tabminal-status'
+            });
+        } catch (e) {
+            console.error('Notification failed:', e);
+        }
+    }
+}
+const notificationManager = new NotificationManager();
+
+document.addEventListener('click', () => {
+    notificationManager.requestPermission();
+}, { once: true });
+// #endregion
+
 // #region Toast Manager
 class ToastManager {
     constructor() {
