@@ -10,7 +10,8 @@ const DEFAULT_CONFIG = {
     heartbeatInterval: 30000,
     historyLimit: 524288,
     acceptTerms: false,
-    password: null
+    password: null,
+    model: 'openrouter_google_gemini_3_pro_preview'
 };
 
 function loadJson(filePath) {
@@ -67,6 +68,14 @@ function loadConfig() {
                 type: 'string',
                 short: 'a'
             },
+            aikey: {
+                type: 'string',
+                short: 'k'
+            },
+            model: {
+                type: 'string',
+                short: 'm'
+            },
             help: {
                 type: 'boolean'
             },
@@ -89,6 +98,8 @@ Options:
   --host, -h      Host to bind to (default: 127.0.0.1)
   --port, -p      Port to listen on (default: 9846)
   --passwd, -a    Set access password
+  --aikey, -k     Set AI API Key
+  --model, -m     Set AI Model
   --yes, -y       Accept security warning and start server
   --help          Show this help message
         `);
@@ -117,6 +128,12 @@ Options:
     if (args.passwd) {
         finalConfig.password = args.passwd;
     }
+    if (args.aikey) {
+        finalConfig.aiKey = args.aikey;
+    }
+    if (args.model) {
+        finalConfig.model = args.model;
+    }
 
     // Environment variables override (for backward compatibility/container usage)
     if (process.env.HOST) finalConfig.host = process.env.HOST;
@@ -124,6 +141,8 @@ Options:
     if (process.env.TABMINAL_HEARTBEAT) finalConfig.heartbeatInterval = parseInt(process.env.TABMINAL_HEARTBEAT, 10);
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
+    if (process.env.TABMINAL_AI_KEY) finalConfig.aiKey = process.env.TABMINAL_AI_KEY;
+    if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
 
     // Password Logic
     if (!finalConfig.password) {
