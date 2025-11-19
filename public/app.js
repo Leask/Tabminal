@@ -1024,7 +1024,12 @@ async function syncSessions() {
         
         const latency = Date.now() - startTime;
 
-        if (!response.ok) return;
+        if (!response.ok) {
+            console.warn('Heartbeat server error:', response.status);
+            setStatus('reconnecting');
+            updateSystemStatus(null, null);
+            return;
+        }
         
         // Clear sent updates
         for (const update of updates.sessions) {
