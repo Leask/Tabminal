@@ -1014,6 +1014,8 @@ async function syncSessions() {
         }
     }
 
+    const startTime = Date.now();
+
     try {
         const response = await auth.fetch('/api/heartbeat', {
             method: 'POST',
@@ -1021,6 +1023,8 @@ async function syncSessions() {
             body: JSON.stringify({ updates })
         });
         
+        const latency = Date.now() - startTime;
+
         if (!response.ok) return;
         
         // Clear sent updates
@@ -1041,7 +1045,7 @@ async function syncSessions() {
         
         setStatus('connected');
         if (data.system) {
-            updateSystemStatus(data.system);
+            updateSystemStatus(data.system, latency);
         }
 
         const sessions = Array.isArray(data) ? data : data.sessions;
@@ -1049,11 +1053,20 @@ async function syncSessions() {
     } catch (error) {
         console.error('Heartbeat failed:', error);
         setStatus('reconnecting');
+        updateSystemStatus(null, null);
     }
 }
 
-function updateSystemStatus(system) {
+let lastSystemData = null;
+let lastLatency = 0;
+
+function updateSystemStatus(system, latency) {
     if (!systemStatusBarEl) return;
+    if (system) lastSystemData = system;
+    if (latency !== null && latency !== undefined) lastLatency = latency;
+    
+    const data = system || lastSystemData;
+    if (!data) return;
 
     const formatBytesPair = (used, total) => {
         if (total === 0) return '0/0 B';
@@ -1074,7 +1087,7 @@ function updateSystemStatus(system) {
         `;
     };
 
-    const memPercent = (system.memory.used / system.memory.total) * 100;
+    const memPercent = (data.memory.used / data.memory.total) * 100;
 
     const formatUptime = (seconds) => {
         const d = Math.floor(seconds / (3600 * 24));
@@ -1087,15 +1100,21 @@ function updateSystemStatus(system) {
         return parts.join(' ');
     };
 
+    const isHealthy = currentConnectionStatus === 'connected' || currentConnectionStatus === 'ready';
+    const heartbeatColor = isHealthy ? '#859900' : '#dc322f';
+    const statusSuffix = isHealthy ? '' : ` (${currentConnectionStatus || 'unknown'})`;
+    const timeText = isHealthy ? `${lastLatency}ms` : 'Offline';
+    const heartbeatValue = `<span style="color: ${heartbeatColor}"><span class="heartbeat-dot"></span>${timeText}${statusSuffix}</span>`;
+
     const items = [
-        { label: 'Host', value: system.hostname },
-        { label: 'OS', value: system.osName },
-        { label: 'IP', value: system.ip },
-        { label: 'CPU', value: `${system.cpu.count}x ${system.cpu.speed} ${system.cpu.usagePercent}% ${renderProgressBar(system.cpu.usagePercent)}` },
-        { label: 'Mem', value: `${formatBytesPair(system.memory.used, system.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
-        { label: 'Up', value: formatUptime(system.uptime) },
-        { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(system.processUptime)}` },
-        { label: 'Synced', value: new Date().toLocaleTimeString() },
+        { label: 'Host', value: data.hostname },
+        { label: 'Kernel', value: data.osName },
+        { label: 'IP', value: data.ip },
+        { label: 'CPU', value: `${data.cpu.count}x ${data.cpu.speed} ${data.cpu.usagePercent}% ${renderProgressBar(data.cpu.usagePercent)}` },
+        { label: 'Mem', value: `${formatBytesPair(data.memory.used, data.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
+        { label: 'Up', value: formatUptime(data.uptime) },
+        { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(data.processUptime)}` },
+        { label: 'Heartbeat', value: heartbeatValue },
         { label: 'FPS', value: currentFps }
     ];
 

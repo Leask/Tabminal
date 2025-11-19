@@ -721,3 +721,21 @@ body {
     padding: 0;
     margin: 0;
 }
+
+/* Heartbeat Animation */
+@keyframes heartbeat-pulse {
+    0% { transform: scale(0.8); opacity: 0.6; }
+    50% { transform: scale(1.2); opacity: 1; }
+    100% { transform: scale(0.8); opacity: 0.6; }
+}
+
+.heartbeat-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    background-color: currentColor;
+    animation: heartbeat-pulse 1.5s infinite ease-in-out;
+    vertical-align: middle;
+}
