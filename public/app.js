@@ -5,7 +5,6 @@ import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5
 
 // #region DOM Elements
 const terminalEl = document.getElementById('terminal');
-const statusEl = document.getElementById('status-pill');
 const tabListEl = document.getElementById('tab-list');
 const newTabButton = document.getElementById('new-tab-button');
 const systemStatusBarEl = document.getElementById('system-status-bar');
@@ -1337,15 +1336,24 @@ class ToastManager {
     show(title, message, type = 'info') {
         if (!this.container) return;
         
-        // Handle legacy call: show(message, type)
         if (message === undefined || (typeof message === 'string' && ['info', 'warning', 'error', 'success'].includes(message))) {
             type = message || 'info';
             message = title;
             title = 'Tabminal';
         }
 
+        const existingToasts = Array.from(this.container.children);
+        for (const toast of existingToasts) {
+            if (toast.dataset.title === title && toast.dataset.message === message && !toast.classList.contains('hiding')) {
+                this.extendLife(toast);
+                return;
+            }
+        }
+
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
+        toast.dataset.title = title;
+        toast.dataset.message = message;
         
         const content = document.createElement('div');
         content.className = 'toast-content';
@@ -1373,7 +1381,16 @@ class ToastManager {
         
         requestAnimationFrame(() => this.prune());
 
-        setTimeout(() => this.dismiss(toast), 10000);
+        this.startTimer(toast);
+    }
+
+    startTimer(toast) {
+        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
+        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 10000);
+    }
+
+    extendLife(toast) {
+        this.startTimer(toast);
     }
 
     prune() {
@@ -1391,6 +1408,8 @@ class ToastManager {
 
     dismiss(toast) {
         if (!toast || toast.classList.contains('hiding')) return;
+        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
+        
         toast.classList.add('hiding');
         
         const remove = () => {
@@ -1398,7 +1417,6 @@ class ToastManager {
         };
         
         toast.addEventListener('transitionend', remove, { once: true });
-        // Fallback in case transitionend doesn't fire
         setTimeout(remove, 550);
     }
 }
@@ -1409,30 +1427,22 @@ window.alert = (msg) => toastManager.show('Alert', msg, 'warning');
 let currentConnectionStatus = null;
 
 function setStatus(status) {
-    if (!statusEl) return;
     if (status === currentConnectionStatus) return;
     
+    const prevStatus = currentConnectionStatus;
     currentConnectionStatus = status;
 
-    const labels = {
-        connecting: 'Connecting',
-        connected: 'Connected',
-        reconnecting: 'Reconnecting',
-        terminated: 'Terminated',
-        ready: 'Ready',
-        unknown: 'Unknown'
-    };
-    statusEl.textContent = labels[status] ?? labels.unknown;
-    
-    if (status !== 'connected' && status !== 'ready') {
-        statusEl.classList.add('visible');
-    } else {
-        statusEl.classList.add('visible');
-        setTimeout(() => {
-            if (currentConnectionStatus === 'connected' || currentConnectionStatus === 'ready') {
-                statusEl.classList.remove('visible');
-            }
-        }, 1500);
+    if (status === 'reconnecting') {
+        toastManager.show('Connection', 'Lost connection. Reconnecting...', 'warning');
+        notificationManager.send('Tabminal Disconnected', 'Attempting to reconnect...');
+    } else if (status === 'connected' && prevStatus === 'reconnecting') {
+        toastManager.show('Connection', 'Connection restored.', 'success');
+        notificationManager.send('Tabminal Connected', 'Connection restored.');
+    } else if (status === 'terminated') {
+        toastManager.show('Connection', 'Session terminated.', 'error');
+        notificationManager.send('Tabminal Terminated', 'Session has ended.');
+    } else if (status === 'connected' && !prevStatus) {
+        toastManager.show('Connection', 'Connected to server.', 'success');
     }
 }
 

@@ -291,27 +291,6 @@ body {
     /* margin-top removed since we have padding now */
 }
 
-#status-pill {
-    position: absolute;
-    top: 1.5rem;
-    right: 1.5rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    background: rgba(7, 54, 66, 0.9);
-    color: #93a1a1;
-    border: 1px solid rgba(88, 110, 117, 0.5);
-    backdrop-filter: blur(6px);
-    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.35);
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-}
-
-#status-pill.visible {
-    opacity: 1;
-}
-
 /* Login Modal */
 .modal {
     position: fixed;

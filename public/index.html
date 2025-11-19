@@ -7,7 +7,15 @@
         <link rel="icon" type="image/svg+xml" href="./favicon.svg">
         <link rel="mask-icon" href="./favicon.svg" color="#22D3EE">
         <link rel="preconnect" href="https://cdn.jsdelivr.net">
-        <link rel="stylesheet" href="./styles.css">
+        <script>
+            (function() {
+                const t = Math.floor(Date.now() / 60000);
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = `./styles.css?t=${t}`;
+                document.head.appendChild(link);
+            })();
+        </script>
         <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
     </head>
     <body>
@@ -45,7 +53,6 @@
 
                 <div id="terminal-wrapper" class="terminal-wrapper">
                     <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
-                    <div id="status-pill" role="status" aria-live="polite"></div>
                 </div>
             </main>
         </div>
@@ -61,6 +68,14 @@
                 <p id="login-error" class="error-message"></p>
             </div>
         </div>
-        <script type="module" src="./app.js"></script>
+        <script>
+            (function() {
+                const t = Math.floor(Date.now() / 60000);
+                const script = document.createElement('script');
+                script.type = 'module';
+                script.src = `./app.js?t=${t}`;
+                document.body.appendChild(script);
+            })();
+        </script>
     </body>
 </html>
