@@ -33,7 +33,7 @@ export async function authMiddleware(ctx, next) {
     }
 
     // Check for Authorization header
-    const authHeader = ctx.get('Authorization');
+    const authHeader = ctx.get('Authorization') || ctx.query.token;
     // Expecting "Authorization: <sha256-hash>"
     // Some clients might send "Bearer <hash>", let's handle raw hash for simplicity as per prompt
     // "header中攜帶這個編碼過的密碼" -> implies the value is the hash.

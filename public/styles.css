@@ -572,6 +572,22 @@ body {
     color: white;
 }
 
+.editor-tab.readonly {
+    background-image: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 5px,
+        rgba(220, 50, 47, 0.15) 5px,
+        rgba(220, 50, 47, 0.15) 10px
+    );
+}
+
+.editor-tab.readonly span {
+    text-decoration: none;
+    opacity: 0.8;
+    font-style: normal;
+}
+
 .editor-content {
     flex-grow: 1;
     position: relative;

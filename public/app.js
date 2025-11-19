@@ -448,6 +448,7 @@ class EditorManager {
             
             let model = null;
             let content = null;
+            let readonly = false;
 
             if (!isImage) {
                 try {
@@ -455,6 +456,7 @@ class EditorManager {
                     if (!res.ok) throw new Error('Failed to read file');
                     const data = await res.json();
                     content = data.content;
+                    readonly = data.readonly;
                     
                     if (this.monacoInstance) {
                         const uri = this.monacoInstance.Uri.file(filePath);
@@ -476,7 +478,8 @@ class EditorManager {
             this.globalModels.set(filePath, {
                 type: isImage ? 'image' : 'text',
                 model: model,
-                content: content
+                content: content,
+                readonly: readonly
             });
         }
 
@@ -516,6 +519,11 @@ class EditorManager {
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
             if (path === state.activeFilePath) tab.classList.add('active');
+            
+            const fileModel = this.globalModels.get(path);
+            if (fileModel && fileModel.readonly) {
+                tab.classList.add('readonly');
+            }
             
             const name = path.split('/').pop();
             const span = document.createElement('span');
@@ -563,7 +571,7 @@ class EditorManager {
         if (file.type === 'image') {
             this.monacoContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'flex';
-            this.imagePreview.src = `/api/fs/raw?path=${encodeURIComponent(filePath)}`;
+            this.imagePreview.src = `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${auth.token}`;
         } else {
             this.imagePreviewContainer.style.display = 'none';
             this.monacoContainer.style.display = 'block';
@@ -574,6 +582,7 @@ class EditorManager {
 
             if (this.editor && file.model) {
                 this.editor.setModel(file.model);
+                this.editor.updateOptions({ readOnly: !!file.readonly });
                 
                 const savedViewState = state.viewStates.get(filePath);
                 if (savedViewState) {
@@ -1429,11 +1438,12 @@ class ToastManager {
 
     startTimer(toast) {
         if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
-        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 10000);
+        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 7000);
     }
 
     extendLife(toast) {
-        this.startTimer(toast);
+        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
+        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 3000);
     }
 
     prune() {

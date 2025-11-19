@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -71,12 +72,17 @@ export const setupFsRoutes = (router) => {
                 return;
             }
 
-            // Check if it's a text file or binary (simple check)
-            // For now, we assume text unless we want to support images via base64 here
-            // But usually images are loaded via src="/api/fs/raw?path=..."
-            
             const content = await fs.readFile(fullPath, 'utf-8');
-            ctx.body = { content };
+            
+            let readonly = false;
+            try {
+                const handle = await fs.open(fullPath, 'r+');
+                await handle.close();
+            } catch (e) {
+                readonly = true;
+            }
+
+            ctx.body = { content, readonly };
         } catch (err) {
             console.error('FS Read Error:', err);
             ctx.status = 500;
