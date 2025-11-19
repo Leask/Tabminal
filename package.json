@@ -30,13 +30,13 @@
   "dependencies": {
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^14.0.0",
+    "js-tiktoken": "^1.0.21",
     "koa": "^3.1.1",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.0.0",
     "openai": "^6.9.1",
-    "tokeniser": "^0.0.3",
     "utilitas": "^1999.1.97",
     "ws": "^8.18.3"
   },
