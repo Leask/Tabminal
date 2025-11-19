@@ -1,0 +1,12 @@
+#!/bin/bash
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ROOT_DIR="$(dirname "$DIR")"
+PACKAGE_JSON="$ROOT_DIR/package.json"
+
+if [ -f "$PACKAGE_JSON" ]; then
+    NAME=$(grep -o '"name": *"[^"]*"' "$PACKAGE_JSON" | cut -d'"' -f4)
+    VERSION=$(grep -o '"version": *"[^"]*"' "$PACKAGE_JSON" | cut -d'"' -f4)
+    echo "$NAME v$VERSION"
+else
+    echo "Error: package.json not found at $PACKAGE_JSON"
+fi

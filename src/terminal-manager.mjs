@@ -39,7 +39,11 @@ export class TerminalManager {
         const id = restoredData ? restoredData.id : crypto.randomUUID();
         const shell = resolveShell();
         const initialCwd = restoredData ? restoredData.cwd : (process.env.TABMINAL_CWD || process.cwd());
-        const env = { ...process.env }; // Clone env to modify it safely
+        const env = { ...process.env };
+        
+        // Inject shell tools
+        const shellToolsPath = path.join(process.cwd(), 'shell');
+        env.PATH = `${shellToolsPath}:${env.PATH}`;
 
         let args = [];
         let initFilePath = null;
@@ -50,7 +54,9 @@ export class TerminalManager {
             if (shellName === 'bash') {
                 initFilePath = path.join(os.tmpdir(), `tabminal-init-${id}.bashrc`);
                 const bashScript = `
+export PATH="${shellToolsPath}:$PATH"
 [ -f ~/.bashrc ] && source ~/.bashrc
+export PATH="${shellToolsPath}:$PATH"
 
 _tabminal_bash_preexec() {
   # Prevent capturing any of our own internal or setup commands.
@@ -92,6 +98,7 @@ export PROMPT_COMMAND
                 const zshScript = `
 unset ZDOTDIR
 [ -f ~/.zshrc ] && source ~/.zshrc
+export PATH="${shellToolsPath}:$PATH"
 
 _tabminal_zsh_preexec() {
   _tabminal_last_command="$1"
