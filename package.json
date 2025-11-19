@@ -37,7 +37,7 @@
     "node-pty": "^1.0.0",
     "openai": "^6.9.1",
     "tokeniser": "^0.0.3",
-    "utilitas": "^1999.1.96",
+    "utilitas": "^1999.1.97",
     "ws": "^8.18.3"
   },
   "repository": {

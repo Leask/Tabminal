@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     historyLimit: 524288,
     acceptTerms: false,
     password: null,
-    model: 'gemini-3-pro-preview'
+    model: 'gpt-5.1-codex'
 };
 
 function loadJson(filePath) {

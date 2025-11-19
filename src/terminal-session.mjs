@@ -2,6 +2,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import AnsiParser from 'node-ansiparser';
+import { alan } from 'utilitas';
 
 const execAsync = promisify(exec);
 const WS_STATE_OPEN = 1;
@@ -27,6 +28,7 @@ export class TerminalSession {
         
         this.title = this.shell ? this.shell.split('/').pop() : 'Terminal';
         this.cwd = this.initialCwd;
+        this.inputBuffer = '';
         
         // Format the initial environment object into a static string
         this.env = Object.entries(options.env || {})
@@ -275,7 +277,89 @@ export class TerminalSession {
 
     _handleInput(data) {
         if (this.closed || typeof data !== 'string') return;
-        this.pty.write(data);
+        this.write(data);
+    }
+
+    write(data) {
+        if (typeof data !== 'string') {
+            this.pty.write(data);
+            return;
+        }
+
+        let startIndex = 0;
+        for (let i = 0; i < data.length; i++) {
+            const char = data[i];
+
+            // Handle Enter (\r)
+            if (char === '\r') {
+                const line = this.inputBuffer.trimStart();
+                if (line.startsWith('#')) {
+                    // --- HIJACK DETECTED ---
+                    
+                    // 1. Write pending data BEFORE this char to pty
+                    if (i > startIndex) {
+                        this.pty.write(data.substring(startIndex, i));
+                    }
+
+                    // 2. Execute Hijack Logic
+                    const prompt = line.substring(1).trim();
+                    this.inputBuffer = ''; // Reset buffer
+                    
+                    // Send Ctrl+U to pty to clear the visual line (since user typed it)
+                    this.pty.write('\x15');
+                    
+                    // Send newline to User (visual only)
+                    this._broadcast({ type: 'output', data: '\r\n' });
+
+                    // Process AI
+                    this._handleAiCommand(prompt);
+
+                    // 3. Skip the \r in the input data (don't send to pty)
+                    startIndex = i + 1;
+                    continue;
+                } else {
+                    // Normal Enter, reset buffer
+                    this.inputBuffer = '';
+                }
+            }
+            // Handle Backspace
+            else if (char === '\x7f' || char === '\x08') {
+                if (this.inputBuffer.length > 0) {
+                    this.inputBuffer = this.inputBuffer.slice(0, -1);
+                }
+            }
+            // Handle Control Chars (Reset buffer to be safe, except Tab)
+            else if (char < ' ' && char !== '\t') {
+                 this.inputBuffer = '';
+            }
+            // Normal Text
+            else {
+                this.inputBuffer += char;
+            }
+        }
+
+        // Write remaining data to PTY
+        if (startIndex < data.length) {
+            this.pty.write(data.substring(startIndex));
+        }
+    }
+
+    async _handleAiCommand(prompt) {
+        try {
+            const result = await alan.prompt(prompt);
+            let response = result.text || '';
+            
+            // Fix newlines for terminal display (LF -> CRLF)
+            response = response.replace(/\n/g, '\r\n');
+
+            // Format response (Cyan color)
+            this._broadcast({ type: 'output', data: `\x1b[36m${response}\x1b[0m\r\n` });
+        } catch (e) {
+            this._broadcast({ type: 'output', data: `\x1b[31mAI Error: ${e.message}\x1b[0m\r\n` });
+        }
+        
+        // Restore prompt by sending \r to pty (empty command)
+        this.pty.write('\r');
     }
 
     _handleResize(cols, rows) {
