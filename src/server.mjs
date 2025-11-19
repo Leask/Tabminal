@@ -17,6 +17,7 @@ import { config } from './config.mjs';
 import { authMiddleware, verifyClient } from './auth.mjs';
 import { setupFsRoutes } from './fs-routes.mjs';
 import * as persistence from './persistence.mjs';
+import { alan } from 'utilitas';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +25,18 @@ const publicDir = path.join(__dirname, '..', 'public');
 
 const app = new Koa();
 const router = new Router();
+
+if (config.aiKey) {
+    try {
+        await alan.init({
+            apiKey: config.aiKey,
+            model: config.model
+        });
+        console.log(`[Server] Alan initialized with model: ${config.model}`);
+    } catch (e) {
+        console.error('[Server] Failed to initialize Alan:', e.message);
+    }
+}
 
 if (!config.acceptTerms) {
     console.error(`

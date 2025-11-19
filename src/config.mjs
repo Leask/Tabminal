@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     historyLimit: 524288,
     acceptTerms: false,
     password: null,
-    model: 'openrouter_google_gemini_3_pro_preview'
+    model: 'gemini-3-pro-preview'
 };
 
 function loadJson(filePath) {
