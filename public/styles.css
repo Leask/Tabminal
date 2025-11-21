@@ -293,8 +293,8 @@ body {
 
 .system-status-bar {
     display: flex;
-    gap: 15px;
-    padding: 4px 8px;
+    gap: 0; /* Remove default gap, control via child containers */
+    padding: 0 8px; /* Reduce padding slightly */
     padding-top: max(4px, env(safe-area-inset-top));
     padding-left: max(8px, env(safe-area-inset-left));
     padding-right: max(8px, env(safe-area-inset-right));
@@ -303,10 +303,26 @@ body {
     font-size: 11px;
     color: var(--text-muted);
     flex-shrink: 0;
-    white-space: nowrap;
-    overflow-x: auto;
     align-items: center;
     width: 100%;
+    overflow: hidden; /* Prevent scrollbar if canvas is added */
+}
+
+.status-text-group {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding-right: 15px;
+}
+
+.desktop-heartbeat-canvas {
+    flex-grow: 1;
+    height: 24px; /* Fixed logical height matches text line */
+    min-width: 50px;
+    display: none; /* Managed by JS */
+    opacity: 0.8;
 }
 
 .status-item {
@@ -824,7 +840,7 @@ body {
 /* Toast Notifications */
 .notification-container {
     position: fixed;
-    top: 10px;
+    top: calc(env(safe-area-inset-top) + 40px); /* Move down to avoid status bar */
     right: 10px;
     z-index: 2000;
     display: flex;

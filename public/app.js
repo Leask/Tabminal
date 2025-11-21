@@ -1130,27 +1130,53 @@ function cubicBSpline(p0, p1, p2, p3, t) {
 }
 
 function drawHeartbeat() {
-    if (!heartbeatCtx || !heartbeatCanvas) return;
-    
     updateCanvasSize();
     
-    const width = heartbeatCanvas.clientWidth;
-    const height = heartbeatCanvas.clientHeight;
+    const bottomCanvas = document.getElementById('heartbeat-canvas');
+    const desktopCanvas = document.getElementById('desktop-heartbeat-canvas');
     
-    if (height === 0) return;
+    let targetCanvas = null;
+    let useMaxHeight = false;
+    
+    // Decision Logic
+    if (currentBottomGap > 10) {
+        // Mobile Mode: Use bottom canvas
+        if (desktopCanvas) desktopCanvas.style.display = 'none';
+        if (bottomCanvas) {
+            bottomCanvas.style.display = 'block';
+            targetCanvas = bottomCanvas;
+        }
+    } else {
+        // Desktop Mode: Use status bar canvas
+        if (bottomCanvas) bottomCanvas.style.display = 'none';
+        if (desktopCanvas) {
+            desktopCanvas.style.display = 'block';
+            targetCanvas = desktopCanvas;
+            useMaxHeight = true;
+        }
+    }
+    
+    if (!targetCanvas) return;
+    
+    const ctx = targetCanvas.getContext('2d');
+    if (!ctx) return;
 
-    if (heartbeatCanvas.width !== width || heartbeatCanvas.height !== height) {
-        heartbeatCanvas.width = width;
-        heartbeatCanvas.height = height;
+    const width = targetCanvas.clientWidth;
+    const height = targetCanvas.clientHeight;
+    
+    if (width === 0 || height === 0) return;
+
+    if (targetCanvas.width !== width || targetCanvas.height !== height) {
+        targetCanvas.width = width;
+        targetCanvas.height = height;
     }
 
-    heartbeatCtx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, width, height);
     
     if (latencyHistory.length < 2) return;
 
     // Calculate Scroll Progress
     const now = performance.now();
-    // Cap at 1.0 to prevent overscroll gaps if network lags
     const progress = Math.min((now - lastUpdateTime) / 1000, 1.0); 
     
     const step = width / VISIBLE_POINTS;
@@ -1158,37 +1184,31 @@ function drawHeartbeat() {
     // Smooth Scaling
     let maxVal = 0;
     for (const val of latencyHistory) if (val > maxVal) maxVal = val;
-    // Set a minimum floor for the scale (e.g., 50ms) to prevent noise amplification at low latency
     const effectiveMax = Math.max(maxVal, 50);
     smoothedMaxVal += (effectiveMax - smoothedMaxVal) * 0.05;
-    const verticalRange = smoothedMaxVal / 0.8;
+    
+    const verticalRange = useMaxHeight ? smoothedMaxVal : (smoothedMaxVal / 0.8);
     const getY = (val) => height - (val / verticalRange) * height;
 
-    heartbeatCtx.beginPath();
-    heartbeatCtx.strokeStyle = '#268bd2';
-    heartbeatCtx.lineWidth = 1.5;
-    heartbeatCtx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.strokeStyle = '#268bd2';
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
 
     const len = latencyHistory.length;
     
-    // Helper to get X coordinate for index i
-    // Aligns the tape so that Index `len - BUFFER_POINTS - 1` is at the Right Edge (width).
     const getX = (i) => width + step * (BUFFER_POINTS - len + 1 + i - progress);
     const getVal = (v) => (v === -1 ? 0 : v);
 
-    // 1. Draw Fill (Background) - Treat -1 as 0
-    heartbeatCtx.beginPath();
-    // Start from bottom-left to ensure closure? No, standard path.
-    // Actually, let's trace the top curve first.
+    // 1. Draw Fill
+    ctx.beginPath();
     
-    // First point
     let p0 = getVal(latencyHistory[0]);
     let p1 = getVal(latencyHistory[0]);
     let p2 = getVal(latencyHistory[Math.min(len - 1, 1)]);
     let p3 = getVal(latencyHistory[Math.min(len - 1, 2)]);
     
-    // We need to start the path at the first point
-    heartbeatCtx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
+    ctx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
 
     for (let i = 0; i < len - 1; i++) {
         p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
@@ -1200,29 +1220,26 @@ function drawHeartbeat() {
             const x = getX(i) + t * step;
             let val = cubicBSpline(p0, p1, p2, p3, t);
             if (val < 0) val = 0;
-            heartbeatCtx.lineTo(x, getY(val));
+            ctx.lineTo(x, getY(val));
         }
     }
     
-    // Close the fill shape
-    heartbeatCtx.lineTo(width, height);
-    heartbeatCtx.lineTo(0, height);
-    heartbeatCtx.fillStyle = 'rgba(38, 139, 210, 0.1)';
-    heartbeatCtx.fill();
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
+    ctx.fillStyle = 'rgba(38, 139, 210, 0.1)';
+    ctx.fill();
 
-    // 2. Draw Lines (Segmented for color)
-    heartbeatCtx.lineWidth = 1.5;
-    heartbeatCtx.lineJoin = 'round';
+    // 2. Draw Lines
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
 
     for (let i = 0; i < len - 1; i++) {
         const rawP1 = latencyHistory[i];
         const rawP2 = latencyHistory[Math.min(len - 1, i + 1)];
-        
-        // If either point is -1, this segment is "error"
         const isError = rawP1 === -1 || rawP2 === -1;
         
-        heartbeatCtx.beginPath();
-        heartbeatCtx.strokeStyle = isError ? '#dc322f' : '#268bd2';
+        ctx.beginPath();
+        ctx.strokeStyle = isError ? '#dc322f' : '#268bd2';
         
         p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
         p1 = getVal(rawP1);
@@ -1234,10 +1251,10 @@ function drawHeartbeat() {
             let val = cubicBSpline(p0, p1, p2, p3, t);
             if (val < 0) val = 0;
             
-            if (t === 0) heartbeatCtx.moveTo(x, getY(val));
-            else heartbeatCtx.lineTo(x, getY(val));
+            if (t === 0) ctx.moveTo(x, getY(val));
+            else ctx.lineTo(x, getY(val));
         }
-        heartbeatCtx.stroke();
+        ctx.stroke();
     }
 }
 
@@ -1249,6 +1266,25 @@ animateHeartbeat();
 
 function updateSystemStatus(system, latency) {
     if (!systemStatusBarEl) return;
+    
+    // Ensure DOM Structure
+    let textGroup = document.getElementById('status-text-group');
+    let desktopCanvas = document.getElementById('desktop-heartbeat-canvas');
+    
+    if (!textGroup) {
+        systemStatusBarEl.innerHTML = '';
+        
+        textGroup = document.createElement('div');
+        textGroup.id = 'status-text-group';
+        textGroup.className = 'status-text-group';
+        systemStatusBarEl.appendChild(textGroup);
+        
+        desktopCanvas = document.createElement('canvas');
+        desktopCanvas.id = 'desktop-heartbeat-canvas';
+        desktopCanvas.className = 'desktop-heartbeat-canvas';
+        systemStatusBarEl.appendChild(desktopCanvas);
+    }
+
     if (system) lastSystemData = system;
     if (latency !== null && latency !== undefined) {
         // Initialize history with random data on first real packet to avoid empty graph
@@ -1318,11 +1354,11 @@ function updateSystemStatus(system, latency) {
         { label: 'Mem', value: `${formatBytesPair(data.memory.used, data.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
         { label: 'Up', value: formatUptime(data.uptime) },
         { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(data.processUptime)}` },
-        { label: 'Heartbeat', value: heartbeatValue },
-        { label: 'FPS', value: currentFps }
+        { label: 'FPS', value: currentFps },
+        { label: 'Heartbeat', value: heartbeatValue }
     ];
 
-    systemStatusBarEl.innerHTML = items.map(item => `
+    textGroup.innerHTML = items.map(item => `
         <div class="status-item">
             <span class="status-label">${item.label}:</span>
             <span class="status-value">${item.value}</span>
