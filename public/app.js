@@ -1197,7 +1197,7 @@ function animateHeartbeat() {
     for (let i = 0; i < DISPLAY_POINTS; i++) {
         const diff = targetDisplayData[i] - currentDisplayData[i];
         if (Math.abs(diff) > 0.001) {
-            currentDisplayData[i] += diff * 0.03; // Slower factor for smoother morphing
+            currentDisplayData[i] += diff * 0.015; // Even slower factor (1.5s+ settling) for continuous motion
             needsRedraw = true;
         } else {
             currentDisplayData[i] = targetDisplayData[i];
@@ -1213,7 +1213,7 @@ function animateHeartbeat() {
     
     const scaleDiff = effectiveTargetMax - smoothedMaxVal;
     if (Math.abs(scaleDiff) > 0.001) {
-        smoothedMaxVal += scaleDiff * 0.02; // Very slow scaling adaptation to prevent jitter
+        smoothedMaxVal += scaleDiff * 0.01; // Ultra slow scaling adaptation
         needsRedraw = true;
     } else {
         smoothedMaxVal = effectiveTargetMax;
