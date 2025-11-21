@@ -1135,8 +1135,14 @@ const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
 function updateCanvasSize() {
     if (!heartbeatCanvas) return;
     let bottomGap = 0;
+    
     if (window.visualViewport) {
-        bottomGap = window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop);
+        // Sanity check: If height is invalid (iPad PWA bug), assume full screen (0 gap)
+        if (window.visualViewport.height > 100) {
+            bottomGap = window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop);
+        } else {
+            bottomGap = 0;
+        }
     }
     
     currentBottomGap = bottomGap;

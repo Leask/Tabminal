@@ -13,10 +13,18 @@
             // Mobile Layout Manager
             function updateLayout() {
                 const vv = window.visualViewport;
-                const width = vv ? vv.width : window.innerWidth;
-                const height = vv ? vv.height : window.innerHeight;
-                const offsetTop = vv ? vv.offsetTop : 0;
-                const offsetLeft = vv ? vv.offsetLeft : 0;
+                let width = window.innerWidth;
+                let height = window.innerHeight;
+                let offsetTop = 0;
+                let offsetLeft = 0;
+
+                // Sanity check for iPadOS PWA bug where vv.height can be negative with physical keyboard
+                if (vv && vv.height > 100) {
+                    width = vv.width;
+                    height = vv.height;
+                    offsetTop = vv.offsetTop;
+                    offsetLeft = vv.offsetLeft;
+                }
                 
                 document.documentElement.style.setProperty('--app-width', `${width}px`);
                 document.documentElement.style.setProperty('--app-height', `${height}px`);
