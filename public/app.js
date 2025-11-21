@@ -363,7 +363,7 @@ class EditorManager {
         }
     }
 
-    async renderTree(dirPath, container) {
+    async renderTree(dirPath, container, session) {
         try {
             const res = await auth.fetch(`/api/fs/list?path=${encodeURIComponent(dirPath)}`);
             if (!res.ok) return;
