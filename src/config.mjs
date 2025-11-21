@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     historyLimit: 524288,
     acceptTerms: false,
     password: null,
-    model: 'gpt-5.1-codex'
+    model: 'gemini-2.5-flash-preview-09-2025'
 };
 
 function loadJson(filePath) {
@@ -38,7 +38,7 @@ function loadConfig() {
     // 1. Load from ~/.tabminal/config.json
     const configDir = path.join(os.homedir(), '.tabminal');
     const homeConfigPath = path.join(configDir, 'config.json');
-    
+
     try {
         if (!fs.existsSync(configDir)) {
             fs.mkdirSync(configDir, { recursive: true });
