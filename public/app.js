@@ -1082,9 +1082,7 @@ const latencyHistory = []; // Raw data, variable length
 const DISPLAY_POINTS = 100;
 const targetDisplayData = new Array(DISPLAY_POINTS).fill(0);
 const currentDisplayData = new Array(DISPLAY_POINTS).fill(0);
-const startDisplayData = new Array(DISPLAY_POINTS).fill(0);
-let transitionStartTime = 0;
-const TRANSITION_DURATION = 1000; // Match heartbeat interval
+let smoothedMaxVal = 1; // For stable scaling
 
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
 const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
@@ -1096,7 +1094,6 @@ function updateCanvasSize() {
         bottomGap = window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop);
     }
     
-    // Only render if we have a meaningful gap (> 10px)
     if (bottomGap < 10) {
         heartbeatCanvas.style.height = '0px';
         heartbeatCanvas.style.display = 'none';
@@ -1104,6 +1101,15 @@ function updateCanvasSize() {
         heartbeatCanvas.style.height = `${bottomGap}px`;
         heartbeatCanvas.style.display = 'block';
     }
+}
+
+// Catmull-Rom Spline Interpolation
+function catmullRom(p0, p1, p2, p3, t) {
+    const v0 = (p2 - p0) * 0.5;
+    const v1 = (p3 - p1) * 0.5;
+    const t2 = t * t;
+    const t3 = t * t2;
+    return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1;
 }
 
 function resample(source, targetLen) {
@@ -1116,15 +1122,15 @@ function resample(source, targetLen) {
     for (let i = 0; i < targetLen; i++) {
         const pos = i * step;
         const index = Math.floor(pos);
-        const fraction = pos - index;
+        const t = pos - index;
         
-        if (index >= source.length - 1) {
-            result.push(source[source.length - 1]);
-        } else {
-            const v1 = source[index];
-            const v2 = source[index + 1];
-            result.push(v1 + (v2 - v1) * fraction);
-        }
+        // Get 4 control points (clamp to boundaries)
+        const p0 = source[Math.max(0, index - 1)];
+        const p1 = source[index];
+        const p2 = source[Math.min(source.length - 1, index + 1)];
+        const p3 = source[Math.min(source.length - 1, index + 2)];
+        
+        result.push(catmullRom(p0, p1, p2, p3, t));
     }
     return result;
 }
@@ -1153,13 +1159,8 @@ function drawHeartbeat() {
     
     const step = width / (DISPLAY_POINTS - 1);
     
-    // Dynamic Auto-Scaling
-    let maxVal = 0;
-    for (const val of currentDisplayData) {
-        if (val > maxVal) maxVal = val;
-    }
-    const effectiveMax = maxVal > 0 ? maxVal : 1;
-    const verticalRange = effectiveMax / 0.8;
+    // Use smoothedMaxVal for stable vertical scaling
+    const verticalRange = smoothedMaxVal / 0.8;
     
     const getY = (val) => height - (val / verticalRange) * height;
     
@@ -1175,7 +1176,6 @@ function drawHeartbeat() {
         heartbeatCtx.quadraticCurveTo(x1, y1, xc, yc);
     }
     
-    // Last few points
     for (let i = DISPLAY_POINTS - 2; i < DISPLAY_POINTS; i++) {
         heartbeatCtx.lineTo(i * step, getY(currentDisplayData[i]));
     }
@@ -1191,22 +1191,32 @@ function drawHeartbeat() {
 function animateHeartbeat() {
     requestAnimationFrame(animateHeartbeat);
     
-    const now = performance.now();
-    let progress = (now - transitionStartTime) / TRANSITION_DURATION;
-    if (progress > 1) progress = 1;
-    
-    // Optional: Smooth easing (EaseOutQuad)
-    // progress = progress * (2 - progress);
-    
     let needsRedraw = false;
+    
+    // 1. Smooth Data Interpolation
     for (let i = 0; i < DISPLAY_POINTS; i++) {
-        // Interpolate between start and target based on time
-        const newVal = startDisplayData[i] + (targetDisplayData[i] - startDisplayData[i]) * progress;
-        
-        if (Math.abs(newVal - currentDisplayData[i]) > 0.001) {
-            currentDisplayData[i] = newVal;
+        const diff = targetDisplayData[i] - currentDisplayData[i];
+        if (Math.abs(diff) > 0.001) {
+            currentDisplayData[i] += diff * 0.03; // Slower factor for smoother morphing
             needsRedraw = true;
+        } else {
+            currentDisplayData[i] = targetDisplayData[i];
         }
+    }
+    
+    // 2. Smooth Scaling Interpolation
+    let targetMax = 0;
+    for (const val of currentDisplayData) {
+        if (val > targetMax) targetMax = val;
+    }
+    const effectiveTargetMax = targetMax > 0 ? targetMax : 1;
+    
+    const scaleDiff = effectiveTargetMax - smoothedMaxVal;
+    if (Math.abs(scaleDiff) > 0.001) {
+        smoothedMaxVal += scaleDiff * 0.02; // Very slow scaling adaptation to prevent jitter
+        needsRedraw = true;
+    } else {
+        smoothedMaxVal = effectiveTargetMax;
     }
     
     if (needsRedraw || (heartbeatCanvas && heartbeatCanvas.width !== heartbeatCanvas.clientWidth)) {
@@ -1223,15 +1233,10 @@ function updateSystemStatus(system, latency) {
         latencyHistory.push(latency);
         if (latencyHistory.length > 100) latencyHistory.shift();
         
-        // Snapshot current state as start
-        for(let i=0; i<DISPLAY_POINTS; i++) startDisplayData[i] = currentDisplayData[i];
-        
-        // Calculate new target
+        // Snapshot current state not needed for physics-based approach
+        // Just update target
         const resampled = resample(latencyHistory, DISPLAY_POINTS);
         for(let i=0; i<DISPLAY_POINTS; i++) targetDisplayData[i] = resampled[i];
-        
-        // Reset timer
-        transitionStartTime = performance.now();
     }
     
     const data = system || lastSystemData;
