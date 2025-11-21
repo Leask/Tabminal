@@ -170,34 +170,36 @@ body {
     top: 4px;
     left: 4px; /* Left side */
     right: auto;
-    width: 28px; /* Larger touch target */
+    width: 28px; /* Same size as toggle btn */
     height: 28px;
-    border-radius: 50%;
+    border-radius: 4px; /* Square with rounded corners */
     background-color: rgba(0, 0, 0, 0.3); /* Semi-transparent for blur */
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     color: var(--text-highlight);
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.2s ease, background-color 0.2s ease;
+    transition: all 0.2s ease;
     z-index: 10;
-    font-size: 18px; /* Larger X for balance */
+    font-size: 18px;
     line-height: 1;
     padding: 0;
 }
 
 .close-tab-button:hover {
     background-color: rgba(220, 50, 47, 0.8); /* Red hover */
+    border-color: rgba(220, 50, 47, 1);
     color: white;
+    opacity: 1;
 }
 
 .close-tab-button:active {
     background-color: rgba(220, 50, 47, 1);
-    transform: scale(0.95);
+    transform: translateY(1px);
 }
 
 .preview-container {
@@ -700,9 +702,11 @@ body {
     width: 28px; /* Larger touch target */
     height: 28px;
     border-radius: 4px; /* Square with rounded corners */
-    background-color: transparent; 
+    background-color: rgba(0, 0, 0, 0.3); /* Semi-transparent for blur */
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     color: var(--text-highlight);
-    border: 1px solid transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1); /* Subtle border */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -717,27 +721,26 @@ body {
 
 /* Show when hovering the tab */
 .tab-item:hover .toggle-editor-btn {
-    opacity: 0.6;
-    background-color: rgba(0, 0, 0, 0.2);
+    opacity: 1; /* Fully visible on hover */
 }
 
 /* Hovering the button itself */
 .toggle-editor-btn:hover {
-    opacity: 1 !important;
-    background-color: rgba(0, 0, 0, 0.4) !important;
+    background-color: rgba(0, 0, 0, 0.6) !important;
+    border-color: rgba(255, 255, 255, 0.3);
 }
 
 /* Active/Pinned State (Editor is Open) */
 .tab-item.editor-open .toggle-editor-btn {
     opacity: 1;
-    background-color: rgba(38, 139, 210, 0.2); /* Accent tint */
-    border-color: rgba(38, 139, 210, 0.5);
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+    background-color: rgba(38, 139, 210, 0.3); /* Accent tint with blur */
+    border-color: rgba(38, 139, 210, 0.6);
+    box-shadow: inset 0 0 10px rgba(38, 139, 210, 0.2);
 }
 
 /* Show on active tab (for mobile discoverability) */
 .tab-item.active .toggle-editor-btn {
-    opacity: 0.4;
+    opacity: 1; /* Always visible on active tab */
 }
 .tab-item.active:hover .toggle-editor-btn {
     opacity: 0.8;
