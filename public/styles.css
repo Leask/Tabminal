@@ -125,7 +125,7 @@ body {
     pointer-events: auto;
 }
 
-/* Mobile Sidebar Logic */
+/* Mobile Sidebar Logic (Layout only) */
 @media (max-width: 767px) {
     .sidebar-toggle {
         display: block;
@@ -150,6 +150,20 @@ body {
         transform: translateX(0);
         visibility: visible;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
+    }
+}
+
+/* Touch Device Typography Adjustments (Fonts only) */
+@media (pointer: coarse) {
+    .system-status-bar {
+        /* Font size stays 12px (global) */
+        padding-top: max(6px, env(safe-area-inset-top)); /* More breathing room */
+        /* padding-bottom is handled by global style now */
+    }
+
+    .virtual-keys button {
+        font-size: 14px;
+        min-width: 40px; /* Slightly wider touch target */
     }
 }
 
@@ -316,7 +330,7 @@ body {
 /* Overlay hover logic moved to main media query block */
 
 .tab-info-overlay .meta {
-    font-size: 0.7rem;
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -325,7 +339,7 @@ body {
 }
 
 .tab-info-overlay .title {
-    font-size: 0.85rem;
+    font-size: 14px;
     color: var(--text-highlight);
     font-weight: bold;
     white-space: nowrap;
@@ -365,12 +379,13 @@ body {
     display: flex;
     gap: 0; /* Remove default gap, control via child containers */
     padding: 0 8px; /* Reduce padding slightly */
-    padding-top: max(4px, env(safe-area-inset-top));
+    padding-top: max(6px, env(safe-area-inset-top)); /* Balanced top padding */
+    padding-bottom: 6px; /* Balanced bottom padding */
     padding-left: max(8px, env(safe-area-inset-left));
     padding-right: max(8px, env(safe-area-inset-right));
     background-color: rgba(0, 43, 54, 0.9);
     border-bottom: 1px solid var(--border-color);
-    font-size: 11px;
+    font-size: 12px; /* Unified font size */
     color: var(--text-muted);
     flex-shrink: 0;
     align-items: center;
@@ -389,7 +404,7 @@ body {
 
 .desktop-heartbeat-canvas {
     flex-grow: 1;
-    height: 12px; /* Match 11px text height perfectly */
+    height: 12px; /* Match 12px text height perfectly */
     min-width: 50px;
     display: none; /* Managed by JS */
     opacity: 1;
@@ -912,7 +927,7 @@ body {
     flex-grow: 1;
     overflow: auto;
     padding: 4px 0;
-    font-size: 11px;
+    font-size: 12px;
     border-bottom: none;
     display: none;
     background-color: transparent;

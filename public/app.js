@@ -3,6 +3,10 @@ import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+es
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
 import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 
+// Detect Mobile/Tablet (focus on touch capability for font sizing)
+// Logic: If the device supports touch, we assume it needs larger fonts (14px)
+const IS_MOBILE = navigator.maxTouchPoints > 0;
+
 // #region DOM Elements
 const terminalEl = document.getElementById('terminal');
 const tabListEl = document.getElementById('tab-list');
@@ -257,7 +261,7 @@ class EditorManager {
                 automaticLayout: false,
                 minimap: { enabled: true },
                 rulers: [80, 120],
-                fontSize: 12,
+                fontSize: IS_MOBILE ? 14 : 12,
                 fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", \"SFMono-Regular\", \"SF Mono\", \"JetBrains Mono\", Menlo, Consolas, monospace",
                 scrollBeyondLastLine: false,
             });
@@ -506,7 +510,7 @@ class EditorManager {
                         }
                     }
                 } catch (err) {
-                    toastManager.show('Error', `Failed to open file: ${err.message}`, 'error');
+                    alert(`Failed to open file: ${err.message}`, { type: 'error', title: 'Error' });
                     this.closeFile(filePath);
                     return;
                 }
@@ -609,7 +613,7 @@ class EditorManager {
             this.imagePreviewContainer.style.display = 'flex';
             
             this.imagePreview.onerror = () => {
-                toastManager.show('Error', `Failed to load image: ${filePath.split('/').pop()}`, 'error');
+                alert(`Failed to load image: ${filePath.split('/').pop()}`, { type: 'error', title: 'Error' });
                 this.closeFile(filePath);
                 this.imagePreview.onerror = null;
             };
@@ -719,7 +723,7 @@ class Session {
             convertEol: true,
             cursorBlink: true,
             fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", \"SFMono-Regular\", \"SF Mono\", \"JetBrains Mono\", Menlo, Consolas, monospace",
-            fontSize: 12,
+            fontSize: IS_MOBILE ? 14 : 12,
             rows: this.rows,
             cols: this.cols,
             theme: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642' }
@@ -1588,21 +1592,23 @@ class NotificationManager {
     }
 
     send(title, body) {
-        if ('Notification' in window && Notification.permission === 'granted') {
-            this.hasPermission = true;
+        if (!('Notification' in window)) return false;
+        
+        // Check permission status directly
+        if (Notification.permission === 'granted') {
+            try {
+                new Notification(title, {
+                    body: body,
+                    icon: '/apple-touch-icon.png',
+                    tag: 'tabminal-status'
+                });
+                return true;
+            } catch (e) {
+                console.error('Notification error:', e);
+                return false;
+            }
         }
-
-        if (!this.hasPermission) return false;
-        try {
-            new Notification(title, {
-                body: body,
-                icon: '/apple-touch-icon.png',
-                tag: 'tabminal-status'
-            });
-            return true;
-        } catch (e) {
-            return false;
-        }
+        return false;
     }
 }
 const notificationManager = new NotificationManager();
@@ -1676,6 +1682,10 @@ class ToastManager {
 
     extendLife(toast) {
         if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
+        toast.classList.remove('hiding'); // Ensure it's visible if it was fading out
+        toast.style.animation = 'none';
+        toast.offsetHeight; /* trigger reflow */
+        toast.style.animation = null; 
         toast.dismissTimer = setTimeout(() => this.dismiss(toast), 3000);
     }
 
@@ -1707,9 +1717,28 @@ class ToastManager {
     }
 }
 const toastManager = new ToastManager();
-window.alert = (msg) => {
-    const sent = notificationManager.send('Alert', msg);
-    if (!sent) toastManager.show('Alert', msg, 'warning');
+// Unified Notification Hub
+window.alert = (message, options = {}) => {
+    let type = 'info';
+    let title = 'Tabminal';
+
+    // Handle shorthand: alert("msg", "error")
+    if (typeof options === 'string') {
+        type = options;
+    } else if (typeof options === 'object') {
+        if (options.type) type = options.type;
+        if (options.title) title = options.title;
+    }
+
+    // Strategy: Try System Notification First
+    // If the user has granted permission and the browser supports it, send it there.
+    // We use the message as the body.
+    const sent = notificationManager.send(title, message);
+
+    // If system notification failed (no permission, closed, etc.), fallback to in-app Toast
+    if (!sent) {
+        toastManager.show(title, message, type);
+    }
 };
 // #endregion
 
@@ -1722,16 +1751,13 @@ function setStatus(status) {
     currentConnectionStatus = status;
 
     if (status === 'reconnecting') {
-        const sent = notificationManager.send('Tabminal Disconnected', 'Attempting to reconnect...');
-        if (!sent) toastManager.show('Connection', 'Lost connection. Reconnecting...', 'warning');
+        alert('Lost connection. Reconnecting...', { type: 'warning', title: 'Connection' });
     } else if (status === 'connected' && prevStatus === 'reconnecting') {
-        const sent = notificationManager.send('Tabminal Connected', 'Connection restored.');
-        if (!sent) toastManager.show('Connection', 'Connection restored.', 'success');
+        alert('Connection restored.', { type: 'success', title: 'Connection' });
     } else if (status === 'terminated') {
-        const sent = notificationManager.send('Tabminal Terminated', 'Session has ended.');
-        if (!sent) toastManager.show('Connection', 'Session terminated.', 'error');
+        alert('Session has ended.', { type: 'error', title: 'Connection' });
     } else if (status === 'connected' && !prevStatus) {
-        toastManager.show('Connection', 'Connected to server.', 'success');
+        alert('Connected to server.', { type: 'success', title: 'Connection' });
     }
 }
 
