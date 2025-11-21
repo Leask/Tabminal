@@ -315,7 +315,7 @@ export class TerminalSession {
                     this.suppressPtyOutput = true;
                     
                     // Send newline and reset cursor to User (visual only)
-                    this._broadcast({ type: 'output', data: '\r\n\r\x1b[K' });
+                    this._writeToLogAndBroadcast('\r\n\r\x1b[K');
 
                     // Process AI
                     this._handleAiCommand(prompt);
@@ -355,7 +355,7 @@ export class TerminalSession {
         this.skipNextShellLog = true;
 
         // Ensure clean line start and set Cyan color
-        this._broadcast({ type: 'output', data: '\r\x1b[K\x1b[36m' });
+        this._writeToLogAndBroadcast('\r\x1b[K\x1b[36m');
         
         const startTime = new Date();
         let fullResponse = '';
@@ -366,7 +366,7 @@ export class TerminalSession {
                     let text = chunk.text;
                     // Normalize newlines for terminal
                     text = text.replace(/\n/g, '\r\n');
-                    this._broadcast({ type: 'output', data: text });
+                    this._writeToLogAndBroadcast(text);
                 }
             };
 
@@ -380,7 +380,7 @@ export class TerminalSession {
             }
             
             // End color and new line
-            this._broadcast({ type: 'output', data: '\x1b[0m\r\n' });
+            this._writeToLogAndBroadcast('\x1b[0m\r\n');
 
             // Log Execution
             this._logCommandExecution({
@@ -393,7 +393,7 @@ export class TerminalSession {
             });
 
         } catch (e) {
-            this._broadcast({ type: 'output', data: `\x1b[31mAI Error: ${e.message}\x1b[0m\r\n` });
+            this._writeToLogAndBroadcast(`\x1b[31mAI Error: ${e.message}\x1b[0m\r\n`);
             
             this._logCommandExecution({
                 command: 'ai',
@@ -814,6 +814,15 @@ export class TerminalSession {
     _send(ws, message, preEncoded) {
         if (!ws || ws.readyState !== WS_STATE_OPEN) return;
         ws.send(preEncoded ?? JSON.stringify(message));
+    }
+
+    _writeToLogAndBroadcast(text) {
+        if (!text) return;
+        if (this.manager) {
+            this.manager.appendLog(this.id, text);
+        }
+        this._appendHistory(text);
+        this._broadcast({ type: 'output', data: text });
     }
 }
 
