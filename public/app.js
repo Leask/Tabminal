@@ -1092,9 +1092,16 @@ function updateCanvasSize() {
     if (window.visualViewport) {
         bottomGap = window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop);
     }
-    const minHeight = 60; 
-    const targetHeight = Math.max(bottomGap, minHeight);
-    heartbeatCanvas.style.height = `${targetHeight}px`;
+    
+    // Only render if we have a meaningful gap (> 10px)
+    // This strictly follows the available space logic.
+    if (bottomGap < 10) {
+        heartbeatCanvas.style.height = '0px';
+        heartbeatCanvas.style.display = 'none';
+    } else {
+        heartbeatCanvas.style.height = `${bottomGap}px`;
+        heartbeatCanvas.style.display = 'block';
+    }
 }
 
 function resample(source, targetLen) {
