@@ -308,8 +308,8 @@ export class TerminalSession {
                     // Send Ctrl+U to pty to clear the visual line (since user typed it)
                     this.pty.write('\x15');
                     
-                    // Send newline to User (visual only)
-                    this._broadcast({ type: 'output', data: '\r\n' });
+                    // Send newline and reset cursor to User (visual only)
+                    this._broadcast({ type: 'output', data: '\r\n\r\x1b[K' });
 
                     // Process AI
                     this._handleAiCommand(prompt);
@@ -349,11 +349,15 @@ export class TerminalSession {
             const result = await alan.prompt(prompt);
             let response = result.text || '';
             
-            // Fix newlines for terminal display (LF -> CRLF)
-            response = response.replace(/\n/g, '\r\n');
+            console.log('[AI Debug] Raw:', JSON.stringify(response));
 
-            // Format response (Cyan color)
-            this._broadcast({ type: 'output', data: `\x1b[36m${response}\x1b[0m\r\n` });
+            // Fix newlines for terminal display (LF -> CRLF)
+            response = response.replace(/\r?\n/g, '\r\n');
+            
+            console.log('[AI Debug] Fixed:', JSON.stringify(response));
+
+            // Format response (Cyan color) with force CR and Line Clear
+            this._broadcast({ type: 'output', data: `\r\x1b[K\x1b[36m${response}\x1b[0m\r\n` });
         } catch (e) {
             this._broadcast({ type: 'output', data: `\x1b[31mAI Error: ${e.message}\x1b[0m\r\n` });
         }
