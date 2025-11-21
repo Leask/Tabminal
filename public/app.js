@@ -1085,6 +1085,7 @@ const latencyHistory = new Array(TOTAL_POINTS).fill(0);
 let hasInitializedHistory = false;
 let lastUpdateTime = performance.now();
 let smoothedMaxVal = 1;
+let currentBottomGap = 0;
 
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
 const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
@@ -1095,6 +1096,8 @@ function updateCanvasSize() {
     if (window.visualViewport) {
         bottomGap = window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop);
     }
+    
+    currentBottomGap = bottomGap;
     
     if (bottomGap < 10) {
         heartbeatCanvas.style.height = '0px';
@@ -1841,4 +1844,22 @@ async function initApp() {
 
 // Start the app
 initApp();
+
+// Force Editor Content to Match Container Size
+setInterval(() => {
+    if (!editorManager || !editorManager.editor) return;
+    
+    const pane = editorManager.pane;
+    if (pane.offsetParent === null) return;
+
+    const width = pane.clientWidth;
+    let height = pane.clientHeight;
+
+    // Subtract fixed safety margin
+    height -= 35;
+    
+    if (width > 0 && height > 0) {
+        editorManager.editor.layout({ width, height });
+    }
+}, 1000);
 // #endregion
