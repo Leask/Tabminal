@@ -17,6 +17,11 @@ const SOS_PM_APC_SEQUENCE_REGEX = /\u001b[\^_][\s\S]*?\u001b\\/g;
 const TWO_CHAR_ESCAPE_REGEX = /\u001b[@-Z\\-_]/g;
 const CONTROL_CHAR_REGEX = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
+const IGNORED_COMMANDS = [
+    'export PROMPT_COMMAND',
+    '__bash_prompt'
+];
+
 export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
@@ -36,7 +41,13 @@ export class TerminalSession {
             .join('\n');
         
         this.editorState = options.editorState || {};
-        this.executions = options.executions || [];
+        
+        // Clean executions on load to remove legacy noise
+        const rawExecutions = options.executions || [];
+        this.executions = rawExecutions.filter(entry => {
+            if (entry.command && IGNORED_COMMANDS.some(ignored => entry.command.includes(ignored))) return false;
+            return true;
+        });
 
         this.historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
         this.history = '';
@@ -357,19 +368,15 @@ export class TerminalSession {
         // Ensure clean line start and set Cyan color
         this._writeToLogAndBroadcast('\r\x1b[K\x1b[36m');
         
-        // Gather Context
+        // Gather Context (Current Session Only)
         const contextLog = [];
-        if (this.manager && this.manager.sessions) {
-            for (const [id, session] of this.manager.sessions) {
-                if (!session.executions || session.executions.length === 0) continue;
-                
-                contextLog.push({
-                    sessionId: id,
-                    title: session.title,
-                    cwd: session.cwd,
-                    history: session.executions // Full history
-                });
-            }
+        if (this.executions && this.executions.length > 0) {
+            contextLog.push({
+                sessionId: this.id,
+                title: this.title,
+                cwd: this.cwd,
+                history: this.executions
+            });
         }
         console.log('[AI Context]', JSON.stringify(contextLog, null, 2));
         
@@ -794,10 +801,7 @@ export class TerminalSession {
 
     _logCommandExecution(entry) {
         // Filter out internal shell integration commands
-        if (entry.input && entry.input.includes('export PROMPT_COMMAND')) {
-            return;
-        }
-        if (entry.command === '__bash_prompt') {
+        if (entry.command && IGNORED_COMMANDS.some(ignored => entry.command.includes(ignored))) {
             return;
         }
 
