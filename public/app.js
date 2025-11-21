@@ -1580,12 +1580,14 @@ const resizeObserver = new ResizeObserver(() => {
         const session = state.sessions.get(state.activeSessionId);
         session.mainFitAddon.fit();
         session.reportResize();
-    }
-    if (editorManager && editorManager.isVisible) {
-        editorManager.layout();
+        
+        if (session.editorState && session.editorState.isVisible) {
+            editorManager.layout();
+        }
     }
 });
-resizeObserver.observe(terminalWrapper); // Observe wrapper instead of terminalEl
+resizeObserver.observe(terminalWrapper);
+resizeObserver.observe(editorPane);
 
 tabListEl.addEventListener('click', (event) => {
     const closeBtn = event.target.closest('.close-tab-button');
