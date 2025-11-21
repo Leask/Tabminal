@@ -319,10 +319,16 @@ body {
 
 .desktop-heartbeat-canvas {
     flex-grow: 1;
-    height: 24px; /* Fixed logical height matches text line */
+    height: 16px; /* Match text height roughly */
     min-width: 50px;
     display: none; /* Managed by JS */
-    opacity: 0.8;
+    opacity: 1;
+    margin-left: 5px;
+    align-self: center;
+    background-color: transparent;
+    /* Fade edges */
+    mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
 }
 
 .status-item {

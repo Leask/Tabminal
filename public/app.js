@@ -1200,34 +1200,38 @@ function drawHeartbeat() {
     const getX = (i) => width + step * (BUFFER_POINTS - len + 1 + i - progress);
     const getVal = (v) => (v === -1 ? 0 : v);
 
-    // 1. Draw Fill
-    ctx.beginPath();
-    
-    let p0 = getVal(latencyHistory[0]);
-    let p1 = getVal(latencyHistory[0]);
-    let p2 = getVal(latencyHistory[Math.min(len - 1, 1)]);
-    let p3 = getVal(latencyHistory[Math.min(len - 1, 2)]);
-    
-    ctx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
+    let p0, p1, p2, p3;
 
-    for (let i = 0; i < len - 1; i++) {
-        p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
-        p1 = getVal(latencyHistory[i]);
-        p2 = getVal(latencyHistory[Math.min(len - 1, i + 1)]);
-        p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
+    // 1. Draw Fill (Only for mobile/bottom view)
+    if (!useMaxHeight) {
+        ctx.beginPath();
         
-        for (let t = 0; t <= 1; t += 0.1) {
-            const x = getX(i) + t * step;
-            let val = cubicBSpline(p0, p1, p2, p3, t);
-            if (val < 0) val = 0;
-            ctx.lineTo(x, getY(val));
+        p0 = getVal(latencyHistory[0]);
+        p1 = getVal(latencyHistory[0]);
+        p2 = getVal(latencyHistory[Math.min(len - 1, 1)]);
+        p3 = getVal(latencyHistory[Math.min(len - 1, 2)]);
+        
+        ctx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
+
+        for (let i = 0; i < len - 1; i++) {
+            p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
+            p1 = getVal(latencyHistory[i]);
+            p2 = getVal(latencyHistory[Math.min(len - 1, i + 1)]);
+            p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
+            
+            for (let t = 0; t <= 1; t += 0.1) {
+                const x = getX(i) + t * step;
+                let val = cubicBSpline(p0, p1, p2, p3, t);
+                if (val < 0) val = 0;
+                ctx.lineTo(x, getY(val));
+            }
         }
+        
+        ctx.lineTo(width, height);
+        ctx.lineTo(0, height);
+        ctx.fillStyle = 'rgba(38, 139, 210, 0.1)';
+        ctx.fill();
     }
-    
-    ctx.lineTo(width, height);
-    ctx.lineTo(0, height);
-    ctx.fillStyle = 'rgba(38, 139, 210, 0.1)';
-    ctx.fill();
 
     // 2. Draw Lines
     ctx.lineWidth = 1.5;
