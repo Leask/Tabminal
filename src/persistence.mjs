@@ -42,12 +42,19 @@ export const saveSession = async (id, data) => {
 };
 
 export const deleteSession = async (id) => {
-    const filePath = path.join(SESSIONS_DIR, `${id}.json`);
+    const jsonPath = path.join(SESSIONS_DIR, `${id}.json`);
+    const logPath = path.join(SESSIONS_DIR, `${id}.log`);
+    
     try {
-        await fs.unlink(filePath);
+        await fs.unlink(jsonPath);
     } catch (e) {
-        // Ignore if file doesn't exist
-        if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to delete session ${id}:`, e);
+        if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to delete session config ${id}:`, e);
+    }
+
+    try {
+        await fs.unlink(logPath);
+    } catch (e) {
+        if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to delete session log ${id}:`, e);
     }
 };
 
