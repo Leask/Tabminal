@@ -208,19 +208,20 @@ httpServer.on('upgrade', (request, socket, head) => {
                 ws.close(); // Close the WebSocket connection
                 return;
             }
-            wss.emit('connection', ws, session);
+            const ua = request.headers['user-agent'] || 'Unknown';
+            wss.emit('connection', ws, session, ua);
         });
     } else {
         socket.destroy();
     }
 });
 
-wss.on('connection', (socket, session) => {
+wss.on('connection', (socket, session, ua) => {
     socket.isAlive = true;
     socket.on('pong', () => {
         socket.isAlive = true;
     });
-    console.log(`[Server] WebSocket connected to session ${session.id}`);
+    console.log(`[Server] WebSocket connected to session ${session.id} [${ua}]`);
     session.attach(socket);
 });
 
