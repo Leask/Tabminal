@@ -71,6 +71,8 @@ export class TerminalSession {
         });
 
         this._handleData = (chunk) => {
+            if (this.suppressPtyOutput) return;
+
             if (typeof chunk !== 'string') chunk = chunk.toString('utf8');
 
             if (this.manager) {
@@ -308,6 +310,9 @@ export class TerminalSession {
                     // Send Ctrl+U to pty to clear the visual line (since user typed it)
                     this.pty.write('\x15');
                     
+                    // Suppress PTY echo (like the Ctrl+U echo) to prevent race conditions with AI stream
+                    this.suppressPtyOutput = true;
+                    
                     // Send newline and reset cursor to User (visual only)
                     this._broadcast({ type: 'output', data: '\r\n\r\x1b[K' });
 
@@ -368,6 +373,9 @@ export class TerminalSession {
         } catch (e) {
             this._broadcast({ type: 'output', data: `\x1b[31mAI Error: ${e.message}\x1b[0m\r\n` });
         }
+        
+        // Resume PTY output
+        this.suppressPtyOutput = false;
         
         // Restore prompt by sending \r to pty (empty command)
         this.pty.write('\r');
