@@ -76,6 +76,7 @@ body {
     width: 100%;
     min-width: 0; /* Allow shrinking */
     overflow: hidden; /* Force children to fit */
+    border-bottom: 1px solid var(--border-color);
 }
 
 .sidebar {
