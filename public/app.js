@@ -1078,7 +1078,8 @@ async function syncSessions() {
 
 let lastSystemData = null;
 let lastLatency = 0;
-const latencyHistory = new Array(100).fill(0); // Keep last 100 points
+const targetHistory = new Array(100).fill(0);
+const renderData = new Array(100).fill(0);
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
 const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
 
@@ -1088,7 +1089,7 @@ function drawHeartbeat() {
     const width = heartbeatCanvas.clientWidth;
     const height = heartbeatCanvas.clientHeight;
     
-    if (height === 0) return; // Hidden
+    if (height === 0) return;
 
     if (heartbeatCanvas.width !== width || heartbeatCanvas.height !== height) {
         heartbeatCanvas.width = width;
@@ -1097,55 +1098,74 @@ function drawHeartbeat() {
 
     heartbeatCtx.clearRect(0, 0, width, height);
     
-    // Draw smooth curve
     heartbeatCtx.beginPath();
     heartbeatCtx.strokeStyle = '#268bd2';
     heartbeatCtx.lineWidth = 1.5;
     heartbeatCtx.lineJoin = 'round';
     
-    const step = width / (latencyHistory.length - 1);
-    const maxLatency = 200;
+    const step = width / (renderData.length - 1);
     
-    const getY = (val) => height - (Math.min(val, maxLatency) / maxLatency) * height;
+    // Dynamic Auto-Scaling based on RENDER data for smoothness
+    let maxVal = 0;
+    for (const val of renderData) {
+        if (val > maxVal) maxVal = val;
+    }
+    const effectiveMax = maxVal > 0 ? maxVal : 1;
+    const verticalRange = effectiveMax / 0.8;
     
-    // Start at first point
-    heartbeatCtx.moveTo(0, getY(latencyHistory[0]));
+    const getY = (val) => height - (val / verticalRange) * height;
     
-    // Use quadratic curves for smoothing
-    for (let i = 1; i < latencyHistory.length - 2; i++) {
+    heartbeatCtx.moveTo(0, getY(renderData[0]));
+    
+    for (let i = 1; i < renderData.length - 2; i++) {
         const x1 = i * step;
-        const y1 = getY(latencyHistory[i]);
+        const y1 = getY(renderData[i]);
         const x2 = (i + 1) * step;
-        const y2 = getY(latencyHistory[i + 1]);
-        
+        const y2 = getY(renderData[i + 1]);
         const xc = (x1 + x2) / 2;
         const yc = (y1 + y2) / 2;
-        
         heartbeatCtx.quadraticCurveTo(x1, y1, xc, yc);
     }
     
-    // Connect last few points
-    for (let i = latencyHistory.length - 2; i < latencyHistory.length; i++) {
-        heartbeatCtx.lineTo(i * step, getY(latencyHistory[i]));
+    for (let i = renderData.length - 2; i < renderData.length; i++) {
+        heartbeatCtx.lineTo(i * step, getY(renderData[i]));
     }
 
     heartbeatCtx.stroke();
     
-    // Draw fill
     heartbeatCtx.lineTo(width, height);
     heartbeatCtx.lineTo(0, height);
     heartbeatCtx.fillStyle = 'rgba(38, 139, 210, 0.1)';
     heartbeatCtx.fill();
 }
 
+function animateHeartbeat() {
+    requestAnimationFrame(animateHeartbeat);
+    
+    let needsRedraw = false;
+    for (let i = 0; i < 100; i++) {
+        const diff = targetHistory[i] - renderData[i];
+        if (Math.abs(diff) > 0.01) {
+            renderData[i] += diff * 0.05; // Smooth easing
+            needsRedraw = true;
+        } else {
+            renderData[i] = targetHistory[i];
+        }
+    }
+    
+    if (needsRedraw || (heartbeatCanvas && heartbeatCanvas.width !== heartbeatCanvas.clientWidth)) {
+        drawHeartbeat();
+    }
+}
+animateHeartbeat();
+
 function updateSystemStatus(system, latency) {
     if (!systemStatusBarEl) return;
     if (system) lastSystemData = system;
     if (latency !== null && latency !== undefined) {
         lastLatency = latency;
-        latencyHistory.push(latency);
-        latencyHistory.shift();
-        drawHeartbeat();
+        targetHistory.push(latency);
+        targetHistory.shift();
     }
     
     const data = system || lastSystemData;
