@@ -1042,7 +1042,7 @@ async function syncSessions() {
         if (!response.ok) {
             console.warn('Heartbeat server error:', response.status);
             setStatus('reconnecting');
-            updateSystemStatus(null, null);
+            updateSystemStatus(null, -1); // Record missing data
             return;
         }
         
@@ -1072,7 +1072,7 @@ async function syncSessions() {
     } catch (error) {
         console.error('Heartbeat failed:', error);
         setStatus('reconnecting');
-        updateSystemStatus(null, null);
+        updateSystemStatus(null, -1); // Record missing data
     }
 }
 
@@ -1155,40 +1155,71 @@ function drawHeartbeat() {
     
     // Helper to get X coordinate for index i
     const getX = (i) => width + step * (2 - len - progress + i);
+    const getVal = (v) => (v === -1 ? 0 : v);
 
-    // Draw using Catmull-Rom
-    // We need to iterate through points and interpolate
-    // Since we are drawing a continuous line, we can just sample the spline
+    // 1. Draw Fill (Background) - Treat -1 as 0
+    heartbeatCtx.beginPath();
+    // Start from bottom-left to ensure closure? No, standard path.
+    // Actually, let's trace the top curve first.
     
-    // Start point
-    heartbeatCtx.moveTo(getX(0), getY(latencyHistory[0]));
+    // First point
+    let p0 = getVal(latencyHistory[0]);
+    let p1 = getVal(latencyHistory[0]);
+    let p2 = getVal(latencyHistory[Math.min(len - 1, 1)]);
+    let p3 = getVal(latencyHistory[Math.min(len - 1, 2)]);
     
+    // We need to start the path at the first point
+    heartbeatCtx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
+
     for (let i = 0; i < len - 1; i++) {
-        const p0 = latencyHistory[Math.max(0, i - 1)];
-        const p1 = latencyHistory[i];
-        const p2 = latencyHistory[Math.min(len - 1, i + 1)];
-        const p3 = latencyHistory[Math.min(len - 1, i + 2)];
+        p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
+        p1 = getVal(latencyHistory[i]);
+        p2 = getVal(latencyHistory[Math.min(len - 1, i + 1)]);
+        p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
         
-        // Draw segments for this interval
-        // 10 segments per interval for smoothness
         for (let t = 0; t <= 1; t += 0.1) {
-            const x = getX(i) + t * step; // Linear X interpolation
+            const x = getX(i) + t * step;
             let val = catmullRom(p0, p1, p2, p3, t);
-            // Clamp value to prevent undershoot below zero (which causes gaps at bottom)
             if (val < 0) val = 0;
-            
-            const y = getY(val);
-            heartbeatCtx.lineTo(x, y);
+            heartbeatCtx.lineTo(x, getY(val));
         }
     }
-
-    heartbeatCtx.stroke();
     
-    // Fill
+    // Close the fill shape
     heartbeatCtx.lineTo(width, height);
     heartbeatCtx.lineTo(0, height);
     heartbeatCtx.fillStyle = 'rgba(38, 139, 210, 0.1)';
     heartbeatCtx.fill();
+
+    // 2. Draw Lines (Segmented for color)
+    heartbeatCtx.lineWidth = 1.5;
+    heartbeatCtx.lineJoin = 'round';
+
+    for (let i = 0; i < len - 1; i++) {
+        const rawP1 = latencyHistory[i];
+        const rawP2 = latencyHistory[Math.min(len - 1, i + 1)];
+        
+        // If either point is -1, this segment is "error"
+        const isError = rawP1 === -1 || rawP2 === -1;
+        
+        heartbeatCtx.beginPath();
+        heartbeatCtx.strokeStyle = isError ? '#dc322f' : '#268bd2';
+        
+        p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
+        p1 = getVal(rawP1);
+        p2 = getVal(rawP2);
+        p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
+        
+        for (let t = 0; t <= 1; t += 0.1) {
+            const x = getX(i) + t * step;
+            let val = catmullRom(p0, p1, p2, p3, t);
+            if (val < 0) val = 0;
+            
+            if (t === 0) heartbeatCtx.moveTo(x, getY(val));
+            else heartbeatCtx.lineTo(x, getY(val));
+        }
+        heartbeatCtx.stroke();
+    }
 }
 
 function animateHeartbeat() {
