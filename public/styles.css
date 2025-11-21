@@ -26,6 +26,17 @@
     --text-highlight: #93a1a1;
     --border-color: rgba(88, 110, 117, 0.5);
     --accent-color: #268bd2;
+    --app-height: 100%;
+    --app-width: 100%;
+}
+
+html {
+    height: 100%;
+    width: 100%;
+    position: fixed;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
 }
 
 * {
@@ -37,14 +48,25 @@ body {
     font-family: 'Monaspace Neon', "SF Mono Terminal", "SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     background-color: var(--bg-base);
     color: var(--text-base);
-    height: 100vh;
-    height: 100dvh; /* Mobile viewport fix */
-    width: 100%;
-    position: fixed; /* Prevent rubber-banding */
-    overflow: hidden; /* Prevent body scrollbars */
+    /* Lock viewport using JS calculated dimensions and offsets */
+    position: fixed;
+    top: var(--app-top, 0px);
+    left: var(--app-left, 0px);
+    width: var(--app-width);
+    height: var(--app-height);
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     overscroll-behavior: none;
+}
+
+/* Prevent scroll chaining on scrollable elements */
+.tab-list,
+.file-tree,
+.image-preview-container,
+.editor-content,
+.xterm-viewport {
+    overscroll-behavior: contain;
 }
 
 .app-layout {
@@ -387,6 +409,7 @@ body {
     min-height: 0;
     width: 100%;
     padding: 10px 0 10px 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 0;
 }
 

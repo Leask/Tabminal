@@ -8,6 +8,90 @@
         <link rel="mask-icon" href="./favicon.svg" color="#22D3EE">
         <link rel="preconnect" href="https://cdn.jsdelivr.net">
         <script>
+            // Mobile Layout Manager
+            function updateLayout() {
+                const vv = window.visualViewport;
+                const width = vv ? vv.width : window.innerWidth;
+                const height = vv ? vv.height : window.innerHeight;
+                const offsetTop = vv ? vv.offsetTop : 0;
+                const offsetLeft = vv ? vv.offsetLeft : 0;
+                
+                document.documentElement.style.setProperty('--app-width', `${width}px`);
+                document.documentElement.style.setProperty('--app-height', `${height}px`);
+                document.documentElement.style.setProperty('--app-top', `${offsetTop}px`);
+                document.documentElement.style.setProperty('--app-left', `${offsetLeft}px`);
+
+                if (document.body) {
+                    window.scrollTo(0, 0);
+                    document.body.scrollTop = 0;
+                }
+                document.documentElement.scrollTop = 0;
+            }
+
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', updateLayout);
+                window.visualViewport.addEventListener('scroll', updateLayout);
+            }
+            window.addEventListener('resize', updateLayout);
+            window.addEventListener('orientationchange', updateLayout);
+            
+            // High-performance Layout Loop (60fps)
+            function layoutLoop() {
+                updateLayout();
+                requestAnimationFrame(layoutLoop);
+            }
+            layoutLoop();
+            
+            // Initial triggers
+            document.addEventListener('DOMContentLoaded', updateLayout);
+            window.addEventListener('load', updateLayout);
+
+            // Enhanced Touch Interceptor with Boundary Check
+            let startY = 0;
+            document.addEventListener('touchstart', function(e) {
+                startY = e.touches[0].clientY;
+            }, { passive: false });
+
+            document.addEventListener('touchmove', function(e) {
+                let target = e.target;
+                let scrollable = null;
+
+                while (target && target !== document.body) {
+                    if (target.classList && (
+                        target.classList.contains('tab-list') ||
+                        target.classList.contains('file-tree') ||
+                        target.classList.contains('editor-content') ||
+                        target.classList.contains('xterm-viewport') ||
+                        target.classList.contains('image-preview-container') ||
+                        target.classList.contains('system-status-bar')
+                    )) {
+                        scrollable = target;
+                        break;
+                    }
+                    target = target.parentElement;
+                }
+
+                if (!scrollable) {
+                    e.preventDefault();
+                } else {
+                    // Prevent scroll chaining at boundaries
+                    const y = e.touches[0].clientY;
+                    const scrollTop = scrollable.scrollTop;
+                    const scrollHeight = scrollable.scrollHeight;
+                    const height = scrollable.clientHeight;
+                    const isScrollingUp = y > startY;
+                    const isScrollingDown = y < startY;
+
+                    // Allow 1px buffer to avoid getting stuck
+                    if (isScrollingUp && scrollTop <= 0) {
+                        e.preventDefault();
+                    } else if (isScrollingDown && scrollTop + height >= scrollHeight) {
+                        e.preventDefault();
+                    }
+                }
+            }, { passive: false });
+        </script>
+        <script>
             (function() {
                 const t = Math.floor(Date.now() / 60000);
                 const link = document.createElement('link');
