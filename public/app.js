@@ -1082,6 +1082,7 @@ const latencyHistory = []; // Raw data, variable length
 const DISPLAY_POINTS = 100;
 const targetDisplayData = new Array(DISPLAY_POINTS).fill(0);
 const currentDisplayData = new Array(DISPLAY_POINTS).fill(0);
+const velocities = new Array(DISPLAY_POINTS).fill(0); // Store velocity for each point
 let smoothedMaxVal = 1; // For stable scaling
 
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
@@ -1193,18 +1194,30 @@ function animateHeartbeat() {
     
     let needsRedraw = false;
     
-    // 1. Smooth Data Interpolation
+    // Spring Physics Parameters
+    // Tension: 0.005 (Low) -> Slow acceleration, heavy feel
+    // Friction: 0.92 (High) -> No bouncing, smooth deceleration
+    const tension = 0.005;
+    const friction = 0.92;
+    
+    // 1. Spring Physics for Data Points
     for (let i = 0; i < DISPLAY_POINTS; i++) {
-        const diff = targetDisplayData[i] - currentDisplayData[i];
-        if (Math.abs(diff) > 0.001) {
-            currentDisplayData[i] += diff * 0.015; // Even slower factor (1.5s+ settling) for continuous motion
+        const dist = targetDisplayData[i] - currentDisplayData[i];
+        
+        // Apply force
+        velocities[i] += dist * tension;
+        // Apply friction
+        velocities[i] *= friction;
+        
+        // Update position
+        currentDisplayData[i] += velocities[i];
+        
+        if (Math.abs(velocities[i]) > 0.001 || Math.abs(dist) > 0.01) {
             needsRedraw = true;
-        } else {
-            currentDisplayData[i] = targetDisplayData[i];
         }
     }
     
-    // 2. Smooth Scaling Interpolation
+    // 2. Smooth Scaling Interpolation (Exponential is fine for scalar)
     let targetMax = 0;
     for (const val of currentDisplayData) {
         if (val > targetMax) targetMax = val;
@@ -1213,7 +1226,7 @@ function animateHeartbeat() {
     
     const scaleDiff = effectiveTargetMax - smoothedMaxVal;
     if (Math.abs(scaleDiff) > 0.001) {
-        smoothedMaxVal += scaleDiff * 0.01; // Ultra slow scaling adaptation
+        smoothedMaxVal += scaleDiff * 0.01; 
         needsRedraw = true;
     } else {
         smoothedMaxVal = effectiveTargetMax;
@@ -1233,8 +1246,7 @@ function updateSystemStatus(system, latency) {
         latencyHistory.push(latency);
         if (latencyHistory.length > 100) latencyHistory.shift();
         
-        // Snapshot current state not needed for physics-based approach
-        // Just update target
+        // Just update target, spring physics handles the rest
         const resampled = resample(latencyHistory, DISPLAY_POINTS);
         for(let i=0; i<DISPLAY_POINTS; i++) targetDisplayData[i] = resampled[i];
     }
