@@ -695,20 +695,22 @@ class Session {
             editorFlex: '2 1 0%'
         };
 
-        // Preview Terminal (Only on Desktop to save memory)
-        this.previewTerm = null;
+        // Preview Terminal (Always create instance to maintain logic consistency)
+        this.previewTerm = new Terminal({
+            disableStdin: true,
+            cursorBlink: false,
+            allowTransparency: true,
+            fontSize: 10,
+            rows: this.rows,
+            cols: this.cols,
+            theme: { background: '#002b36', foreground: '#839496', cursor: 'transparent', selectionBackground: 'transparent' }
+        });
+        
+        // Only load CanvasAddon on Desktop to save GPU memory
         if (window.innerWidth >= 768) {
-            this.previewTerm = new Terminal({
-                disableStdin: true,
-                cursorBlink: false,
-                allowTransparency: true,
-                fontSize: 10,
-                rows: this.rows,
-                cols: this.cols,
-                theme: { background: '#002b36', foreground: '#839496', cursor: 'transparent', selectionBackground: 'transparent' }
-            });
             this.previewTerm.loadAddon(new CanvasAddon());
         }
+        
         this.wrapperElement = null;
 
         // Main Terminal
@@ -1483,8 +1485,9 @@ function renderTabs() {
             }
             
             // Mount preview
-            session.wrapperElement = tab.querySelector('.preview-terminal-wrapper');
-            if (session.previewTerm) {
+            // Only mount on Desktop to save resources and avoid visual clutter on mobile
+            if (window.innerWidth >= 768) {
+                session.wrapperElement = tab.querySelector('.preview-terminal-wrapper');
                 session.previewTerm.open(session.wrapperElement);
                 session.updatePreviewScale();
             }
