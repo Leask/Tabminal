@@ -699,37 +699,52 @@ body {
     right: 4px; /* Fixed right */
     width: 28px; /* Larger touch target */
     height: 28px;
-    border-radius: 50%;
-    background-color: rgba(0, 0, 0, 0.3); /* Semi-transparent for blur */
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    border-radius: 4px; /* Square with rounded corners */
+    background-color: transparent; 
     color: var(--text-highlight);
-    border: none;
+    border: 1px solid transparent;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.2s ease, background-color 0.2s ease;
+    opacity: 0; /* Default Hidden */
+    transition: all 0.2s ease;
     z-index: 10;
     font-size: 14px;
     padding: 0;
     line-height: 1;
 }
 
+/* Show when hovering the tab */
 .tab-item:hover .toggle-editor-btn {
-    opacity: 1;
+    opacity: 0.6;
+    background-color: rgba(0, 0, 0, 0.2);
 }
 
+/* Hovering the button itself */
+.toggle-editor-btn:hover {
+    opacity: 1 !important;
+    background-color: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Active/Pinned State (Editor is Open) */
 .tab-item.editor-open .toggle-editor-btn {
     opacity: 1;
-    color: var(--accent-color);
+    background-color: rgba(38, 139, 210, 0.2); /* Accent tint */
+    border-color: rgba(38, 139, 210, 0.5);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
 }
 
-
+/* Show on active tab (for mobile discoverability) */
+.tab-item.active .toggle-editor-btn {
+    opacity: 0.4;
+}
+.tab-item.active:hover .toggle-editor-btn {
+    opacity: 0.8;
+}
 
 .toggle-editor-btn:active {
-    transform: scale(0.95);
+    transform: translateY(1px);
 }
 
 .tab-file-tree {
