@@ -1078,12 +1078,10 @@ async function syncSessions() {
 
 let lastSystemData = null;
 let lastLatency = 0;
-const latencyHistory = []; // Raw data, variable length
 const DISPLAY_POINTS = 100;
-const targetDisplayData = new Array(DISPLAY_POINTS).fill(0);
-const currentDisplayData = new Array(DISPLAY_POINTS).fill(0);
-const velocities = new Array(DISPLAY_POINTS).fill(0); // Store velocity for each point
-let smoothedMaxVal = 1; // For stable scaling
+const latencyHistory = new Array(DISPLAY_POINTS).fill(0); 
+let lastUpdateTime = performance.now();
+let smoothedMaxVal = 1;
 
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
 const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
@@ -1113,29 +1111,6 @@ function catmullRom(p0, p1, p2, p3, t) {
     return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1;
 }
 
-function resample(source, targetLen) {
-    if (source.length === 0) return new Array(targetLen).fill(0);
-    if (source.length === 1) return new Array(targetLen).fill(source[0]);
-    
-    const result = [];
-    const step = (source.length - 1) / (targetLen - 1);
-    
-    for (let i = 0; i < targetLen; i++) {
-        const pos = i * step;
-        const index = Math.floor(pos);
-        const t = pos - index;
-        
-        // Get 4 control points (clamp to boundaries)
-        const p0 = source[Math.max(0, index - 1)];
-        const p1 = source[index];
-        const p2 = source[Math.min(source.length - 1, index + 1)];
-        const p3 = source[Math.min(source.length - 1, index + 2)];
-        
-        result.push(catmullRom(p0, p1, p2, p3, t));
-    }
-    return result;
-}
-
 function drawHeartbeat() {
     if (!heartbeatCtx || !heartbeatCanvas) return;
     
@@ -1153,36 +1128,59 @@ function drawHeartbeat() {
 
     heartbeatCtx.clearRect(0, 0, width, height);
     
+    if (latencyHistory.length < 2) return;
+
+    // Calculate Scroll Progress
+    const now = performance.now();
+    // Cap at 1.0 to prevent overscroll gaps if network lags
+    const progress = Math.min((now - lastUpdateTime) / 1000, 1.0); 
+    
+    const step = width / (DISPLAY_POINTS - 1);
+    
+    // Smooth Scaling
+    let maxVal = 0;
+    for (const val of latencyHistory) if (val > maxVal) maxVal = val;
+    // Set a minimum floor for the scale (e.g., 50ms) to prevent noise amplification at low latency
+    const effectiveMax = Math.max(maxVal, 50);
+    smoothedMaxVal += (effectiveMax - smoothedMaxVal) * 0.05;
+    const verticalRange = smoothedMaxVal / 0.8;
+    const getY = (val) => height - (val / verticalRange) * height;
+
     heartbeatCtx.beginPath();
     heartbeatCtx.strokeStyle = '#268bd2';
     heartbeatCtx.lineWidth = 1.5;
     heartbeatCtx.lineJoin = 'round';
+
+    const len = latencyHistory.length;
     
-    const step = width / (DISPLAY_POINTS - 1);
+    // Helper to get X coordinate for index i
+    const getX = (i) => width + step * (2 - len - progress + i);
+
+    // Draw using Catmull-Rom
+    // We need to iterate through points and interpolate
+    // Since we are drawing a continuous line, we can just sample the spline
     
-    // Use smoothedMaxVal for stable vertical scaling
-    const verticalRange = smoothedMaxVal / 0.8;
+    // Start point
+    heartbeatCtx.moveTo(getX(0), getY(latencyHistory[0]));
     
-    const getY = (val) => height - (val / verticalRange) * height;
-    
-    heartbeatCtx.moveTo(0, getY(currentDisplayData[0]));
-    
-    for (let i = 1; i < DISPLAY_POINTS - 2; i++) {
-        const x1 = i * step;
-        const y1 = getY(currentDisplayData[i]);
-        const x2 = (i + 1) * step;
-        const y2 = getY(currentDisplayData[i + 1]);
-        const xc = (x1 + x2) / 2;
-        const yc = (y1 + y2) / 2;
-        heartbeatCtx.quadraticCurveTo(x1, y1, xc, yc);
-    }
-    
-    for (let i = DISPLAY_POINTS - 2; i < DISPLAY_POINTS; i++) {
-        heartbeatCtx.lineTo(i * step, getY(currentDisplayData[i]));
+    for (let i = 0; i < len - 1; i++) {
+        const p0 = latencyHistory[Math.max(0, i - 1)];
+        const p1 = latencyHistory[i];
+        const p2 = latencyHistory[Math.min(len - 1, i + 1)];
+        const p3 = latencyHistory[Math.min(len - 1, i + 2)];
+        
+        // Draw segments for this interval
+        // 10 segments per interval for smoothness
+        for (let t = 0; t <= 1; t += 0.1) {
+            const x = getX(i) + t * step; // Linear X interpolation
+            const y = getY(catmullRom(p0, p1, p2, p3, t));
+            heartbeatCtx.lineTo(x, y);
+        }
     }
 
     heartbeatCtx.stroke();
     
+    // Fill
     heartbeatCtx.lineTo(width, height);
     heartbeatCtx.lineTo(0, height);
     heartbeatCtx.fillStyle = 'rgba(38, 139, 210, 0.1)';
@@ -1191,46 +1189,7 @@ function drawHeartbeat() {
 
 function animateHeartbeat() {
     requestAnimationFrame(animateHeartbeat);
-    
-    let needsRedraw = false;
-    // Constant Speed Interpolation
-    // This ensures the curve morphs at a steady pace, eliminating the "surge" or "jump" feel.
-    // Speed = units per frame.
-    const moveSpeed = 0.5; 
-    
-    // 1. Constant Speed Data Interpolation
-    for (let i = 0; i < DISPLAY_POINTS; i++) {
-        const diff = targetDisplayData[i] - currentDisplayData[i];
-        const dist = Math.abs(diff);
-        
-        if (dist > 0.001) {
-            // Move towards target by fixed step, or snap if close
-            const step = Math.min(dist, moveSpeed);
-            currentDisplayData[i] += Math.sign(diff) * step;
-            needsRedraw = true;
-        } else {
-            currentDisplayData[i] = targetDisplayData[i];
-        }
-    }
-    
-    // 2. Smooth Scaling Interpolation (Keep exponential for scaling as it feels better for zoom)
-    let targetMax = 0;
-    for (const val of currentDisplayData) {
-        if (val > targetMax) targetMax = val;
-    }
-    const effectiveTargetMax = targetMax > 0 ? targetMax : 1;
-    
-    const scaleDiff = effectiveTargetMax - smoothedMaxVal;
-    if (Math.abs(scaleDiff) > 0.001) {
-        smoothedMaxVal += scaleDiff * 0.01; 
-        needsRedraw = true;
-    } else {
-        smoothedMaxVal = effectiveTargetMax;
-    }
-    
-    if (needsRedraw || (heartbeatCanvas && heartbeatCanvas.width !== heartbeatCanvas.clientWidth)) {
-        drawHeartbeat();
-    }
+    drawHeartbeat();
 }
 animateHeartbeat();
 
@@ -1239,12 +1198,11 @@ function updateSystemStatus(system, latency) {
     if (system) lastSystemData = system;
     if (latency !== null && latency !== undefined) {
         lastLatency = latency;
+        lastUpdateTime = performance.now();
         latencyHistory.push(latency);
-        if (latencyHistory.length > 100) latencyHistory.shift();
-        
-        // Just update target, spring physics handles the rest
-        const resampled = resample(latencyHistory, DISPLAY_POINTS);
-        for(let i=0; i<DISPLAY_POINTS; i++) targetDisplayData[i] = resampled[i];
+        // Keep enough history to fill screen + buffer
+        // We need DISPLAY_POINTS + 1 to scroll smoothly
+        if (latencyHistory.length > DISPLAY_POINTS + 2) latencyHistory.shift();
     }
     
     const data = system || lastSystemData;
