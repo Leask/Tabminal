@@ -139,13 +139,17 @@ body {
         width: 240px; /* Slightly wider for touch */
         z-index: 900;
         transform: translateX(-100%); /* Hide off-screen */
-        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        /* Toggle visibility to remove shadow artifact when closed */
+        visibility: hidden;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.3s;
         box-shadow: 4px 0 12px rgba(0,0,0,0.5);
         border-right: 1px solid var(--border-color);
     }
     
     .sidebar.open {
         transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
     }
 }
 
