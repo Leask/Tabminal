@@ -1079,7 +1079,8 @@ async function syncSessions() {
 let lastSystemData = null;
 let lastLatency = 0;
 const DISPLAY_POINTS = 100;
-const latencyHistory = new Array(DISPLAY_POINTS).fill(0); 
+// Initialize with extra points to cover left edge during scrolling
+const latencyHistory = new Array(DISPLAY_POINTS + 2).fill(0); 
 let lastUpdateTime = performance.now();
 let smoothedMaxVal = 1;
 
@@ -1173,7 +1174,11 @@ function drawHeartbeat() {
         // 10 segments per interval for smoothness
         for (let t = 0; t <= 1; t += 0.1) {
             const x = getX(i) + t * step; // Linear X interpolation
-            const y = getY(catmullRom(p0, p1, p2, p3, t));
+            let val = catmullRom(p0, p1, p2, p3, t);
+            // Clamp value to prevent undershoot below zero (which causes gaps at bottom)
+            if (val < 0) val = 0;
+            
+            const y = getY(val);
             heartbeatCtx.lineTo(x, y);
         }
     }
