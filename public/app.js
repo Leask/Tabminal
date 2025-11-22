@@ -1922,6 +1922,7 @@ if (virtualKeys) {
         let data = '';
         if (key === 'ESC') data = '\x1b';
         else if (key === 'TAB') data = '\t';
+        else if (key === 'CTRL_C') data = '\x03'; // Ctrl+C
         else if (key === 'UP') data = '\x1b[A';
         else if (key === 'DOWN') data = '\x1b[B';
         else if (key === 'RIGHT') data = '\x1b[C';
