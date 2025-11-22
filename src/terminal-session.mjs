@@ -423,15 +423,47 @@ export class TerminalSession {
 
             
 
-            // Construct Current Prompt
-
-            const currentContext = `Recent Shell History:\n${pendingShellHistory}\nEnvironment:\n${this.env}\nCurrent Path: ${this.cwd}`;
-
-            const finalPrompt = `${currentContext}\n\nQuestion: ${prompt}`;
+                    // Construct Current Prompt
 
             
 
-            const startTime = new Date();
+                    const currentContext = `Recent Shell History:\n${pendingShellHistory}\nEnvironment:\n${this.env}\nCurrent Path: ${this.cwd}`;
+
+            
+
+                    const finalPrompt = `${currentContext}\n\nQuestion: ${prompt}`;
+
+            
+
+                    
+
+            
+
+                    if (config.debug) {
+
+            
+
+                        console.log('[AI Context Build]');
+
+            
+
+                        console.log('History:', JSON.stringify(conversationHistory, null, 2));
+
+            
+
+                        console.log('Current Prompt Preview:', JSON.stringify(finalPrompt, null, 2));
+
+            
+
+                    }
+
+            
+
+                    
+
+            
+
+                    const startTime = new Date();
 
             let fullResponse = '';
 
