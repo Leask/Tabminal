@@ -2055,8 +2055,6 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         e.preventDefault(); 
         e.stopPropagation(); 
         
-        console.log('SYM Clicked. State:', JSON.stringify(modifiers));
-
         // Smart Toggle: If keyboard is open, close everything. If closed, open sym.
         const isKeyboardVisible = modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.sym;
         
