@@ -541,6 +541,15 @@ export class TerminalSession {
         this._logCommandExecution(entry);
         this.captureBuffer = '';
         this.captureStartedAt = null;
+
+        // Auto-Fix: If command failed, ask AI for help
+        if (exitCode !== 0 && entry.command) {
+            // Don't trigger on simple interruptions (SIGINT=130) or common non-errors?
+            // 130 = Ctrl+C. Usually user intention.
+            if (exitCode !== 130) {
+                this._handleAiCommand('The previous command failed. Please analyze the error in the history and provide a fix.');
+            }
+        }
     }
 
     _postProcessExecutionEntry(entry) {
