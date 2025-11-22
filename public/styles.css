@@ -511,11 +511,18 @@ body {
     -webkit-user-select: none;
 }
 
-.virtual-keys button:active, .virtual-keys button.active {
+.virtual-keys button:active {
     background: var(--accent-color);
     color: white;
     border-color: var(--accent-color);
     transform: translateY(1px);
+}
+
+.virtual-keys button.active {
+    background: var(--accent-color);
+    color: white;
+    border-color: var(--accent-color);
+    /* No transform for toggled state to keep alignment */
 }
 
 .soft-keyboard {

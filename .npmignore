@@ -1,14 +1,18 @@
-# Source and Tests
-src/
+# Development & Testing
+test/
 tests/
 .history/
+.git/
+.github/
+.vscode/
 
-# Configuration
-/config.json
-.gitignore
-.npmignore
+# Configuration & Secrets
+config.json
+.env*
 .DS_Store
 
-# Logs and temporary files
+# Logs & Temp
+logs/
 *.log
 *.pid
+npm-debug.log*
