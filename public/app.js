@@ -2119,10 +2119,19 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
             state.sessions.get(state.activeSessionId).send({ type: 'input', data });
         }
         
-        if (modifiers.shift) {
-             modifiers.shift = false;
-             updateState();
+        // Auto-close Logic
+        if (modifiers.ctrl || modifiers.alt) {
+            // Shortcut Mode: One-shot, close everything (including keyboard)
+            modifiers.ctrl = false;
+            modifiers.alt = false;
+            modifiers.shift = false;
+            modifiers.sym = false;
+        } else if (modifiers.shift) {
+            // Shift Mode: Release shift (Sticky), but keyboard stays if SYM is on
+            modifiers.shift = false;
         }
+        
+        updateState();
     });
 }
 
