@@ -120,7 +120,8 @@ router.all('/api/heartbeat', async (ctx) => {
 });
 
 router.post('/api/sessions', (ctx) => {
-    const session = terminalManager.createSession();
+    const options = ctx.request.body || {};
+    const session = terminalManager.createSession(options);
     ctx.status = 201;
     ctx.body = {
         id: session.id,

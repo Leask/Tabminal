@@ -36,9 +36,15 @@ export class TerminalManager {
     }
 
     createSession(restoredData = null) {
-        const id = restoredData ? restoredData.id : crypto.randomUUID();
+        // Use ID from options if present, otherwise generate new
+        const id = (restoredData && restoredData.id) ? restoredData.id : crypto.randomUUID();
         const shell = resolveShell();
-        const initialCwd = restoredData ? restoredData.cwd : (process.env.TABMINAL_CWD || process.cwd());
+        
+        // Use CWD from options if present, otherwise default
+        const initialCwd = (restoredData && restoredData.cwd) 
+            ? restoredData.cwd 
+            : (process.env.TABMINAL_CWD || process.cwd());
+        
         const env = { ...process.env };
         
         // Inject shell tools

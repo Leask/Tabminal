@@ -1384,7 +1384,20 @@ function reconcileSessions(remoteSessions) {
 
 async function createNewSession() {
     try {
-        const response = await auth.fetch('/api/sessions', { method: 'POST' });
+        const options = {};
+        if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+            const active = state.sessions.get(state.activeSessionId);
+            if (active.cwd) {
+                options.cwd = active.cwd;
+            }
+        }
+
+        const response = await auth.fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
+        });
+        
         if (!response.ok) throw new Error('Failed to create session');
         const newSession = await response.json();
         // Immediate sync to reflect the new session
