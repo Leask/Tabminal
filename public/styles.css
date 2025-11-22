@@ -1248,6 +1248,13 @@ kbd {
         margin-bottom: 0;
         padding-top: 0;
         padding-bottom: 0;
-        border-width: 0;
+/* Landscape Optimization for Mobile */
+@media (orientation: landscape) and (max-height: 600px) {
+    .soft-key {
+        height: 22px !important;
+        font-size: 11px;
     }
+    /* Adjust internal labels */
+    .key-main { top: 0px; left: 4px; font-size: 11px; }
+    .key-shift { bottom: 0px; right: 4px; font-size: 8px; }
 }
