@@ -396,53 +396,79 @@ export class TerminalSession {
         return { conversationHistory, pendingShellHistory };
     }
 
-    async _handleAiCommand(prompt, options = {}) {
-        // Prevent duplicate logging from shell integration
-        this.skipNextShellLog = true;
+        async _handleAiCommand(prompt, options = {}) {
 
-        // Unified prefix for consistent spacing
-        const prefix = '\n\nTabminal AI:\n\n';
+            // Prevent duplicate logging from shell integration
 
-                // Ensure clean line start, set Cyan color, and print prefix
+            this.skipNextShellLog = true;
 
-                this._writeToLogAndBroadcast(`\r\x1b[K\x1b[36m${prefix}`);
+    
 
-                
+            // Ensure clean line start and set Cyan color (No prefix yet)
 
-                // Gather Context (Current Session Only)
+            this._writeToLogAndBroadcast('\r\x1b[K\x1b[36m');
 
-                const cleanHistory = (this.executions && this.executions.length > 0) ? this.executions : [];
+            
 
-                
+            // Gather Context (Current Session Only)
 
-                // Build Context
+            const cleanHistory = (this.executions && this.executions.length > 0) ? this.executions : [];
 
-                const { conversationHistory, pendingShellHistory } = this._buildAiContext(cleanHistory);
+            
 
-                
+            // Build Context
 
-                // Construct Current Prompt
+            const { conversationHistory, pendingShellHistory } = this._buildAiContext(cleanHistory);
 
-                const currentContext = `Recent Shell History:\n${pendingShellHistory}\nEnvironment:\n${this.env}\nCurrent Path: ${this.cwd}`;
+            
 
-                const finalPrompt = `${currentContext}\n\nQuestion: ${prompt}`;
+            // Construct Current Prompt
 
-                
+            const currentContext = `Recent Shell History:\n${pendingShellHistory}\nEnvironment:\n${this.env}\nCurrent Path: ${this.cwd}`;
 
-                const startTime = new Date();
+            const finalPrompt = `${currentContext}\n\nQuestion: ${prompt}`;
 
-                let fullResponse = '';
+            
 
-                
+            const startTime = new Date();
 
-                try {            const streamCallback = (chunk) => {
-                if (chunk && chunk.text) {
-                    let text = chunk.text;
-                    // Normalize newlines for terminal
-                    text = text.replace(/\n/g, '\r\n');
-                    this._writeToLogAndBroadcast(text);
-                }
-            };
+            let fullResponse = '';
+
+            let isFirstChunk = true;
+
+            
+
+            try {
+
+                const streamCallback = (chunk) => {
+
+                    if (chunk && chunk.text) {
+
+                        let text = chunk.text;
+
+                        // Normalize newlines for terminal
+
+                        text = text.replace(/\n/g, '\r\n');
+
+                        
+
+                        if (isFirstChunk) {
+
+                            const prefix = '\n\nTabminal:\n\n';
+
+                            text = prefix + text;
+
+                            isFirstChunk = false;
+
+                        }
+
+                        
+
+                        this._writeToLogAndBroadcast(text);
+
+                    }
+
+                };
 
             const result = await alan.prompt(finalPrompt, { 
                 stream: streamCallback,
