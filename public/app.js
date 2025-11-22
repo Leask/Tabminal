@@ -1985,9 +1985,23 @@ if (virtualKeys) {
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey) return; // Ctrl is mandatory
-
     const key = e.key.toLowerCase();
+    
+    // ESC: Close Help Modal
+    if (key === 'escape') {
+        const modal = document.getElementById('shortcuts-modal');
+        if (modal && modal.style.display === 'flex') {
+            e.preventDefault();
+            modal.style.display = 'none';
+            if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+                state.sessions.get(state.activeSessionId).mainTerm.focus();
+            }
+            return;
+        }
+    }
+
+    if (!e.ctrlKey) return; // Ctrl is mandatory for others
+
     const code = e.code;
     
     // Ctrl + Shift Context
