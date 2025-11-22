@@ -370,8 +370,7 @@ export class TerminalSession {
                 // Case A: Successful AI Interaction -> Flush pending history into this turn
                 const userContent = (pendingShellHistory ? pendingShellHistory.trim() + '\n\n' : '') + entry.input;
                 
-                conversationHistory.push({ role: 'user', content: userContent });
-                conversationHistory.push({ role: 'assistant', content: entry.output });
+                conversationHistory.push({ request: userContent, response: entry.output });
                 
                 pendingShellHistory = ''; // Reset buffer
             } else {
