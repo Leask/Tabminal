@@ -405,8 +405,8 @@ export class TerminalSession {
         const { conversationHistory, pendingShellHistory } = this._buildAiContext(cleanHistory);
         
         // Construct Current Prompt
-        const currentContext = `Environment:\n${this.env}\nCurrent Path: ${this.cwd}\n\nRecent Shell History:\n${pendingShellHistory}`;
-        const finalPrompt = `${currentContext}\nQuestion: ${prompt}`;
+        const currentContext = `Recent Shell History:\n${pendingShellHistory}\nEnvironment:\n${this.env}\nCurrent Path: ${this.cwd}`;
+        const finalPrompt = `${currentContext}\n\nQuestion: ${prompt}`;
         
         console.log('[AI Context Build]');
         console.log('History:', JSON.stringify(conversationHistory, null, 2));
