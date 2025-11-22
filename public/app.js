@@ -1985,42 +1985,63 @@ if (virtualKeys) {
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey || !e.shiftKey) return;
+    if (!e.ctrlKey) return; // Ctrl is mandatory
 
     const key = e.key.toLowerCase();
     const code = e.code;
     
-    // Ctrl + Shift + T: New Tab
-    if (key === 't') {
-        e.preventDefault();
-        createNewSession();
-        return;
-    }
-    
-    // Ctrl + Shift + W: Close Tab
-    if (key === 'w') {
-        e.preventDefault();
-        if (state.activeSessionId) {
-            closeSession(state.activeSessionId);
+    // Ctrl + Shift Context
+    if (e.shiftKey && !e.altKey) {
+        // Ctrl + Shift + T: New Tab
+        if (key === 't') {
+            e.preventDefault();
+            createNewSession();
+            return;
         }
-        return;
+        
+        // Ctrl + Shift + W: Close Tab
+        if (key === 'w') {
+            e.preventDefault();
+            if (state.activeSessionId) {
+                closeSession(state.activeSessionId);
+            }
+            return;
+        }
+        
+        // Ctrl + Shift + [ / ]: Switch Tab
+        if (code === 'BracketLeft' || code === 'BracketRight') {
+            e.preventDefault();
+            const direction = code === 'BracketLeft' ? -1 : 1;
+            
+            const sessionIds = Array.from(state.sessions.keys());
+            if (sessionIds.length > 1) {
+                const currentIdx = sessionIds.indexOf(state.activeSessionId);
+                let newIdx = currentIdx + direction;
+                if (newIdx < 0) newIdx = sessionIds.length - 1;
+                if (newIdx >= sessionIds.length) newIdx = 0;
+                switchToSession(sessionIds[newIdx]);
+            }
+        }
     }
     
-    // Ctrl + Shift + [ / ]: Switch Tab
-    if (code === 'BracketLeft' || code === 'BracketRight') {
-        e.preventDefault();
-        const direction = code === 'BracketLeft' ? -1 : 1;
-        
-        // If Alt is ALSO pressed, switch file? Or just keep Tab switching simple?
-        // You asked for "Ctrl Shift [ / ]" for Tab switching.
-        
-        const sessionIds = Array.from(state.sessions.keys());
-        if (sessionIds.length > 1) {
-            const currentIdx = sessionIds.indexOf(state.activeSessionId);
-            let newIdx = currentIdx + direction;
-            if (newIdx < 0) newIdx = sessionIds.length - 1;
-            if (newIdx >= sessionIds.length) newIdx = 0;
-            switchToSession(sessionIds[newIdx]);
+    // Ctrl + Option (Alt) Context
+    if (e.altKey && !e.shiftKey) {
+        // Ctrl + Option + [ / ]: Switch Editor File
+        if (code === 'BracketLeft' || code === 'BracketRight') {
+            e.preventDefault();
+            const direction = code === 'BracketLeft' ? -1 : 1;
+            
+            if (editorManager && editorManager.currentSession) {
+                const s = editorManager.currentSession.editorState;
+                const files = s.openFiles;
+                if (files.length > 1) {
+                    const currentIdx = files.indexOf(s.activeFilePath);
+                    let newIdx = currentIdx + direction;
+                    if (newIdx < 0) newIdx = files.length - 1;
+                    if (newIdx >= files.length) newIdx = 0;
+                    editorManager.activateTab(files[newIdx]);
+                }
+            }
         }
     }
 });
