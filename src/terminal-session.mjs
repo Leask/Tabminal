@@ -295,6 +295,12 @@ export class TerminalSession {
     }
 
     write(data) {
+        if (typeof data === 'string' && data.startsWith('\x1b')) {
+            this.pty.write(data);
+            this.inputBuffer = '';
+            return;
+        }
+
         if (typeof data !== 'string') {
             this.pty.write(data);
             return;
@@ -306,8 +312,20 @@ export class TerminalSession {
 
             // Handle Enter (\r)
             if (char === '\r') {
-                const line = this.inputBuffer.trimStart();
-                if (line.startsWith('#')) {
+                // Smart detection for AI command (#)
+                // Ignore prefix if it only contains whitespace or terminal control artifacts (CPR)
+                const idx = this.inputBuffer.indexOf('#');
+                let line = null;
+                
+                if (idx !== -1) {
+                    const prefix = this.inputBuffer.substring(0, idx);
+                    // Allow whitespace, ESC, [, digits, ;, R (typical CPR response)
+                    if (/^[\s\x1b\[\d;R]*$/.test(prefix)) {
+                        line = this.inputBuffer.substring(idx);
+                    }
+                }
+                
+                if (line) {
                     // --- HIJACK DETECTED ---
                     
                     // 1. Write pending data BEFORE this char to pty
