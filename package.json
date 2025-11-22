@@ -37,7 +37,7 @@
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.0.0",
     "openai": "^6.9.1",
-    "utilitas": "^1999.1.97",
+    "utilitas": "^2000.3.2",
     "ws": "^8.18.3"
   },
   "repository": {

@@ -413,6 +413,7 @@ export class TerminalSession {
         console.log('Current Prompt Preview:', JSON.stringify(finalPrompt, null, 2));
         
         const startTime = new Date();
+        let fullResponse = '';
 
         try {
             const streamCallback = (chunk) => {
@@ -424,9 +425,11 @@ export class TerminalSession {
                 }
             };
 
-            const result = await alan.prompt(prompt, { 
+            const result = await alan.prompt(finalPrompt, { 
                 stream: streamCallback,
-                delta: true
+                delta: true,
+                messages: conversationHistory,
+                trimBeginning: true
             });
             
             if (result && result.text) {
