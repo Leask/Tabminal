@@ -35,6 +35,12 @@ Optimized specifically for **iPadOS** and **iOS**, solving the pain points of co
 *   Node.js >= 16
 *   An AI API Key (e.g., Google AI Studio / OpenRouter)
 
+### Quick Start (No Install)
+Run directly with npx:
+```bash
+npx tabminal --aikey "YOUR_API_KEY" --yes
+```
+
 ### Installation
 
 ```bash
