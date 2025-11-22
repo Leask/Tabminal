@@ -962,6 +962,11 @@ const pendingChanges = {
     sessions: new Map() // id -> { resize, editorState, fileWrites: Map<path, content> }
 };
 
+const shiftMap = {
+    '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+',
+    '[': '{', ']': '}', '\\': '|', ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?'
+};
+
 function getPendingSession(id) {
     if (!pendingChanges.sessions.has(id)) {
         pendingChanges.sessions.set(id, { fileWrites: new Map() });
@@ -1997,12 +2002,30 @@ if (modCtrl && modAlt && modShift && softKeyboard) {
         ['1','2','3','4','5','6','7','8','9','0','-','='],
         ['q','w','e','r','t','y','u','i','o','p','[',']'],
         ['a','s','d','f','g','h','j','k','l',';','\''],
-        ['z','x','c','v','b','n','m',',','.','/']
+        ['`','z','x','c','v','b','n','m',',','.','/','\\']
     ];
     
+    const getShiftChar = (c) => {
+        if (shiftMap[c]) return shiftMap[c];
+        if (c.length === 1 && /[a-z]/.test(c)) return c.toUpperCase();
+        return '';
+    };
+
     softKeyboard.innerHTML = rows.map(row => 
         `<div class="row">
-            ${row.map(char => `<div class="soft-key" data-char="${char}">${char}</div>`).join('')}
+            ${row.map(char => {
+                const shiftChar = getShiftChar(char);
+                // Only show shift char if it's different (e.g. not for numbers if we don't want, but standard keyboard does show symbols)
+                // HHKB shows symbols for numbers.
+                // For letters, shift is uppercase. Do we show 'A' on 'a' key?
+                // Usually no, just 'A'. But your request: "put shift char in bottom right".
+                // Let's show it.
+                const shiftLabel = shiftChar ? `<span class="key-shift">${shiftChar}</span>` : '';
+                return `<div class="soft-key" data-char="${char}">
+                    <span class="key-main">${char}</span>
+                    ${shiftLabel}
+                </div>`;
+            }).join('')}
         </div>`
     ).join('');
 
@@ -2010,6 +2033,8 @@ if (modCtrl && modAlt && modShift && softKeyboard) {
         modCtrl.classList.toggle('active', modifiers.ctrl);
         modAlt.classList.toggle('active', modifiers.alt);
         modShift.classList.toggle('active', modifiers.shift);
+        
+        softKeyboard.classList.toggle('shift-mode', modifiers.shift);
         
         const anyActive = modifiers.ctrl || modifiers.alt || modifiers.shift;
         softKeyboard.style.display = anyActive ? 'flex' : 'none';
@@ -2040,32 +2065,38 @@ if (modCtrl && modAlt && modShift && softKeyboard) {
         // Apply Modifiers Logic
         let data = char;
         
-        if (modifiers.ctrl) {
-            // Ctrl Logic
-            if (data.length === 1 && /[a-z]/i.test(data)) {
-                data = String.fromCharCode(data.toUpperCase().charCodeAt(0) - 64);
-            } else if (data === '[') data = '\x1b'; // Ctrl+[
-            // ... handle others if needed
-        }
-        
-        if (modifiers.alt) {
-            // Alt Logic (Meta)
-            data = '\x1b' + data;
-        }
-        
-        // Shift Logic (Simple uppercase for now, mapping symbols is complex without a map)
         if (modifiers.shift) {
             if (data.length === 1 && /[a-z]/.test(data)) {
                 data = data.toUpperCase();
+            } else if (shiftMap[data]) {
+                data = shiftMap[data];
             }
-            // TODO: Handle shift symbols (!@#...) in next version
+        }
+        
+        if (modifiers.ctrl) {
+            if (data.length === 1 && /[a-z]/.test(data)) {
+                // Use lowercase for ctrl calculation standard
+                data = String.fromCharCode(data.toLowerCase().charCodeAt(0) - 96);
+            } else if (data.length === 1 && /[A-Z]/.test(data)) {
+                 // If already upper (due to shift?), ctrl+shift+a -> \x01
+                 data = String.fromCharCode(data.charCodeAt(0) - 64);
+            } else if (data === '[') data = '\x1b';
+            else if (data === '?') data = '\x7f'; // Ctrl+? often mapped to Del
+            // Add more ctrl maps if needed (e.g. Ctrl+\ -> \x1c)
+            else if (data === '\\') data = '\x1c';
+            else if (data === ']') data = '\x1d';
+            else if (data === '^') data = '\x1e';
+            else if (data === '_') data = '\x1f';
+        }
+        
+        if (modifiers.alt) {
+            data = '\x1b' + data;
         }
 
         if (state.activeSessionId) {
             state.sessions.get(state.activeSessionId).send({ type: 'input', data });
         }
         
-        // Auto-release Shift?
         if (modifiers.shift) {
              modifiers.shift = false;
              updateState();
