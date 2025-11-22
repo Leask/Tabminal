@@ -2023,6 +2023,15 @@ document.addEventListener('keydown', (e) => {
             return;
         }
         
+        // Ctrl + Shift + E: Toggle Editor
+        if (key === 'e') {
+            e.preventDefault();
+            if (editorManager && state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+                editorManager.toggle(state.sessions.get(state.activeSessionId));
+            }
+            return;
+        }
+        
         // Ctrl + Shift + ?: Help
         if (key === '?' || (code === 'Slash' && e.shiftKey)) {
             e.preventDefault();
