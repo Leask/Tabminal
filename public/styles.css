@@ -151,6 +151,10 @@ body {
         visibility: visible;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
     }
+
+    .tab-item {
+        min-height: 80px !important;
+    }
 }
 
 /* Touch Device Typography Adjustments (Fonts only) */
