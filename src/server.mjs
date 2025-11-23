@@ -27,19 +27,19 @@ const publicDir = path.join(__dirname, '..', 'public');
 const app = new Koa();
 const router = new Router();
 
-if (config.aiKey) {
+if (config.openrouterKey) {
     try {
-        if (config.googleApiKey && config.googleCx) {
+        if (config.googleKey && config.googleCx) {
             await web.initSearch({
                 provider: 'google',
-                apiKey: config.googleApiKey,
+                apiKey: config.googleKey,
                 cx: config.googleCx
             });
             console.log('[Server] Web Search initialized (Google)');
         }
 
         await alan.init({
-            apiKey: config.aiKey,
+            apiKey: config.openrouterKey,
             model: config.model
         });
         console.log(`[Server] Alan initialized with model: ${config.model}`);

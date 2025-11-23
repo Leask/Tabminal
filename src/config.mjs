@@ -13,7 +13,8 @@ const DEFAULT_CONFIG = {
     password: null,
     model: 'gemini-2.5-flash-preview-09-2025',
     debug: false,
-    googleApiKey: null,
+    openrouterKey: null,
+    googleKey: null,
     googleCx: null
 };
 
@@ -131,6 +132,13 @@ Options:
         ...localConfig
     };
 
+    // Normalize config keys (support kebab-case in JSON)
+    if (finalConfig['accept-terms']) finalConfig.acceptTerms = finalConfig['accept-terms'];
+    if (finalConfig['openrouter-key']) finalConfig.openrouterKey = finalConfig['openrouter-key'];
+    if (finalConfig['ai-key']) finalConfig.openrouterKey = finalConfig['ai-key']; // Backwards compat
+    if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
+    if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
+
     if (args.host) {
         finalConfig.host = args.host;
     }
@@ -147,7 +155,7 @@ Options:
         finalConfig.password = args.password;
     }
     if (args['openrouter-key']) {
-        finalConfig.aiKey = args['openrouter-key'];
+        finalConfig.openrouterKey = args['openrouter-key'];
     }
     if (args.model) {
         finalConfig.model = args.model;
@@ -156,7 +164,7 @@ Options:
         finalConfig.debug = true;
     }
     if (args['google-key']) {
-        finalConfig.googleApiKey = args['google-key'];
+        finalConfig.googleKey = args['google-key'];
     }
     if (args['google-cx']) {
         finalConfig.googleCx = args['google-cx'];
@@ -168,10 +176,10 @@ Options:
     if (process.env.TABMINAL_HEARTBEAT) finalConfig.heartbeatInterval = parseInt(process.env.TABMINAL_HEARTBEAT, 10);
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
-    if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.aiKey = process.env.TABMINAL_OPENROUTER_KEY;
+    if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.openrouterKey = process.env.TABMINAL_OPENROUTER_KEY;
     if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
-    if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleApiKey = process.env.TABMINAL_GOOGLE_KEY;
+    if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
     if (process.env.TABMINAL_GOOGLE_CX) finalConfig.googleCx = process.env.TABMINAL_GOOGLE_CX;
 
     // Password Logic
