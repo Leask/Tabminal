@@ -468,22 +468,35 @@ body {
     background-color: var(--bg-surface);
     border-top: 1px solid var(--border-color);
     border-bottom: 1px solid var(--border-color); /* The main bottom divider */
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 8px;
-    gap: 6px;
-    overflow-x: auto;
-    flex-shrink: 0;
-    z-index: 20;
-    /* Hide scrollbar */
-    scrollbar-width: none;
-}
-.virtual-keys::-webkit-scrollbar {
-    display: none;
-}
-
-/* Only show on touch devices */
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        /* Default safe area padding (Mobile) */
+        padding-top: 0;
+        padding-bottom: 0;
+        padding-left: max(10px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+        gap: 6px;
+        overflow-x: auto;
+        flex-shrink: 0;
+        z-index: 20;
+        /* Hide scrollbar */
+        scrollbar-width: none;
+    }
+    
+    .virtual-keys::-webkit-scrollbar {
+        display: none;
+    }
+    
+    /* Larger padding for Tablet/Desktop */
+    @media (min-width: 768px) {
+        .virtual-keys {
+            padding-left: max(40px, env(safe-area-inset-left));
+            padding-right: max(40px, env(safe-area-inset-right));
+        }
+    }
+    
+    /* Only show on touch devices */
 @media (pointer: coarse) {
     .virtual-keys {
         display: flex !important;
