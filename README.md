@@ -19,7 +19,6 @@ Powered by **Gemini 2.5 Flash**, Tabminal understands your context.
 Built from the ground up for **iPadOS** and **iOS**.
 *   **HHKB Virtual Keyboard**: A specialized software keyboard overlay with `CTRL`, `ALT`, `TAB`, and arrow keys.
     *   **Smart Modifiers**: Toggle `SHIFT` for continuous entry.
-    *   **Drag Gestures**: Slide from `CTRL` to any key to execute combos.
 *   **Responsive Layout**: Auto-adapts to landscape/portrait modes, respecting Safe Areas and Notches.
 *   **PWA Ready**: Install to Home Screen for a full-screen, native app feel.
 
@@ -34,6 +33,11 @@ Built from the ground up for **iPadOS** and **iOS**.
 ### Prerequisites
 *   Node.js >= 18
 *   An API Key (OpenRouter / Google AI Studio)
+
+### ⚠️ Security Warning
+Tabminal provides **full read/write access** to the underlying file system.
+*   **Do NOT expose this to the public internet** without proper protection (VPN, etc).
+*   The `--accept-terms` flag is required to acknowledge that you understand these risks.
 
 ### Quick Start (No Install)
 Run directly with `npx`:
@@ -89,7 +93,6 @@ You can configure Tabminal via command-line arguments, environment variables, or
 ### Mobile Touch
 *   **Virtual `^C`**: Send SIGINT.
 *   **Virtual `SYM`**: Toggle full keyboard overlay.
-*   **Long Press `CTRL`**: Drag to simulate key combos.
 
 ## 🛠 Tech Stack
 *   **Backend**: Node.js, Koa, node-pty, WebSocket.
