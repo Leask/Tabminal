@@ -96,9 +96,9 @@ You can configure Tabminal via command-line arguments, environment variables, or
 *   **Virtual `SYM`**: Toggle full keyboard overlay.
 
 ## 🛠 Tech Stack
-*   **Backend**: Node.js, Koa, node-pty, WebSocket.
-*   **Frontend**: Vanilla JS, xterm.js, Monaco Editor.
-*   **AI**: Integration via `utilitas`.
+*   **Backend**: [Node.js](https://nodejs.org), [Koa](https://github.com/koajs/koa), [node-pty](https://github.com/microsoft/node-pty), [WebSocket](https://github.com/websockets/ws).
+*   **Frontend**: Vanilla JS, [xterm.js](https://github.com/xtermjs/xterm.js), [Monaco Editor](https://github.com/microsoft/monaco-editor).
+*   **AI**: Integration via [utilitas](https://github.com/leask/utilitas).
 
 ## 📄 License
 [MIT](LICENSE)
