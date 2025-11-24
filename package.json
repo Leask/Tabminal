@@ -33,7 +33,9 @@
   "dependencies": {
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^14.0.0",
+    "@mozilla/readability": "^0.6.0",
     "js-tiktoken": "^1.0.21",
+    "jsdom": "^27.2.0",
     "koa": "^3.1.1",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
