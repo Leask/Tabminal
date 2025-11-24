@@ -1276,33 +1276,33 @@ kbd {
     }
     /* Adjust internal labels */
     .key-main { top: 0px; left: 4px; font-size: 11px; }
-/* Terminal Search Bar */
+/* Terminal Search Bar - Monaco Style */
 .search-bar {
     position: absolute;
-    top: 10px;
-    right: 20px;
-    background-color: rgba(0, 43, 54, 0.9);
-    backdrop-filter: blur(4px);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 4px;
+    top: 4px;
+    right: 24px; /* Inside scrollbar area */
+    background-color: var(--bg-surface);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    border: none;
+    border-radius: 3px;
+    padding: 3px;
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
     z-index: 50;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 
 .search-bar input {
-    background: rgba(0,0,0,0.2);
-    border: 1px solid var(--border-color);
-    color: var(--text-highlight);
-    padding: 4px 8px;
-    border-radius: 3px;
-    width: 180px;
+    background-color: var(--bg-base);
+    border: 1px solid transparent;
+    color: var(--text-base);
+    padding: 2px 6px;
+    border-radius: 2px;
+    width: 160px;
     font-family: inherit;
     font-size: 12px;
     outline: none;
+    height: 22px;
 }
 
 .search-bar input:focus {
@@ -1311,10 +1311,10 @@ kbd {
 
 .search-bar button {
     background: transparent;
-    border: 1px solid transparent;
-    color: var(--text-muted);
-    width: 24px;
-    height: 24px;
+    border: none;
+    color: var(--text-base);
+    width: 22px;
+    height: 22px;
     border-radius: 3px;
     cursor: pointer;
     display: flex;
@@ -1326,6 +1326,5 @@ kbd {
 }
 
 .search-bar button:hover {
-    background: rgba(255,255,255,0.1);
-    color: var(--text-highlight);
+    background-color: rgba(255, 255, 255, 0.1);
 }

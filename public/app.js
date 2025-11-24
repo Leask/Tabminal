@@ -1923,9 +1923,17 @@ async function initApp() {
         const session = state.sessions.get(state.activeSessionId);
         if (session) session.mainTerm.focus();
     }
+    
+    // Force focus again after layout settles
+    setTimeout(() => {
+        if (state.activeSessionId) {
+            const session = state.sessions.get(state.activeSessionId);
+            if (session) session.mainTerm.focus();
+        }
+    }, 200);
 }
 
-// Virtual Keyboard Logic
+// Start the app
 const virtualKeys = document.getElementById('virtual-keys');
 
 if (virtualKeys) {
@@ -2228,7 +2236,7 @@ document.addEventListener('keydown', (e) => {
             }
             return;
         }
-        
+
         // Ctrl + Shift + ?: Help
         if (key === '?' || (code === 'Slash' && e.shiftKey)) {
             e.preventDefault();
@@ -2263,6 +2271,24 @@ document.addEventListener('keydown', (e) => {
                 if (newIdx >= sessionIds.length) newIdx = 0;
                 switchToSession(sessionIds[newIdx]);
             }
+        }
+    }
+    
+    // Ctrl Only Context (Focus Switching)
+    if (!e.shiftKey && !e.altKey) {
+        if (code === 'ArrowUp') {
+            e.preventDefault();
+            if (editorManager && editorManager.pane.style.display !== 'none') {
+                editorManager.editor.focus();
+            }
+            return;
+        }
+        if (code === 'ArrowDown') {
+            e.preventDefault();
+            if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
+                state.sessions.get(state.activeSessionId).mainTerm.focus();
+            }
+            return;
         }
     }
     

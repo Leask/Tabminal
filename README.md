@@ -79,6 +79,7 @@ You can configure Tabminal via command-line arguments or environment variables.
 *   **`Ctrl + Shift + [` / `]`**: Switch Previous/Next Tab
 *   **`Ctrl + Alt + [` / `]`**: Switch Previous/Next Open File in Editor
 *   **`Ctrl + Shift + E`**: Toggle Editor Pane
+*   **`Ctrl + Up` / `Down`**: Switch Focus between Editor and Terminal
 *   **`Ctrl + Shift + ?`**: Show Shortcuts Help
 
 ### Touch Gestures (Mobile)
