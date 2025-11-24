@@ -883,9 +883,15 @@ kbd {
     width: 100%;
     min-width: 0; /* Prevent overflow */
     overflow: visible; /* Allow search bar to protrude */
-    padding: 10px 0 10px 10px;
+    background-color: #002b36;
+    /* Padding ensures terminal text doesn't touch edges */
+    padding: 0 0 10px 10px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 5; /* Lower than editor */
+}
+
+.terminal-wrapper.maximized {
+    padding-top: 10px;
 }
 
 .editor-pane {

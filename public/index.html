@@ -36,6 +36,17 @@
                     document.body.scrollTop = 0;
                 }
                 document.documentElement.scrollTop = 0;
+
+                // Sync terminal padding state with editor visibility
+                const editorPane = document.getElementById('editor-pane');
+                const terminalWrapper = document.getElementById('terminal-wrapper');
+                if (editorPane && terminalWrapper) {
+                    if (editorPane.style.display !== 'none') {
+                        terminalWrapper.classList.remove('maximized');
+                    } else {
+                        terminalWrapper.classList.add('maximized');
+                    }
+                }
             }
 
             if (window.visualViewport) {
