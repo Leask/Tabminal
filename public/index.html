@@ -154,20 +154,21 @@
 
                 <div id="terminal-wrapper" class="terminal-wrapper">
                     <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
-                                    <div id="search-bar" class="search-bar" style="display: none;">
-                                        <button id="search-toggle-replace" class="icon-btn" title="Toggle Replace">></button>
-                                        <div class="search-input-wrapper">
-                                            <input type="text" id="search-input" placeholder="Find">
-                                            <div class="search-options">                                <button id="search-case" class="option-btn" title="Match Case">Aa</button>
-                                <button id="search-word" class="option-btn" title="Whole Word">ab</button>
-                                <button id="search-regex" class="option-btn" title="Use Regular Expression">.*</button>
-                            </div>
-                        </div>
-                        <span id="search-results" class="search-results"></span>
-                        <button id="search-prev" class="nav-btn" title="Previous Match">↑</button>
-                        <button id="search-next" class="nav-btn" title="Next Match">↓</button>
-                        <button id="search-close" class="close-btn" title="Close">×</button>
-                    </div>
+                                                    <div id="search-bar" class="search-bar" style="display: none;">
+                                                        <button id="search-toggle-replace" class="icon-btn codicon codicon-chevron-right" title="Toggle Replace"></button>
+                                                        <div class="search-input-wrapper">
+                                                            <input type="text" id="search-input" placeholder="Find">
+                                                            <div class="search-options">
+                                                                <button id="search-case" class="option-btn codicon codicon-case-sensitive" title="Match Case"></button>
+                                                                <button id="search-word" class="option-btn codicon codicon-whole-word" title="Whole Word"></button>
+                                                                <button id="search-regex" class="option-btn codicon codicon-regex" title="Use Regular Expression"></button>
+                                                            </div>
+                                                        </div>
+                                                        <span id="search-results" class="search-results"></span>
+                                                        <button id="search-prev" class="nav-btn codicon codicon-arrow-up" title="Previous Match"></button>
+                                                        <button id="search-next" class="nav-btn codicon codicon-arrow-down" title="Next Match"></button>
+                                                        <button id="search-close" class="close-btn codicon codicon-close" title="Close"></button>
+                                                    </div>
                 </div>
             </main>
         </div>

@@ -17,7 +17,7 @@
   font-display: swap;
 }
 
-/* Terminal Search Bar (VS Code Style) - Moved to Top */
+/* Terminal Search Bar (VS Code Style - Exact Match) */
 .search-bar {
     position: absolute;
     top: -10px;
@@ -26,27 +26,27 @@
     display: flex;
     align-items: center;
     background-color: #252526;
-    padding: 3px;
-    border-radius: 0 0 3px 3px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    border: 1px solid #454545;
-    border-top: none;
+    height: 33px; /* Exact VS Code height */
+    padding: 0 4px; /* Exact VS Code padding */
+    border-radius: 0 0 4px 4px; /* Rounded bottom */
+    box-shadow: 0 0 8px 2px rgba(0, 0, 0, 0.36); /* Exact VS Code shadow */
+    border: none; /* VS Code uses shadow, not border */
 }
 
 .search-bar .search-input-wrapper {
     position: relative;
     display: flex;
     align-items: center;
-    margin-right: 4px;
+    margin-right: 6px;
 }
 
 .search-bar input {
     background-color: #3c3c3c;
-    border: 1px solid #3c3c3c;
+    border: 1px solid transparent; /* Transparent border default */
     color: #cccccc;
     font-family: inherit;
-    font-size: 12px; /* Smaller font */
-    height: 26px;
+    font-size: 13px; /* Exact VS Code input height */
+    height: 23px; /* Exact VS Code input height */
     width: 240px;
     padding: 0 6px;
     padding-right: 70px;
@@ -56,7 +56,7 @@
 }
 
 .search-bar input:focus {
-    border-color: #007fd4;
+    border-color: #007fd4; /* VS Code Focus Blue */
 }
 
 /* Overlay Options inside Input */
@@ -72,7 +72,7 @@
 .search-bar .option-btn {
     background: transparent;
     border: none;
-    color: #c5c5c5; /* Brighter gray */
+    color: #c5c5c5;
     width: 20px;
     height: 20px;
     border-radius: 3px;
@@ -82,16 +82,16 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 16px; /* Codicon size */
 }
 
 .search-bar .option-btn:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(90, 93, 94, 0.31);
 }
 
 .search-bar .option-btn.active {
-    color: #007fd4;
-    background-color: rgba(0, 127, 212, 0.15);
+    color: #ffffff;
+    background-color: rgba(0, 127, 212, 0.4);
 }
 
 /* Navigation & Close Buttons */
@@ -106,7 +106,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px; /* Smaller arrows (was 16) */
+    font-size: 16px; /* Codicon size */
     padding: 0;
 }
 
@@ -116,7 +116,7 @@
 
 .search-bar .search-results {
     color: #cccccc;
-    font-size: 11px; /* Smaller font */
+    font-size: 12px;
     margin: 0 8px;
     min-width: 60px;
     text-align: center;

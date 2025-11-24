@@ -2178,7 +2178,7 @@ if (searchBar) {
         if (forward) found = addon.findNext(term, searchOptions);
         else found = addon.findPrevious(term, searchOptions);
         
-        if (!found && term.length > 0) {
+        if (!found) {
             searchResults.textContent = 'No results';
         } else {
             searchResults.textContent = '';
@@ -2189,7 +2189,8 @@ if (searchBar) {
         searchOptions[key] = !searchOptions[key];
         btn.classList.toggle('active', searchOptions[key]);
         // Re-trigger search to apply option
-        if (searchInput.value) doSearch(true);
+        // if (searchInput.value) doSearch(true); // Always trigger?
+        doSearch(true);
     };
 
     if (searchCaseBtn) searchCaseBtn.onclick = () => toggleOption(searchCaseBtn, 'caseSensitive');
@@ -2205,7 +2206,7 @@ if (searchBar) {
             ...searchOptions 
         });
         
-        if (!found && term.length > 0) {
+        if (!found) {
             searchResults.textContent = 'No results';
         } else {
             searchResults.textContent = '';
