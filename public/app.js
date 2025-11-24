@@ -540,7 +540,6 @@ class EditorManager {
 
         this.renderEditorTabs();
         this.updateEditorPaneVisibility();
-        this.currentSession.saveState();
         
         if (state.activeFilePath === filePath) {
             if (state.openFiles.length > 0) {
@@ -550,6 +549,9 @@ class EditorManager {
                 this.showEmptyState();
             }
         }
+        
+        // Save state AFTER updating activeFilePath
+        this.currentSession.saveState();
     }
 
     renderEditorTabs() {
