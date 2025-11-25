@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.leask.tabminal</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Path to Node.js executable. Check 'which node' in terminal -->
+        <string>/opt/homebrew/bin/node</string>
+        <!-- Path to the application entry point -->
+        <string>[[PATH_TO_THE_PROJECT]]/src/server.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>[[PATH_TO_THE_PROJECT]]</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Logging -->
+    <!-- Logs will be saved to ~/Library/Logs/Tabminal/ -->
+    <!-- Ensure this directory exists: mkdir -p ~/Library/Logs/Tabminal -->
+    <key>StandardOutPath</key>
+    <string>/Users/[[USER]]/Library/Logs/Tabminal/tabminal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/[[USER]]/Library/Logs/Tabminal/tabminal.error.log</string>
+</dict>
+</plist>
