@@ -2,12 +2,13 @@
 
 > **Tab(ter)minal, the Cloud-Native, Proactive AI Integrated Terminal works in modern browsers.**
 > Seamlessly code from your desktop, tablet, or phone with an intelligent, persistent, and rich experience.
+> This project was built using Gemini and Codex wich 90% vibe-coding. The real project that `built for the vibe, with the vibe`.
 
 ![Tabminal Banner](public/favicon.svg)
 
 ## 🌟 Why Tabminal?
 
-Tabminal bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on mobile devices.
+Tabminal bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on desktop and mobile devices.
 
 ## ✨ Innovative Designs
 
