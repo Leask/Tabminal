@@ -1,7 +1,7 @@
 # `t>` Tabminal
 
-> **The AI-Native Terminal for the Mobile Age.**
-> Seamlessly code from your Desktop, iPad, or iPhone with an intelligent, persistent, and touch-optimized experience.
+> **Tab(ter)minal, the Cloud-Native, Proactive AI Integrated Terminal works in modern browsers.**
+> Seamlessly code from your desktop, tablet, or phone with an intelligent, persistent, and rich experience.
 
 ![Tabminal Banner](public/favicon.svg)
 
