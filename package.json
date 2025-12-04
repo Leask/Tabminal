@@ -12,6 +12,7 @@
     "dev": "node --watch src/server.mjs",
     "build": "node build.mjs",
     "test": "node --test",
+    "updep": "npx npm-check-updates -u && npm install",
     "test:watch": "node --test --watch",
     "lint": "eslint ."
   },
@@ -32,7 +33,7 @@
   },
   "dependencies": {
     "@fontsource/monaspace-neon": "^5.2.5",
-    "@koa/router": "^14.0.0",
+    "@koa/router": "^15.0.0",
     "@mozilla/readability": "^0.6.0",
     "js-tiktoken": "^1.0.21",
     "jsdom": "^27.2.0",
@@ -42,7 +43,7 @@
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.0.0",
     "openai": "^6.9.1",
-    "utilitas": "^2000.3.3",
+    "utilitas": "^2000.3.20",
     "ws": "^8.18.3"
   },
   "repository": {
