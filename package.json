@@ -19,8 +19,7 @@
   "keywords": [
     "terminal",
     "web-terminal",
-    "xterm.js",
-    "node-pty",
+    "ghostty-web",
     "websocket",
     "monitoring",
     "dashboard",
@@ -35,6 +34,7 @@
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^15.0.0",
     "@mozilla/readability": "^0.6.0",
+    "ghostty-web": "^0.3.0",
     "js-tiktoken": "^1.0.21",
     "jsdom": "^27.2.0",
     "koa": "^3.1.1",

@@ -1,7 +1,5 @@
-import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm';
-import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm';
+import { Terminal, FitAddon, init } from './libs/ghostty/ghostty-web.js';
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
-import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/+esm';
 
 // Detect Mobile/Tablet (focus on touch capability for font sizing)
@@ -81,7 +79,7 @@ class AuthManager {
         function rightRotate(value, amount) {
             return (value >>> amount) | (value << (32 - amount));
         }
-        
+
         const mathPow = Math.pow;
         const maxWord = mathPow(2, 32);
         const lengthProperty = 'length';
@@ -90,12 +88,12 @@ class AuthManager {
 
         const words = [];
         const asciiBitLength = ascii[lengthProperty] * 8;
-        
+
         let hash = (this._h = this._h || [
             0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
         ]).slice(0);
-        
+
         const k = (this._k = this._k || [
             0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
             0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -106,23 +104,23 @@ class AuthManager {
             0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
             0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
         ]);
-        
+
         ascii += '\x80';
         while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
-        
+
         for (i = 0; i < ascii[lengthProperty]; i++) {
             j = ascii.charCodeAt(i);
             words[i >> 2] |= j << ((3 - i) % 4) * 8;
         }
         words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
         words[words[lengthProperty]] = (asciiBitLength);
-        
+
         for (j = 0; j < words[lengthProperty];) {
             const w = words.slice(j, j += 16);
             const oldHash = hash;
 
             hash = hash.slice(0, 8);
-            
+
             for (i = 0; i < 64; i++) {
                 const i2 = i + j;
                 const w15 = w[i - 15], w2 = w[i - 2];
@@ -133,25 +131,25 @@ class AuthManager {
                     + ((e & hash[5]) ^ ((~e) & hash[6])) // ch
                     + k[i]
                     + (w[i] = (i < 16) ? w[i] : (
-                            w[i - 16]
-                            + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) // s0
-                            + w[i - 7]
-                            + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10)) // s1
-                        ) | 0
+                        w[i - 16]
+                        + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) // s0
+                        + w[i - 7]
+                        + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10)) // s1
+                    ) | 0
                     );
 
                 const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) // S0
                     + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2])); // maj
-                
+
                 hash = [(temp1 + temp2) | 0].concat(hash);
                 hash[4] = (hash[4] + temp1) | 0;
             }
-            
+
             for (i = 0; i < 8; i++) {
                 hash[i] = (hash[i] + oldHash[i]) | 0;
             }
         }
-        
+
         for (i = 0; i < 8; i++) {
             for (j = 3; j + 1; j--) {
                 const b = (hash[i] >> (j * 8)) & 255;
@@ -212,12 +210,12 @@ class AuthManager {
 
         try {
             const response = await fetch(url, { ...options, headers });
-            
+
             if (response.status === 401) {
                 this.logout();
                 throw new Error('Unauthorized');
             }
-            
+
             if (response.status === 403) {
                 const data = await response.json().catch(() => ({}));
                 this.stopHeartbeat();
@@ -253,7 +251,7 @@ class EditorManager {
         this.currentSession = null;
         this.globalModels = new Map(); // path -> { model, type: 'text'|'image' }
         this.iconMap = null;
-        
+
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
         this.resizer = document.getElementById('editor-resizer');
@@ -262,7 +260,7 @@ class EditorManager {
         this.imagePreviewContainer = document.getElementById('image-preview-container');
         this.imagePreview = document.getElementById('image-preview');
         this.emptyState = document.getElementById('empty-editor-state');
-        
+
         this.initResizer();
         this.initMonaco();
         this.loadIconMap();
@@ -279,7 +277,7 @@ class EditorManager {
 
     getIcon(name, isDirectory, isExpanded) {
         if (!this.iconMap) return isDirectory ? (isExpanded ? '📂' : '📁') : '📄';
-        
+
         if (isDirectory) {
             const folderIcon = isExpanded ? (this.iconMap.folderOpen || 'folder-src-open') : (this.iconMap.folder || 'folder-src');
             return `<img src="/icons/${folderIcon}.svg" class="file-icon" alt="folder">`;
@@ -308,7 +306,7 @@ class EditorManager {
             const newHeight = startHeight + dy;
             const containerHeight = this.pane.parentElement.clientHeight;
             const resizerHeight = this.resizer.offsetHeight;
-            
+
             if (newHeight > 100 && newHeight < containerHeight - resizerHeight - 50) {
                 const flex = `0 0 ${newHeight}px`;
                 this.pane.style.flex = flex;
@@ -343,7 +341,7 @@ class EditorManager {
     }
 
     initMonaco() {
-        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' }});
+        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
         require(['vs/editor/editor.main'], (monaco) => {
             this.monacoInstance = monaco;
             this.editor = monaco.editor.create(this.monacoContainer, {
@@ -357,16 +355,16 @@ class EditorManager {
                 fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", \"SFMono-Regular\", \"SF Mono\", \"JetBrains Mono\", Menlo, Consolas, monospace",
                 scrollBeyondLastLine: false,
             });
-            
+
             this.editor.onDidChangeModelContent(() => {
                 if (!this.currentSession) return;
                 const filePath = this.currentSession.editorState.activeFilePath;
                 if (!filePath) return;
-                
+
                 const pending = getPendingSession(this.currentSession.id);
                 pending.fileWrites.set(filePath, this.editor.getValue());
             });
-            
+
             monaco.editor.defineTheme('solarized-dark', {
                 base: 'vs-dark',
                 inherit: true,
@@ -386,7 +384,7 @@ class EditorManager {
                 }
             });
             monaco.editor.setTheme('solarized-dark');
-            
+
             // Process pending models
             for (const [path, file] of this.globalModels) {
                 if (file.type === 'text' && !file.model && file.content !== null) {
@@ -405,10 +403,10 @@ class EditorManager {
         const state = this.currentSession.editorState;
         const hasOpenFiles = state.openFiles.length > 0;
         const shouldShow = state.isVisible && hasOpenFiles;
-        
+
         this.pane.style.display = shouldShow ? 'flex' : 'none';
         this.resizer.style.display = shouldShow ? 'flex' : 'none';
-        
+
         if (shouldShow) {
             this.layout();
         } else {
@@ -422,13 +420,13 @@ class EditorManager {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
         state.isVisible = !state.isVisible;
-        
+
         const tab = document.querySelector(`.tab-item[data-session-id="${this.currentSession.id}"]`);
         if (tab) {
             if (state.isVisible) tab.classList.add('editor-open');
             else tab.classList.remove('editor-open');
         }
-        
+
         if (state.isVisible) {
             // Only render if empty (first open)
             if (this.currentSession.fileTreeElement && this.currentSession.fileTreeElement.children.length === 0) {
@@ -439,7 +437,7 @@ class EditorManager {
                 this.activateTab(state.activeFilePath, true);
             }
         }
-        
+
         this.updateEditorPaneVisibility();
         this.currentSession.saveState();
     }
@@ -469,9 +467,9 @@ class EditorManager {
                 this.activateTab(state.activeFilePath, true);
             }
         }
-        
+
         this.updateEditorPaneVisibility();
-        
+
         // Restore layout
         if (session.layoutState) {
             this.pane.style.flex = session.layoutState.editorFlex;
@@ -487,7 +485,7 @@ class EditorManager {
         if (this.editor) {
             const width = this.pane.clientWidth;
             const height = this.pane.clientHeight - 35; // Subtract fixed safety margin
-            
+
             if (width > 0 && height > 0) {
                 this.editor.layout({ width, height });
             } else {
@@ -503,13 +501,13 @@ class EditorManager {
             const files = await res.json();
 
             const ul = document.createElement('ul');
-            
+
             for (const file of files) {
                 const li = document.createElement('li');
                 const div = document.createElement('div');
                 div.className = 'file-tree-item';
                 if (file.isDirectory) div.classList.add('is-dir');
-                
+
                 let isExpanded = false;
                 if (file.isDirectory && globalExpandedPaths.has(file.path)) {
                     isExpanded = true;
@@ -519,29 +517,29 @@ class EditorManager {
                 const icon = document.createElement('span');
                 icon.className = 'icon';
                 icon.innerHTML = this.getIcon(file.name, file.isDirectory, isExpanded);
-                
+
                 const name = document.createElement('span');
                 name.textContent = file.name;
-                
+
                 div.appendChild(icon);
                 div.appendChild(name);
-                
+
                 div.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     if (file.isDirectory) {
                         if (li.classList.contains('expanded')) {
                             li.classList.remove('expanded');
                             globalExpandedPaths.delete(file.path);
-                            auth.fetch('/api/memory/expand', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: file.path, expanded: false }) });
-                            
+                            auth.fetch('/api/memory/expand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path, expanded: false }) });
+
                             icon.innerHTML = this.getIcon(file.name, true, false);
                             const childUl = li.querySelector('ul');
                             if (childUl) childUl.remove();
                         } else {
                             li.classList.add('expanded');
                             globalExpandedPaths.add(file.path);
-                            auth.fetch('/api/memory/expand', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: file.path, expanded: true }) });
-                            
+                            auth.fetch('/api/memory/expand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path, expanded: true }) });
+
                             icon.innerHTML = this.getIcon(file.name, true, true);
                             await this.renderTree(file.path, li, session);
                         }
@@ -551,7 +549,7 @@ class EditorManager {
                 });
 
                 li.appendChild(div);
-                
+
                 if (isExpanded) {
                     this.renderTree(file.path, li, session);
                 }
@@ -572,13 +570,13 @@ class EditorManager {
             state.openFiles.push(filePath);
             this.renderEditorTabs();
         }
-        
+
         this.updateEditorPaneVisibility();
 
         if (!this.globalModels.has(filePath)) {
             const ext = filePath.split('.').pop().toLowerCase();
             const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
-            
+
             let model = null;
             let content = null;
             let readonly = false;
@@ -590,7 +588,7 @@ class EditorManager {
                     const data = await res.json();
                     content = data.content;
                     readonly = data.readonly;
-                    
+
                     if (this.monacoInstance) {
                         const uri = this.monacoInstance.Uri.file(filePath);
                         const existing = this.monacoInstance.editor.getModel(uri);
@@ -631,7 +629,7 @@ class EditorManager {
 
         this.renderEditorTabs();
         this.updateEditorPaneVisibility();
-        
+
         if (state.activeFilePath === filePath) {
             if (state.openFiles.length > 0) {
                 this.activateTab(state.openFiles[state.openFiles.length - 1]);
@@ -640,7 +638,7 @@ class EditorManager {
                 this.showEmptyState();
             }
         }
-        
+
         // Save state AFTER updating activeFilePath
         this.currentSession.saveState();
     }
@@ -654,25 +652,26 @@ class EditorManager {
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
             if (path === state.activeFilePath) tab.classList.add('active');
-            
+
             const fileModel = this.globalModels.get(path);
             if (fileModel && fileModel.readonly) {
                 tab.classList.add('readonly');
             }
-            
+
             const name = path.split('/').pop();
             const span = document.createElement('span');
             span.textContent = name;
-            
-                        const closeBtn = document.createElement('span');
-                closeBtn.className = 'close-btn';
-                closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-                closeBtn.onclick = (e) => {
-                            e.stopPropagation();
-                            this.closeFile(path);            };
-            
+
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'close-btn';
+            closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.closeFile(path);
+            };
+
             tab.onclick = () => this.activateTab(path);
-            
+
             tab.appendChild(span);
             tab.appendChild(closeBtn);
             this.tabsContainer.appendChild(tab);
@@ -693,7 +692,7 @@ class EditorManager {
         state.activeFilePath = filePath;
         this.currentSession.saveState();
         const file = this.globalModels.get(filePath);
-        
+
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
 
@@ -705,18 +704,18 @@ class EditorManager {
         if (file.type === 'image') {
             this.monacoContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'flex';
-            
+
             this.imagePreview.onerror = () => {
                 alert(`Failed to load image: ${filePath.split('/').pop()}`, { type: 'error', title: 'Error' });
                 this.closeFile(filePath);
                 this.imagePreview.onerror = null;
             };
-            
+
             this.imagePreview.src = `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${auth.token}`;
         } else {
             this.imagePreviewContainer.style.display = 'none';
             this.monacoContainer.style.display = 'block';
-            
+
             if (!file.model && file.content !== null && this.monacoInstance) {
                 file.model = this.monacoInstance.editor.createModel(file.content, undefined, this.monacoInstance.Uri.file(filePath));
             }
@@ -724,7 +723,7 @@ class EditorManager {
             if (this.editor && file.model) {
                 this.editor.setModel(file.model);
                 this.editor.updateOptions({ readOnly: !!file.readonly });
-                
+
                 const savedViewState = state.viewStates.get(filePath);
                 if (savedViewState) {
                     this.editor.restoreViewState(savedViewState);
@@ -766,19 +765,19 @@ measureFps();
 
 // #region Session Class
 class Session {
-// ... (keep existing Session class) ...
+    // ... (keep existing Session class) ...
     constructor(data) {
         this.id = data.id;
         this.createdAt = data.createdAt;
         this.shell = data.shell || 'Terminal';
         this.initialCwd = data.initialCwd || '';
-        
+
         this.title = data.title || this.shell.split('/').pop();
         this.cwd = data.cwd || this.initialCwd;
         this.env = data.env || '';
         this.cols = data.cols || 80;
         this.rows = data.rows || 24;
-        
+
         this.saveStateTimer = null;
 
         this.editorState = {
@@ -788,7 +787,7 @@ class Session {
             activeFilePath: data.editorState?.activeFilePath || null,
             viewStates: new Map() // Path -> ViewState
         };
-        
+
         this.layoutState = {
             editorFlex: '2 1 0%'
         };
@@ -803,12 +802,9 @@ class Session {
             cols: this.cols,
             theme: { background: '#002b36', foreground: '#839496', cursor: 'transparent', selectionBackground: 'transparent' }
         });
-        
-        // Only load CanvasAddon on Desktop to save GPU memory
-        if (window.innerWidth >= 768) {
-            this.previewTerm.loadAddon(new CanvasAddon());
-        }
-        
+
+        // CanvasAddon is native in ghostty-web
+
         this.wrapperElement = null;
 
         // Main Terminal
@@ -826,9 +822,11 @@ class Session {
         this.mainLinksAddon = new WebLinksAddon();
         this.searchAddon = new SearchAddon();
         this.mainTerm.loadAddon(this.mainFitAddon);
-        this.mainTerm.loadAddon(this.mainLinksAddon);
-        this.mainTerm.loadAddon(this.searchAddon);
-        this.mainTerm.loadAddon(new CanvasAddon());
+        // WebLinksAddon must be loaded after terminal is opened (in switchToSession)
+        this.addonsLoaded = false;
+        // this.searchAddon = new SearchAddon();
+        // this.mainTerm.loadAddon(this.searchAddon);
+        // this.mainTerm.loadAddon(new CanvasAddon());
 
         // Event Listeners
         this.mainTerm.onData(data => {
@@ -839,7 +837,7 @@ class Session {
         this.mainTerm.onResize(size => {
             this.previewTerm.resize(size.cols, size.rows);
             this.updatePreviewScale();
-            
+
             const pending = getPendingSession(this.id);
             pending.resize = { cols: size.cols, rows: size.rows };
         });
@@ -856,7 +854,7 @@ class Session {
         if (data.cwd && data.cwd !== this.cwd) {
             this.cwd = data.cwd;
             changed = true;
-            
+
             if (this.editorState) {
                 this.editorState.root = this.cwd;
                 if (this.editorState.isVisible) {
@@ -868,7 +866,7 @@ class Session {
             this.env = data.env;
             changed = true;
         }
-        
+
         if (data.cols && data.rows && (data.cols !== this.cols || data.rows !== this.rows)) {
             this.cols = data.cols;
             this.rows = data.rows;
@@ -890,26 +888,26 @@ class Session {
             this.wrapperElement.style.width = '';
             this.wrapperElement.style.height = '';
             this.wrapperElement.style.transform = '';
-            
+
             const termWidth = this.previewTerm.element.offsetWidth;
             const termHeight = this.previewTerm.element.offsetHeight;
-            
+
             if (termWidth === 0 || termHeight === 0) return;
-            
+
             const container = this.wrapperElement.parentElement;
             const availableWidth = container.clientWidth;
             const availableHeight = container.clientHeight; // Use clientHeight to respect min-height
-            
+
             // Calculate scale to fit width
             const scale = availableWidth / termWidth;
-            
+
             this.wrapperElement.style.width = `${termWidth}px`;
             this.wrapperElement.style.height = `${termHeight}px`;
-            
+
             const scaledHeight = termHeight * scale;
             const targetHeight = Math.max(76, scaledHeight); // Match CSS min-height
             container.style.height = `${targetHeight}px`;
-            
+
             if (scaledHeight < targetHeight) {
                 const topOffset = (targetHeight - scaledHeight) / 2;
                 this.wrapperElement.style.transform = `translate(0px, ${topOffset}px) scale(${scale})`;
@@ -959,7 +957,7 @@ class Session {
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const endpoint = `${protocol}://${window.location.host}/ws/${this.id}`;
-        
+
         // Using query param for auth token
         this.socket = new WebSocket(`${endpoint}?token=${auth.token}`);
 
@@ -978,7 +976,7 @@ class Session {
             // We rely on the global heartbeat (syncSessions) to handle reconnection.
             // This event listener just allows the socket to be garbage collected.
         });
-        
+
         this.socket.addEventListener('error', () => {
             // Often fires on 401 or connection refused
         });
@@ -1028,7 +1026,7 @@ class Session {
         this.shouldReconnect = false;
         clearTimeout(this.retryTimer);
         this.socket?.close();
-        
+
         try {
             if (this.previewTerm) this.previewTerm.dispose();
         } catch (e) {
@@ -1036,7 +1034,7 @@ class Session {
                 console.warn('Error disposing preview terminal:', e);
             }
         }
-        
+
         try {
             this.mainTerm.dispose();
         } catch (e) {
@@ -1126,7 +1124,7 @@ async function syncSessions() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ updates })
         });
-        
+
         const latency = Date.now() - startTime;
 
         if (!response.ok) {
@@ -1135,12 +1133,12 @@ async function syncSessions() {
             updateSystemStatus(null, -1); // Record missing data
             return;
         }
-        
+
         // Clear sent updates
         for (const update of updates.sessions) {
             const pending = pendingChanges.sessions.get(update.id);
             if (!pending) continue;
-            
+
             if (update.resize) delete pending.resize;
             if (update.editorState) delete pending.editorState;
             if (update.fileWrites) {
@@ -1151,7 +1149,7 @@ async function syncSessions() {
         }
 
         const data = await response.json();
-        
+
         setStatus('connected');
         if (data.system) {
             updateSystemStatus(data.system, latency);
@@ -1171,7 +1169,7 @@ let lastLatency = 0;
 const TOTAL_POINTS = 110;
 const VISIBLE_POINTS = 100;
 const BUFFER_POINTS = 5;
-const latencyHistory = new Array(TOTAL_POINTS).fill(0); 
+const latencyHistory = new Array(TOTAL_POINTS).fill(0);
 let hasInitializedHistory = false;
 let lastUpdateTime = performance.now();
 let smoothedMaxVal = 1;
@@ -1183,7 +1181,7 @@ const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
 function updateCanvasSize() {
     if (!heartbeatCanvas) return;
     let bottomGap = 0;
-    
+
     if (window.visualViewport) {
         // Sanity check: If height is invalid (iPad PWA bug), assume full screen (0 gap)
         if (window.visualViewport.height > 100) {
@@ -1192,9 +1190,9 @@ function updateCanvasSize() {
             bottomGap = 0;
         }
     }
-    
+
     currentBottomGap = bottomGap;
-    
+
     if (bottomGap < 10) {
         heartbeatCanvas.style.height = '0px';
         heartbeatCanvas.style.display = 'none';
@@ -1209,24 +1207,24 @@ function updateCanvasSize() {
 function cubicBSpline(p0, p1, p2, p3, t) {
     const t2 = t * t;
     const t3 = t2 * t;
-    
+
     const b0 = (1 - t) * (1 - t) * (1 - t) / 6;
     const b1 = (3 * t3 - 6 * t2 + 4) / 6;
     const b2 = (-3 * t3 + 3 * t2 + 3 * t + 1) / 6;
     const b3 = t3 / 6;
-    
+
     return p0 * b0 + p1 * b1 + p2 * b2 + p3 * b3;
 }
 
 function drawHeartbeat() {
     updateCanvasSize();
-    
+
     const bottomCanvas = document.getElementById('heartbeat-canvas');
     const desktopCanvas = document.getElementById('desktop-heartbeat-canvas');
-    
+
     let targetCanvas = null;
     let useMaxHeight = false;
-    
+
     // Decision Logic
     if (currentBottomGap > 10) {
         // Mobile Mode: Use bottom canvas
@@ -1244,15 +1242,15 @@ function drawHeartbeat() {
             useMaxHeight = true;
         }
     }
-    
+
     if (!targetCanvas) return;
-    
+
     const ctx = targetCanvas.getContext('2d');
     if (!ctx) return;
 
     const width = targetCanvas.clientWidth;
     const height = targetCanvas.clientHeight;
-    
+
     if (width === 0 || height === 0) return;
 
     if (targetCanvas.width !== width || targetCanvas.height !== height) {
@@ -1261,23 +1259,23 @@ function drawHeartbeat() {
     }
 
     ctx.clearRect(0, 0, width, height);
-    
+
     if (latencyHistory.length < 2) return;
 
     // Calculate Scroll Progress
     const now = performance.now();
-    const progress = Math.min((now - lastUpdateTime) / 1000, 1.0); 
-    
+    const progress = Math.min((now - lastUpdateTime) / 1000, 1.0);
+
     const step = width / VISIBLE_POINTS;
-    
+
     // Smooth Scaling
     let maxVal = 0;
     for (const val of latencyHistory) if (val > maxVal) maxVal = val;
     const effectiveMax = Math.max(maxVal, 50);
     smoothedMaxVal += (effectiveMax - smoothedMaxVal) * 0.05;
-    
+
     const verticalRange = useMaxHeight ? smoothedMaxVal : (smoothedMaxVal / 0.8);
-    
+
     const padding = 3;
     const drawHeight = height - (padding * 2);
     const getY = (val) => (height - padding) - (val / verticalRange) * drawHeight;
@@ -1288,7 +1286,7 @@ function drawHeartbeat() {
     ctx.lineJoin = 'round';
 
     const len = latencyHistory.length;
-    
+
     const getX = (i) => width + step * (BUFFER_POINTS - len + 1 + i - progress);
     const getVal = (v) => (v === -1 ? 0 : v);
 
@@ -1297,12 +1295,12 @@ function drawHeartbeat() {
     // 1. Draw Fill (Only for mobile/bottom view)
     if (!useMaxHeight) {
         ctx.beginPath();
-        
+
         p0 = getVal(latencyHistory[0]);
         p1 = getVal(latencyHistory[0]);
         p2 = getVal(latencyHistory[Math.min(len - 1, 1)]);
         p3 = getVal(latencyHistory[Math.min(len - 1, 2)]);
-        
+
         ctx.moveTo(getX(0), getY(getVal(latencyHistory[0])));
 
         for (let i = 0; i < len - 1; i++) {
@@ -1310,7 +1308,7 @@ function drawHeartbeat() {
             p1 = getVal(latencyHistory[i]);
             p2 = getVal(latencyHistory[Math.min(len - 1, i + 1)]);
             p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
-            
+
             for (let t = 0; t <= 1; t += 0.1) {
                 const x = getX(i) + t * step;
                 let val = cubicBSpline(p0, p1, p2, p3, t);
@@ -1318,7 +1316,7 @@ function drawHeartbeat() {
                 ctx.lineTo(x, getY(val));
             }
         }
-        
+
         ctx.lineTo(width, height);
         ctx.lineTo(0, height);
         ctx.fillStyle = 'rgba(38, 139, 210, 0.1)';
@@ -1333,20 +1331,20 @@ function drawHeartbeat() {
         const rawP1 = latencyHistory[i];
         const rawP2 = latencyHistory[Math.min(len - 1, i + 1)];
         const isError = rawP1 === -1 || rawP2 === -1;
-        
+
         ctx.beginPath();
         ctx.strokeStyle = isError ? '#dc322f' : '#268bd2';
-        
+
         p0 = getVal(latencyHistory[Math.max(0, i - 1)]);
         p1 = getVal(rawP1);
         p2 = getVal(rawP2);
         p3 = getVal(latencyHistory[Math.min(len - 1, i + 2)]);
-        
+
         for (let t = 0; t <= 1; t += 0.1) {
             const x = getX(i) + t * step;
             let val = cubicBSpline(p0, p1, p2, p3, t);
             if (val < 0) val = 0;
-            
+
             if (t === 0) ctx.moveTo(x, getY(val));
             else ctx.lineTo(x, getY(val));
         }
@@ -1383,7 +1381,7 @@ function updateSystemStatus(system, latency) {
         // We need DISPLAY_POINTS + 1 to scroll smoothly
         if (latencyHistory.length > TOTAL_POINTS) latencyHistory.shift();
     }
-    
+
     const data = system || lastSystemData;
     if (!data) return;
 
@@ -1498,7 +1496,7 @@ async function createNewSession() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(options)
         });
-        
+
         if (!response.ok) throw new Error('Failed to create session');
         const newSession = await response.json();
         // Immediate sync to reflect the new session
@@ -1542,7 +1540,7 @@ function renderTabs() {
             } else {
                 tabListEl.appendChild(tab);
             }
-            
+
             // Mount preview
             // Only mount on Desktop to save resources and avoid visual clutter on mobile
             if (window.innerWidth >= 768) {
@@ -1575,7 +1573,7 @@ function createTabElement(session) {
         tab.classList.add('editor-open');
     }
     tab.dataset.sessionId = session.id;
-    
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'close-tab-button';
     closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
@@ -1599,19 +1597,19 @@ function createTabElement(session) {
         }
     };
     tab.appendChild(toggleEditorBtn);
-    
+
     const fileTree = document.createElement('div');
     fileTree.className = 'tab-file-tree';
     session.fileTreeElement = fileTree;
-    
+
     if (session.editorState && session.editorState.isVisible) {
         editorManager.renderTree(session.cwd, fileTree, session);
     }
     tab.appendChild(fileTree);
-    
+
     const previewContainer = document.createElement('div');
     previewContainer.className = 'preview-container';
-    
+
     const wrapper = document.createElement('div');
     wrapper.className = 'preview-terminal-wrapper';
     previewContainer.appendChild(wrapper);
@@ -1632,7 +1630,7 @@ function createTabElement(session) {
 
     const metaTime = document.createElement('div');
     metaTime.className = 'meta';
-    
+
     const d = new Date(session.createdAt);
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
@@ -1642,7 +1640,7 @@ function createTabElement(session) {
     hh = hh % 12;
     hh = hh ? hh : 12;
     const hhStr = String(hh).padStart(2, '0');
-    
+
     metaTime.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
 
     overlay.appendChild(title);
@@ -1652,7 +1650,7 @@ function createTabElement(session) {
 
     tab.appendChild(previewContainer);
     tab.appendChild(overlay);
-    
+
     tab.onclick = () => switchToSession(session.id);
 
     // Fix iOS double-tap issue
@@ -1674,11 +1672,11 @@ function createTabElement(session) {
         if (isScrolling) return;
         // Allow buttons to handle their own events
         if (e.target.closest('button') || e.target.closest('.file-tree-item')) return;
-        
+
         if (e.cancelable) e.preventDefault(); // Prevent mouse emulation (hover/click)
         switchToSession(session.id);
     });
-    
+
     return tab;
 }
 
@@ -1707,7 +1705,7 @@ class NotificationManager {
 
     send(title, body) {
         if (!('Notification' in window)) return false;
-        
+
         // Check permission status directly
         if (Notification.permission === 'granted') {
             try {
@@ -1740,7 +1738,7 @@ class ToastManager {
 
     show(title, message, type = 'info') {
         if (!this.container) return;
-        
+
         if (message === undefined || (typeof message === 'string' && ['info', 'warning', 'error', 'success'].includes(message))) {
             type = message || 'info';
             message = title;
@@ -1759,31 +1757,31 @@ class ToastManager {
         toast.className = `toast ${type}`;
         toast.dataset.title = title;
         toast.dataset.message = message;
-        
+
         const content = document.createElement('div');
         content.className = 'toast-content';
-        
+
         const titleEl = document.createElement('div');
         titleEl.className = 'toast-title';
         titleEl.textContent = title;
-        
+
         const msgEl = document.createElement('div');
         msgEl.className = 'toast-message';
         msgEl.textContent = message;
-        
+
         content.appendChild(titleEl);
         content.appendChild(msgEl);
-        
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'toast-close';
         closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
         closeBtn.onclick = () => this.dismiss(toast);
-        
+
         toast.appendChild(content);
         toast.appendChild(closeBtn);
-        
+
         this.container.insertBefore(toast, this.container.firstChild);
-        
+
         requestAnimationFrame(() => this.prune());
 
         this.startTimer(toast);
@@ -1799,7 +1797,7 @@ class ToastManager {
         toast.classList.remove('hiding'); // Ensure it's visible if it was fading out
         toast.style.animation = 'none';
         toast.offsetHeight; /* trigger reflow */
-        toast.style.animation = null; 
+        toast.style.animation = null;
         toast.dismissTimer = setTimeout(() => this.dismiss(toast), 3000);
     }
 
@@ -1807,7 +1805,7 @@ class ToastManager {
         const viewportHeight = window.innerHeight;
         const bottomLimit = viewportHeight - 20;
         const toasts = Array.from(this.container.children);
-        
+
         for (const toast of toasts) {
             const rect = toast.getBoundingClientRect();
             if (rect.bottom > bottomLimit) {
@@ -1819,13 +1817,13 @@ class ToastManager {
     dismiss(toast) {
         if (!toast || toast.classList.contains('hiding')) return;
         if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
-        
+
         toast.classList.add('hiding');
-        
+
         const remove = () => {
             if (toast.parentElement) toast.remove();
         };
-        
+
         toast.addEventListener('transitionend', remove, { once: true });
         setTimeout(remove, 550);
     }
@@ -1860,7 +1858,7 @@ let currentConnectionStatus = null;
 
 function setStatus(status) {
     if (status === currentConnectionStatus) return;
-    
+
     const prevStatus = currentConnectionStatus;
     currentConnectionStatus = status;
 
@@ -1883,22 +1881,28 @@ async function switchToSession(sessionId) {
     renderTabs();
 
     const session = state.sessions.get(sessionId);
-    
+
     // Clear main view
     terminalEl.innerHTML = '';
-    
+
     // Mount new session
     session.mainTerm.open(terminalEl);
+
+    if (!session.addonsLoaded) {
+        session.mainTerm.loadAddon(session.mainLinksAddon);
+        session.addonsLoaded = true;
+    }
+
     session.mainFitAddon.fit();
     session.mainTerm.focus();
-    
+
     // Double check focus
     requestAnimationFrame(() => {
         session.mainTerm.focus();
     });
-    
+
     session.reportResize();
-    
+
     // Sync editor state
     editorManager.switchTo(session);
 }
@@ -1921,10 +1925,10 @@ function shortenPath(path) {
 async function closeSession(id) {
     try {
         await auth.fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-        
+
         const sessionIds = Array.from(state.sessions.keys());
         const index = sessionIds.indexOf(id);
-        
+
         if (state.activeSessionId === id) {
             let nextId = null;
             if (index > 0) {
@@ -1932,7 +1936,7 @@ async function closeSession(id) {
             } else if (index < sessionIds.length - 1) {
                 nextId = sessionIds[index + 1];
             }
-            
+
             if (nextId) {
                 switchToSession(nextId);
             } else {
@@ -1940,9 +1944,9 @@ async function closeSession(id) {
                 terminalEl.innerHTML = '';
             }
         }
-        
+
         await syncSessions();
-        
+
     } catch (error) {
         console.error('Failed to close session:', error);
     }
@@ -1954,7 +1958,7 @@ const resizeObserver = new ResizeObserver(() => {
         const session = state.sessions.get(state.activeSessionId);
         session.mainFitAddon.fit();
         session.reportResize();
-        
+
         if (session.editorState && session.editorState.isVisible) {
             editorManager.layout();
         }
@@ -2002,11 +2006,17 @@ window.addEventListener('beforeunload', () => {
 });
 
 async function initApp() {
+    try {
+        await init('./libs/ghostty/ghostty-vt.wasm');
+        console.log('Ghostty initialized');
+    } catch (e) {
+        console.error('Failed to initialize Ghostty:', e);
+    }
     if (!auth.isAuthenticated) {
         auth.showLoginModal();
         return;
     }
-    
+
     auth.startHeartbeat();
     await syncSessions();
     // If no sessions, create one
@@ -2016,7 +2026,7 @@ async function initApp() {
         const session = state.sessions.get(state.activeSessionId);
         if (session) session.mainTerm.focus();
     }
-    
+
     // Force focus again after layout settles
     setTimeout(() => {
         if (state.activeSessionId) {
@@ -2033,7 +2043,7 @@ if (virtualKeys) {
     const handleKey = (key, btn) => {
         if (!state.activeSessionId || !state.sessions.has(state.activeSessionId)) return;
         const session = state.sessions.get(state.activeSessionId);
-        
+
         if (navigator.vibrate) navigator.vibrate(10);
 
         let data = '';
@@ -2063,10 +2073,10 @@ if (virtualKeys) {
     const startRepeat = (btn) => {
         stopRepeat();
         const key = btn.dataset.key;
-        
+
         // Immediate trigger
         handleKey(key, btn);
-        
+
         // Delay before repeating
         repeatStartTimer = setTimeout(() => {
             repeatTimer = setInterval(() => {
@@ -2109,31 +2119,31 @@ const softKeyboard = document.getElementById('soft-keyboard');
 
 if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
     const modifiers = { ctrl: false, alt: false, shift: false, sym: false };
-    
+
     // Basic HHKB-like layout (12 keys max)
     const rows = [
-        ['1','2','3','4','5','6','7','8','9','0','-','='],
-        ['q','w','e','r','t','y','u','i','o','p','[',']'],
-        ['a','s','d','f','g','h','j','k','l',';','\''],
-        ['`','z','x','c','v','b','n','m',',','.','/','\\']
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='],
+        ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']'],
+        ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\''],
+        ['`', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', '\\']
     ];
-    
+
     const getShiftChar = (c) => {
         if (shiftMap[c]) return shiftMap[c];
         if (c.length === 1 && /[a-z]/.test(c)) return c.toUpperCase();
         return '';
     };
 
-    softKeyboard.innerHTML = rows.map(row => 
+    softKeyboard.innerHTML = rows.map(row =>
         `<div class="row">
             ${row.map(char => {
-                const shiftChar = getShiftChar(char);
-                const shiftLabel = shiftChar ? `<span class="key-shift">${shiftChar}</span>` : '';
-                return `<div class="soft-key" data-char="${char}">
+            const shiftChar = getShiftChar(char);
+            const shiftLabel = shiftChar ? `<span class="key-shift">${shiftChar}</span>` : '';
+            return `<div class="soft-key" data-char="${char}">
                     <span class="key-main">${char}</span>
                     ${shiftLabel}
                 </div>`;
-            }).join('')}
+        }).join('')}
         </div>`
     ).join('');
 
@@ -2143,14 +2153,14 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         modCtrl.classList.toggle('active', modifiers.ctrl);
         modAlt.classList.toggle('active', modifiers.alt);
         modShift.classList.toggle('active', modifiers.shift);
-        
+
         // SYM reflects overall visibility
         modSym.classList.toggle('active', anyActive);
-        
+
         // Visual Flip: Shift only if Ctrl is not active (to avoid confusion)
         const isVisualShift = modifiers.shift && !modifiers.ctrl;
         softKeyboard.classList.toggle('shift-mode', isVisualShift);
-        
+
         softKeyboard.style.display = anyActive ? 'flex' : 'none';
     };
 
@@ -2162,14 +2172,14 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
     modCtrl.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('ctrl'); });
     modAlt.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('alt'); });
     modShift.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('shift'); });
-    
-    modSym.addEventListener('touchstart', (e) => { 
-        e.preventDefault(); 
-        e.stopPropagation(); 
-        
+
+    modSym.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
         // Smart Toggle: If keyboard is open, close everything. If closed, open sym.
         const isKeyboardVisible = modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.sym;
-        
+
         if (isKeyboardVisible) {
             modifiers.ctrl = false;
             modifiers.alt = false;
@@ -2186,17 +2196,17 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         e.stopPropagation();
         const keyEl = e.target.closest('.soft-key');
         if (!keyEl) return;
-        
+
         keyEl.classList.add('active');
         setTimeout(() => keyEl.classList.remove('active'), 100);
-        
+
         if (navigator.vibrate) navigator.vibrate(10);
-        
+
         let char = keyEl.dataset.char;
-        
+
         // Apply Modifiers Logic
         let data = char;
-        
+
         if (modifiers.shift) {
             if (data.length === 1 && /[a-z]/.test(data)) {
                 data = data.toUpperCase();
@@ -2204,14 +2214,14 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
                 data = shiftMap[data];
             }
         }
-        
+
         if (modifiers.ctrl) {
             if (data.length === 1 && /[a-z]/.test(data)) {
                 // Use lowercase for ctrl calculation standard
                 data = String.fromCharCode(data.toLowerCase().charCodeAt(0) - 96);
             } else if (data.length === 1 && /[A-Z]/.test(data)) {
-                 // If already upper (due to shift?), ctrl+shift+a -> \x01
-                 data = String.fromCharCode(data.charCodeAt(0) - 64);
+                // If already upper (due to shift?), ctrl+shift+a -> \x01
+                data = String.fromCharCode(data.charCodeAt(0) - 64);
             } else if (data === '[') data = '\x1b';
             else if (data === '?') data = '\x7f'; // Ctrl+? often mapped to Del
             // Add more ctrl maps if needed (e.g. Ctrl+\ -> \x1c)
@@ -2220,7 +2230,7 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
             else if (data === '^') data = '\x1e';
             else if (data === '_') data = '\x1f';
         }
-        
+
         if (modifiers.alt) {
             data = '\x1b' + data;
         }
@@ -2228,7 +2238,7 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         if (state.activeSessionId) {
             state.sessions.get(state.activeSessionId).send({ type: 'input', data });
         }
-        
+
         // Auto-close Logic
         if (modifiers.ctrl || modifiers.alt) {
             // Shortcut Mode: One-shot, close everything (including keyboard)
@@ -2238,7 +2248,7 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
             modifiers.sym = false;
         }
         // Shift stays active until toggled off (Continuous input)
-        
+
         updateState();
     });
 }
@@ -2278,11 +2288,11 @@ if (searchBar) {
         if (!state.activeSessionId || !state.sessions.has(state.activeSessionId)) return;
         const addon = state.sessions.get(state.activeSessionId).searchAddon;
         const term = searchInput.value;
-        
+
         let found = false;
         if (forward) found = addon.findNext(term, searchOptions);
         else found = addon.findPrevious(term, searchOptions);
-        
+
         updateUI(found);
     };
 
@@ -2305,21 +2315,21 @@ if (searchBar) {
         const term = e.target.value;
         if (!term) {
             updateUI(false);
-            searchResults.textContent = ''; // Empty when clear? Or No results? VS Code clears. 
+            searchResults.textContent = ''; // Empty when clear? Or No results? VS Code clears.
             // But user asked for "No results always".
             // My updateUI sets 'No results'.
             return;
         }
-        
+
         // Incremental search
-        const found = state.sessions.get(state.activeSessionId).searchAddon.findNext(term, { 
-            incremental: true, 
-            ...searchOptions 
+        const found = state.sessions.get(state.activeSessionId).searchAddon.findNext(term, {
+            incremental: true,
+            ...searchOptions
         });
-        
+
         updateUI(found);
     });
-    
+
     searchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -2334,7 +2344,7 @@ if (searchBar) {
 
     searchNext.addEventListener('click', () => doSearch(true));
     searchPrev.addEventListener('click', () => doSearch(false));
-    
+
     searchClose.addEventListener('click', () => {
         searchBar.style.display = 'none';
         state.sessions.get(state.activeSessionId)?.mainTerm.focus();
@@ -2363,7 +2373,7 @@ document.addEventListener('keydown', (e) => {
 
     const key = e.key.toLowerCase();
     const code = e.code;
-    
+
     // Ctrl + Shift Context
     if (e.shiftKey && !e.altKey) {
         // Ctrl + Shift + T: New Tab
@@ -2372,7 +2382,7 @@ document.addEventListener('keydown', (e) => {
             createNewSession();
             return;
         }
-        
+
         // Ctrl + Shift + W: Close Tab
         if (key === 'w') {
             e.preventDefault();
@@ -2381,7 +2391,7 @@ document.addEventListener('keydown', (e) => {
             }
             return;
         }
-        
+
         // Ctrl + Shift + E: Toggle Editor
         if (key === 'e') {
             e.preventDefault();
@@ -2399,7 +2409,7 @@ document.addEventListener('keydown', (e) => {
                 modal.style.display = 'flex';
                 const closeBtn = modal.querySelector('button');
                 if (closeBtn) closeBtn.focus();
-                
+
                 modal.onclick = (ev) => {
                     if (ev.target === modal) {
                         modal.style.display = 'none';
@@ -2411,12 +2421,12 @@ document.addEventListener('keydown', (e) => {
             }
             return;
         }
-        
+
         // Ctrl + Shift + [ / ]: Switch Tab
         if (code === 'BracketLeft' || code === 'BracketRight') {
             e.preventDefault();
             const direction = code === 'BracketLeft' ? -1 : 1;
-            
+
             const sessionIds = Array.from(state.sessions.keys());
             if (sessionIds.length > 1) {
                 const currentIdx = sessionIds.indexOf(state.activeSessionId);
@@ -2427,7 +2437,7 @@ document.addEventListener('keydown', (e) => {
             }
         }
     }
-    
+
     // Ctrl Only Context (Focus Switching)
     if (!e.shiftKey && !e.altKey) {
         if (code === 'ArrowUp') {
@@ -2445,14 +2455,14 @@ document.addEventListener('keydown', (e) => {
             return;
         }
     }
-    
+
     // Ctrl + Option (Alt) Context
     if (e.altKey && !e.shiftKey) {
         // Ctrl + Option + [ / ]: Switch Editor File
         if (code === 'BracketLeft' || code === 'BracketRight') {
             e.preventDefault();
             const direction = code === 'BracketLeft' ? -1 : 1;
-            
+
             if (editorManager && editorManager.currentSession) {
                 const s = editorManager.currentSession.editorState;
                 const files = s.openFiles;

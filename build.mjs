@@ -20,9 +20,9 @@ const downloadFile = (url, dest) => {
         https.get(url, (res) => {
             if (res.statusCode !== 200) {
                 stream.close();
-                fsPromises.unlink(dest).catch(() => {});
+                fsPromises.unlink(dest).catch(() => { });
                 console.warn(`Failed to download: ${url} (${res.statusCode})`);
-                resolve(false); 
+                resolve(false);
                 return;
             }
             res.pipe(stream);
@@ -31,7 +31,7 @@ const downloadFile = (url, dest) => {
                 resolve(true);
             });
         }).on('error', (err) => {
-            fsPromises.unlink(dest).catch(() => {});
+            fsPromises.unlink(dest).catch(() => { });
             reject(err);
         });
     });
@@ -39,7 +39,7 @@ const downloadFile = (url, dest) => {
 
 async function main() {
     console.log('🏗️  Starting build process (Fallback Mode)...');
-    
+
     // Hardcoded map for stability
     const fileMap = {
         extensions: {
@@ -105,17 +105,17 @@ async function main() {
 
     const downloadQueue = Array.from(iconsToDownload);
     const batchSize = 10;
-    
+
     for (let i = 0; i < downloadQueue.length; i += batchSize) {
         const batch = downloadQueue.slice(i, i + batchSize);
         await Promise.all(batch.map(async (iconName) => {
             const fileName = `${iconName}.svg`;
             const dest = path.join(PUBLIC_ICONS_DIR, fileName);
-            
+
             try {
                 await fsPromises.access(dest);
                 return;
-            } catch {}
+            } catch { }
 
             const url = `${BASE_URL}/${fileName}`;
             await downloadFile(url, dest);
@@ -131,7 +131,7 @@ async function main() {
     console.log('⬇️  Copying Fonts...');
     const fontsDir = path.join(__dirname, 'public', 'fonts');
     const fontSourceDir = path.join(__dirname, 'node_modules', '@fontsource', 'monaspace-neon', 'files');
-    
+
     await fsPromises.mkdir(fontsDir, { recursive: true });
 
     const fontsToCopy = [
@@ -151,6 +151,27 @@ async function main() {
         }
     }
     console.log('✅ Fonts copied.');
+
+    // Copy Ghostty-web
+    console.log('⬇️  Copying Ghostty-web...');
+    const ghosttyDir = path.join(__dirname, 'public', 'libs', 'ghostty');
+    const ghosttySourceDir = path.join(__dirname, 'node_modules', 'ghostty-web', 'dist');
+
+    await fsPromises.mkdir(ghosttyDir, { recursive: true });
+
+    const ghosttyFiles = await fsPromises.readdir(ghosttySourceDir);
+
+    for (const file of ghosttyFiles) {
+        const srcPath = path.join(ghosttySourceDir, file);
+        const destPath = path.join(ghosttyDir, file);
+        try {
+            await fsPromises.copyFile(srcPath, destPath);
+            console.log(`   Copied ${file}`);
+        } catch (e) {
+            console.warn(`   Failed to copy ${file}:`, e.message);
+        }
+    }
+    console.log('✅ Ghostty-web copied.');
 }
 
 main().catch(console.error);
