@@ -38,11 +38,35 @@ if (config.openrouterKey) {
             console.log('[Server] Web Search initialized (Google)');
         }
 
-        await alan.init({
+        // Ensure model is set for OpenRouter
+        if (!config.model || config.model.trim() === '') {
+            throw new Error('Model name or description is required for provider: OpenRouter. Please set --model or TABMINAL_MODEL environment variable.');
+        }
+
+        // Always use modelConfig to bypass utilitas predefined model list
+        // This ensures any OpenRouter model can be used without library constraints
+        const initOptions = {
             apiKey: config.openrouterKey,
-            model: config.model
-        });
-        console.log(`[Server] Alan initialized with model: ${config.model}`);
+            provider: 'OpenRouter',
+            modelConfig: {
+                name: config.model,
+                icon: '🤖',
+                defaultProvider: 'OpenRouter',
+                // Sensible defaults for most models
+                contextWindow: 128000,
+                maxOutputTokens: 16384,
+                json: true,
+                tools: true
+            }
+        };
+
+        // Support custom API base URL (for self-hosted or proxy services)
+        if (config.apiBaseUrl) {
+            initOptions.baseURL = config.apiBaseUrl;
+        }
+
+        await alan.init(initOptions);
+        console.log(`[Server] Alan initialized with model: ${config.model}${config.apiBaseUrl ? ` (API: ${config.apiBaseUrl})` : ''}`);
     } catch (e) {
         console.error('[Server] Failed to initialize Alan:', e.message);
     }
