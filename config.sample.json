@@ -4,6 +4,7 @@
   "password": "YOUR_SECURE_PASSWORD",
   "openrouter-key": "YOUR_OPENROUTER_API_KEY",
   "model": "gemini-2.5-flash-preview-09-2025",
+  "api-base-url": null,
   "google-key": "YOUR_GOOGLE_SEARCH_API_KEY",
   "google-cx": "YOUR_GOOGLE_SEARCH_ENGINE_ID",
   "accept-terms": true,
