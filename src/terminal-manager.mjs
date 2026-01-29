@@ -138,14 +138,38 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         const cols = restoredData ? restoredData.cols : this.lastCols;
         const rows = restoredData ? restoredData.rows : this.lastRows;
 
-        const ptyProcess = pty.spawn(shell, args, {
-            name: 'xterm-256color',
-            cols: cols,
-            rows: rows,
-            cwd: initialCwd,
-            env: env,
-            encoding: 'utf8'
-        });
+        let ptyProcess;
+        try {
+            ptyProcess = pty.spawn(shell, args, {
+                name: 'xterm-256color',
+                cols: cols,
+                rows: rows,
+                cwd: initialCwd,
+                env: env,
+                encoding: 'utf8'
+            });
+        } catch (err) {
+            const spawnInfo = {
+                shell,
+                args,
+                cwd: initialCwd,
+                cols,
+                rows,
+                env: {
+                    SHELL: env.SHELL,
+                    TERM: env.TERM,
+                    PATH: env.PATH,
+                    HOME: env.HOME
+                },
+                error: {
+                    message: err?.message,
+                    code: err?.code,
+                    errno: err?.errno
+                }
+            };
+            console.error('[Manager] Failed to spawn PTY', spawnInfo);
+            throw err;
+        }
 
         const session = new TerminalSession(ptyProcess, {
             id,

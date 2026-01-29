@@ -33,18 +33,17 @@
   },
   "dependencies": {
     "@fontsource/monaspace-neon": "^5.2.5",
-    "@koa/router": "^15.0.0",
+    "@koa/router": "^15.3.0",
     "@mozilla/readability": "^0.6.0",
-    "js-tiktoken": "^1.0.21",
-    "jsdom": "^27.2.0",
+    "jsdom": "^27.4.0",
     "koa": "^3.1.1",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
     "node-ansiparser": "^2.2.1",
-    "node-pty": "^1.0.0",
-    "openai": "^6.10.0",
-    "utilitas": "^2000.3.26",
-    "ws": "^8.18.3"
+    "node-pty": "^1.1.0",
+    "openai": "^6.17.0",
+    "utilitas": "^2001.1.117",
+    "ws": "^8.19.0"
   },
   "repository": {
     "type": "git",
