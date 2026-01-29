@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     historyLimit: 524288,
     acceptTerms: false,
     password: null,
-    model: 'gemini-2.5-flash-preview-09-2025',
+    model: 'gemini-3-flash-preview',
     debug: false,
     openrouterKey: null,
     googleKey: null,
