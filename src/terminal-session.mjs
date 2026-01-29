@@ -287,6 +287,10 @@ export class TerminalSession {
         this.write(data);
     }
 
+    _isAiEnabled() {
+        return Boolean(config.openrouterKey && String(config.openrouterKey).trim());
+    }
+
     write(data) {
         if (typeof data === 'string' && data.startsWith('\x1b')) {
             this.pty.write(data);
@@ -300,6 +304,7 @@ export class TerminalSession {
         }
 
         let startIndex = 0;
+        const aiEnabled = this._isAiEnabled();
         for (let i = 0; i < data.length; i++) {
             const char = data[i];
 
@@ -307,14 +312,16 @@ export class TerminalSession {
             if (char === '\r') {
                 // Smart detection for AI command (#)
                 // Ignore prefix if it only contains whitespace or terminal control artifacts (CPR)
-                const idx = this.inputBuffer.indexOf('#');
                 let line = null;
+                if (aiEnabled) {
+                    const idx = this.inputBuffer.indexOf('#');
 
-                if (idx !== -1) {
-                    const prefix = this.inputBuffer.substring(0, idx);
-                    // Allow whitespace, ESC, [, digits, ;, R (typical CPR response)
-                    if (/^[\s\x1b\[\d;R]*$/.test(prefix)) {
-                        line = this.inputBuffer.substring(idx);
+                    if (idx !== -1) {
+                        const prefix = this.inputBuffer.substring(0, idx);
+                        // Allow whitespace, ESC, [, digits, ;, R (typical CPR response)
+                        if (/^[\s\x1b\[\d;R]*$/.test(prefix)) {
+                            line = this.inputBuffer.substring(idx);
+                        }
                     }
                 }
 
@@ -533,7 +540,7 @@ export class TerminalSession {
         this.captureStartedAt = null;
 
         // Auto-Fix: If command failed, ask AI for help
-        if (exitCode !== 0 && entry.command) {
+        if (exitCode !== 0 && entry.command && this._isAiEnabled()) {
             // Don't trigger on simple interruptions (SIGINT=130) or common non-errors?
             // 130 = Ctrl+C. Usually user intention.
             if (exitCode !== 130) {

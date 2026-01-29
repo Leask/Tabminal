@@ -1,7 +1,13 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 
-import { TerminalSession } from '../src/terminal-session.mjs';
+// Ensure tests are deterministic and do not depend on user config files.
+// Use a space to force env override while still disabling AI via trim().
+process.env.TABMINAL_OPENROUTER_KEY = ' ';
+process.env.TABMINAL_DEBUG = '1';
+process.env.TABMINAL_PASSWORD = 'test-password';
+
+const { TerminalSession } = await import('../src/terminal-session.mjs');
 
 function buildExitSequence(exitCode, command) {
     const encoded = Buffer.from(command, 'utf8').toString('base64');
