@@ -1,256 +1,285 @@
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <title>Tabminal</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-        <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-        <link rel="mask-icon" href="./favicon.svg" color="#22D3EE">
-        <link rel="apple-touch-icon" href="./apple-touch-icon.png">
-        <link rel="manifest" href="./manifest.json">
-        <link rel="preconnect" href="https://cdn.jsdelivr.net">
-        <script>
-            // Mobile Layout Manager
-            function updateLayout() {
-                const vv = window.visualViewport;
-                let width = window.innerWidth;
-                let height = window.innerHeight;
-                let offsetTop = 0;
-                let offsetLeft = 0;
 
-                // Sanity check for iPadOS PWA bug where vv.height can be negative with physical keyboard
-                if (vv && vv.height > 100) {
-                    width = vv.width;
-                    height = vv.height;
-                    offsetTop = vv.offsetTop;
-                    offsetLeft = vv.offsetLeft;
-                }
-                
-                document.documentElement.style.setProperty('--app-width', `${width}px`);
-                document.documentElement.style.setProperty('--app-height', `${height}px`);
-                document.documentElement.style.setProperty('--app-top', `${offsetTop}px`);
-                document.documentElement.style.setProperty('--app-left', `${offsetLeft}px`);
+<head>
+    <meta charset="utf-8">
+    <title>Tabminal</title>
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="theme-color" content="#002b36">
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <link rel="mask-icon" href="./favicon.svg" color="#22D3EE">
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <link rel="manifest" href="./manifest.json">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <script>
+        // Mobile Layout Manager
+        function updateLayout() {
+            const vv = window.visualViewport;
+            let width = window.innerWidth;
+            let height = window.innerHeight;
+            let offsetTop = 0;
+            let offsetLeft = 0;
 
-                if (document.body) {
-                    window.scrollTo(0, 0);
-                    document.body.scrollTop = 0;
-                }
-                document.documentElement.scrollTop = 0;
-
-                // Sync terminal padding state with editor visibility
-                const editorPane = document.getElementById('editor-pane');
-                const terminalWrapper = document.getElementById('terminal-wrapper');
-                if (editorPane && terminalWrapper) {
-                    if (editorPane.style.display !== 'none') {
-                        terminalWrapper.classList.remove('maximized');
-                    } else {
-                        terminalWrapper.classList.add('maximized');
-                    }
-                }
+            // Sanity check for iPadOS PWA bug where vv.height can be negative with physical keyboard
+            if (vv && vv.height > 100) {
+                width = vv.width;
+                height = vv.height;
+                offsetTop = vv.offsetTop;
+                offsetLeft = vv.offsetLeft;
             }
 
-            if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', updateLayout);
-                window.visualViewport.addEventListener('scroll', updateLayout);
+            document.documentElement.style.setProperty('--app-width', `${width}px`);
+            document.documentElement.style.setProperty('--app-height', `${height}px`);
+            document.documentElement.style.setProperty('--app-top', `${offsetTop}px`);
+            document.documentElement.style.setProperty('--app-left', `${offsetLeft}px`);
+
+            if (document.body) {
+                window.scrollTo(0, 0);
+                document.body.scrollTop = 0;
             }
-            window.addEventListener('resize', updateLayout);
-            window.addEventListener('orientationchange', updateLayout);
-            
-            // High-performance Layout Loop (60fps)
-            function layoutLoop() {
-                updateLayout();
-                requestAnimationFrame(layoutLoop);
-            }
-            layoutLoop();
-            
-            // Initial triggers
-            document.addEventListener('DOMContentLoaded', updateLayout);
-            window.addEventListener('load', updateLayout);
+            document.documentElement.scrollTop = 0;
 
-            // Enhanced Touch Interceptor with Boundary Check
-            let startY = 0;
-            document.addEventListener('touchstart', function(e) {
-                startY = e.touches[0].clientY;
-            }, { passive: false });
-
-            document.addEventListener('touchmove', function(e) {
-                let target = e.target;
-                let scrollable = null;
-
-                while (target && target !== document.body) {
-                    if (target.classList && (
-                        target.classList.contains('tab-list') ||
-                        target.classList.contains('file-tree') ||
-                        target.classList.contains('tab-file-tree') ||
-                        target.classList.contains('editor-content') ||
-                        target.classList.contains('xterm-viewport') ||
-                        target.classList.contains('image-preview-container') ||
-                        target.classList.contains('system-status-bar')
-                    )) {
-                        scrollable = target;
-                        break;
-                    }
-                    target = target.parentElement;
-                }
-
-                if (!scrollable) {
-                    e.preventDefault();
+            // Sync terminal padding state with editor visibility
+            const editorPane = document.getElementById('editor-pane');
+            const terminalWrapper = document.getElementById('terminal-wrapper');
+            if (editorPane && terminalWrapper) {
+                if (editorPane.style.display !== 'none') {
+                    terminalWrapper.classList.remove('maximized');
                 } else {
-                    // Prevent scroll chaining at boundaries
-                    const y = e.touches[0].clientY;
-                    const scrollTop = scrollable.scrollTop;
-                    const scrollHeight = scrollable.scrollHeight;
-                    const height = scrollable.clientHeight;
-                    const isScrollingUp = y > startY;
-                    const isScrollingDown = y < startY;
-
-                    // Allow 1px buffer to avoid getting stuck
-                    if (isScrollingUp && scrollTop <= 0) {
-                        e.preventDefault();
-                    } else if (isScrollingDown && scrollTop + height >= scrollHeight) {
-                        e.preventDefault();
-                    }
+                    terminalWrapper.classList.add('maximized');
                 }
-            }, { passive: false });
-        </script>
-        <script>
-            (function() {
-                const t = Math.floor(Date.now() / 1000); // Seconds for dev
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = `./styles.css?t=${t}`;
-                document.head.appendChild(link);
-            })();
-        </script>
-        <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
-    </head>
-    <body>
-        <div id="system-status-bar" class="system-status-bar">
-            <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Toggle Menu">
-                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-            </button>
-            <div id="status-text-group" class="status-text-group"></div>
-            <canvas id="desktop-heartbeat-canvas" class="desktop-heartbeat-canvas"></canvas>
-        </div>
-        <div id="notification-container" class="notification-container"></div>
-        <canvas id="heartbeat-canvas"></canvas>
-        <div class="app-layout">
-            <div id="sidebar-overlay" class="sidebar-overlay"></div>
-            <aside id="sidebar" class="sidebar">
-                <ul id="tab-list" class="tab-list">
-                    <!-- Tabs will be dynamically inserted here -->
-                    <li id="new-tab-item" class="new-tab-item">
-                        <button id="new-tab-button" class="new-tab-button" aria-label="New Terminal">+</button>
-                    </li>
-                </ul>
-            </aside>
-            <main id="terminal-container" class="terminal-container">
-                <div id="editor-pane" class="editor-pane" style="display: none;">
-                    <div class="editor-workspace">
-                        <div id="editor-tabs" class="editor-tabs">
-                            <!-- Editor tabs injected here -->
+            }
+        }
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', updateLayout);
+            window.visualViewport.addEventListener('scroll', updateLayout);
+        }
+        window.addEventListener('resize', updateLayout);
+        window.addEventListener('orientationchange', updateLayout);
+
+        // High-performance Layout Loop (60fps)
+        function layoutLoop() {
+            updateLayout();
+            requestAnimationFrame(layoutLoop);
+        }
+        layoutLoop();
+
+        // Initial triggers
+        document.addEventListener('DOMContentLoaded', updateLayout);
+        window.addEventListener('load', updateLayout);
+
+        // Enhanced Touch Interceptor with Boundary Check
+        let startY = 0;
+        document.addEventListener('touchstart', function(e) {
+            startY = e.touches[0].clientY;
+        }, { passive: false });
+
+        document.addEventListener('touchmove', function(e) {
+            let target = e.target;
+            let scrollable = null;
+
+            while (target && target !== document.body) {
+                if (target.classList && (
+                    target.classList.contains('tab-list') ||
+                    target.classList.contains('file-tree') ||
+                    target.classList.contains('tab-file-tree') ||
+                    target.classList.contains('editor-content') ||
+                    target.classList.contains('xterm-viewport') ||
+                    target.classList.contains('image-preview-container') ||
+                    target.classList.contains('system-status-bar')
+                )) {
+                    scrollable = target;
+                    break;
+                }
+                target = target.parentElement;
+            }
+
+            if (!scrollable) {
+                e.preventDefault();
+            } else {
+                // Prevent scroll chaining at boundaries
+                const y = e.touches[0].clientY;
+                const scrollTop = scrollable.scrollTop;
+                const scrollHeight = scrollable.scrollHeight;
+                const height = scrollable.clientHeight;
+                const isScrollingUp = y > startY;
+                const isScrollingDown = y < startY;
+
+                // Allow 1px buffer to avoid getting stuck
+                if (isScrollingUp && scrollTop <= 0) {
+                    e.preventDefault();
+                } else if (isScrollingDown && scrollTop + height >= scrollHeight) {
+                    e.preventDefault();
+                }
+            }
+        }, { passive: false });
+    </script>
+    <script>
+        (function() {
+            const t = Math.floor(Date.now() / 1000); // Seconds for dev
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = `./styles.css?t=${t}`;
+            document.head.appendChild(link);
+        })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+</head>
+
+<body>
+    <div id="system-status-bar" class="system-status-bar">
+        <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Toggle Menu">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"
+                stroke-linecap="round" stroke-linejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+        </button>
+        <div id="status-text-group" class="status-text-group"></div>
+        <canvas id="desktop-heartbeat-canvas" class="desktop-heartbeat-canvas"></canvas>
+    </div>
+    <div id="notification-container" class="notification-container"></div>
+    <canvas id="heartbeat-canvas"></canvas>
+    <div class="app-layout">
+        <div id="sidebar-overlay" class="sidebar-overlay"></div>
+        <aside id="sidebar" class="sidebar">
+            <ul id="tab-list" class="tab-list">
+                <!-- Tabs will be dynamically inserted here -->
+                <li id="new-tab-item" class="new-tab-item">
+                    <button id="new-tab-button" class="new-tab-button" aria-label="New Terminal">+</button>
+                </li>
+            </ul>
+        </aside>
+        <main id="terminal-container" class="terminal-container">
+            <div id="editor-pane" class="editor-pane" style="display: none;">
+                <div class="editor-workspace">
+                    <div id="editor-tabs" class="editor-tabs">
+                        <!-- Editor tabs injected here -->
+                    </div>
+                    <div id="editor-content" class="editor-content">
+                        <div id="monaco-container" class="monaco-container"></div>
+                        <div id="image-preview-container" class="image-preview-container" style="display: none;">
+                            <img id="image-preview" src="" alt="Preview">
                         </div>
-                        <div id="editor-content" class="editor-content">
-                            <div id="monaco-container" class="monaco-container"></div>
-                            <div id="image-preview-container" class="image-preview-container" style="display: none;">
-                                <img id="image-preview" src="" alt="Preview">
-                            </div>
-                            <div id="empty-editor-state" class="empty-editor-state">
-                                Select a file to view
-                            </div>
+                        <div id="empty-editor-state" class="empty-editor-state">
+                            Select a file to view
                         </div>
                     </div>
                 </div>
-                <div class="editor-resizer" id="editor-resizer"></div>
+            </div>
+            <div class="editor-resizer" id="editor-resizer"></div>
 
-                <div id="terminal-wrapper" class="terminal-wrapper">
-                    <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
-                                                    <div id="search-bar" class="search-bar" style="display: none;">
-                                                        <button id="search-toggle-replace" class="icon-btn codicon codicon-chevron-right" title="Toggle Replace"></button>
-                                                        <div class="search-input-wrapper">
-                                                            <input type="text" id="search-input" placeholder="Find">
-                                                            <div class="search-options">
-                                                                <button id="search-case" class="option-btn codicon codicon-case-sensitive" title="Match Case"></button>
-                                                                                            <button id="search-word" class="option-btn codicon codicon-whole-word" title="Whole Word"></button>
-                                                                                            <button id="search-regex" class="option-btn codicon codicon-regex" title="Use Regular Expression"></button>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                    <span id="search-results" class="search-results">No results</span>
-                                                                                    <button id="search-prev" class="nav-btn codicon codicon-arrow-up" title="Previous Match"></button>
-                                                                                    <button id="search-next" class="nav-btn codicon codicon-arrow-down" title="Next Match"></button>                                                        <button id="search-close" class="close-btn codicon codicon-close" title="Close"></button>
-                                                    </div>
+            <div id="terminal-wrapper" class="terminal-wrapper">
+                <div id="terminal" role="application" aria-label="Interactive Terminal"></div>
+                <div id="search-bar" class="search-bar" style="display: none;">
+                    <button id="search-toggle-replace" class="icon-btn codicon codicon-chevron-right"
+                        title="Toggle Replace"></button>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="search-input" placeholder="Find">
+                        <div class="search-options">
+                            <button id="search-case" class="option-btn codicon codicon-case-sensitive"
+                                title="Match Case"></button>
+                            <button id="search-word" class="option-btn codicon codicon-whole-word"
+                                title="Whole Word"></button>
+                            <button id="search-regex" class="option-btn codicon codicon-regex"
+                                title="Use Regular Expression"></button>
+                        </div>
+                    </div>
+                    <span id="search-results" class="search-results">No results</span>
+                    <button id="search-prev" class="nav-btn codicon codicon-arrow-up" title="Previous Match"></button>
+                    <button id="search-next" class="nav-btn codicon codicon-arrow-down" title="Next Match"></button>
+                    <button id="search-close" class="close-btn codicon codicon-close" title="Close"></button>
                 </div>
-            </main>
-        </div>
-        <div id="virtual-keys" class="virtual-keys" style="display: none;">
-            <button data-key="ESC">ESC</button>
-            <button data-key="TAB">TAB</button>
-            <button id="mod-ctrl" class="modifier-key">CTRL</button>
-            <button id="mod-alt" class="modifier-key">ALT</button>
-            <button id="mod-shift" class="modifier-key">SHIFT</button>
-            <button id="mod-sym" class="modifier-key">SYM</button>
-            <button data-key="LEFT">◀</button>
-            <button data-key="UP">▲</button>
-            <button data-key="DOWN">▼</button>
-            <button data-key="RIGHT">▶</button>
-        </div>
-        <div id="soft-keyboard" class="soft-keyboard" style="display: none;"></div>
-        <div id="login-modal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <h2>Authentication Required</h2>
-                <p>Please enter the access password to continue.</p>
-                <form id="login-form">
-                    <input type="text" name="username" value="admin" autocomplete="username" style="display:none;" aria-hidden="true">
-                    <input type="password" id="password-input" placeholder="Password" autocomplete="current-password" required autofocus>
-                    <button type="submit">Login</button>
-                </form>
-                <p id="login-error" class="error-message"></p>
             </div>
+        </main>
+    </div>
+    <div id="virtual-keys" class="virtual-keys" style="display: none;">
+        <button data-key="ESC">ESC</button>
+        <button data-key="TAB">TAB</button>
+        <button id="mod-ctrl" class="modifier-key">CTRL</button>
+        <button id="mod-alt" class="modifier-key">ALT</button>
+        <button id="mod-shift" class="modifier-key">SHIFT</button>
+        <button id="mod-sym" class="modifier-key">SYM</button>
+        <button data-key="LEFT">◀</button>
+        <button data-key="UP">▲</button>
+        <button data-key="DOWN">▼</button>
+        <button data-key="RIGHT">▶</button>
+    </div>
+    <div id="soft-keyboard" class="soft-keyboard" style="display: none;"></div>
+    <div id="login-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>Authentication Required</h2>
+            <p>Please enter the access password to continue.</p>
+            <form id="login-form">
+                <input type="text" name="username" value="admin" autocomplete="username" style="display:none;"
+                    aria-hidden="true">
+                <input type="password" id="password-input" placeholder="Password" autocomplete="current-password"
+                    required autofocus>
+                <button type="submit">Login</button>
+            </form>
+            <p id="login-error" class="error-message"></p>
         </div>
-        <div id="shortcuts-modal" class="modal" style="display: none;">
-            <div class="modal-content shortcuts-content">
-                <h2>Keyboard Shortcuts</h2>
-                <ul class="shortcuts-list">
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></div>
-                        <span>New Terminal</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd></div>
-                        <span>Close Terminal</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd></div>
-                        <span>Toggle Editor</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd></div>
-                        <span>Focus Editor / Terminal</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> / <kbd>]</kbd></div>
-                        <span>Switch Terminal</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>[</kbd> / <kbd>]</kbd></div>
-                        <span>Switch File</span>
-                    </li>
-                    <li>
-                        <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>?</kbd></div>
-                        <span>Show Help</span>
-                    </li>
-                </ul>
-                <button onclick="document.getElementById('shortcuts-modal').style.display='none'">Close</button>
-            </div>
+    </div>
+    <div id="shortcuts-modal" class="modal" style="display: none;">
+        <div class="modal-content shortcuts-content">
+            <h2>Keyboard Shortcuts</h2>
+            <ul class="shortcuts-list">
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></div>
+                    <span>New Terminal</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd></div>
+                    <span>Close Terminal</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd></div>
+                    <span>Toggle Editor</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd></div>
+                    <span>Focus Editor / Terminal</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> / <kbd>]</kbd></div>
+                    <span>Switch Terminal</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>[</kbd> / <kbd>]</kbd></div>
+                    <span>Switch File</span>
+                </li>
+                <li>
+                    <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>?</kbd></div>
+                    <span>Show Help</span>
+                </li>
+            </ul>
+            <button onclick="document.getElementById('shortcuts-modal').style.display='none'">Close</button>
         </div>
-        <script>
-            (function() {
-                const t = Math.floor(Date.now() / 1000);
-                const script = document.createElement('script');
-                script.type = 'module';
-                script.src = `./app.js?t=${t}`;
-                document.body.appendChild(script);
-            })();
-        </script>
-    </body>
+    </div>
+    <script>
+        (function() {
+            const t = Math.floor(Date.now() / 1000);
+            const script = document.createElement('script');
+            script.type = 'module';
+            script.src = `./app.js?t=${t}`;
+            document.body.appendChild(script);
+        })();
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    })
+                    .catch(err => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+    </script>
+</body>
+
 </html>
