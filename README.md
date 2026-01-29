@@ -100,7 +100,8 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-h`, `--host` | `HOST` | Bind address | `127.0.0.1` |
 | `-a`, `--password` | `TABMINAL_PASSWORD` | Access password | (Randomly Generated) |
 | `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | AI Provider API Key | `null` |
-| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gemini-2.5-flash-preview-09-2025` |
+| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID (supports any OpenRouter model) | `gemini-2.5-flash-preview-09-2025` |
+| `-u`, `--api-base-url` | `TABMINAL_API_BASE_URL` | Custom API base URL (for self-hosted/proxy) | `null` |
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |

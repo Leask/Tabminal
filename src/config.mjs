@@ -12,6 +12,7 @@ const DEFAULT_CONFIG = {
     acceptTerms: false,
     password: null,
     model: 'gemini-2.5-flash-preview-09-2025',
+    apiBaseUrl: null, // Custom API base URL (e.g., for self-hosted or proxy)
     debug: false,
     openrouterKey: null,
     googleKey: null,
@@ -80,6 +81,10 @@ function loadConfig() {
                 type: 'string',
                 short: 'm'
             },
+            'api-base-url': {
+                type: 'string',
+                short: 'u'
+            },
             debug: {
                 type: 'boolean',
                 short: 'd'
@@ -116,6 +121,7 @@ Options:
   --password, -a        Set access password
   --openrouter-key, -k  Set OpenRouter API Key
   --model, -m           Set AI Model
+  --api-base-url, -u    Set custom API base URL (for self-hosted or proxy)
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
   --debug, -d           Enable debug mode
@@ -136,6 +142,7 @@ Options:
     if (finalConfig['accept-terms']) finalConfig.acceptTerms = finalConfig['accept-terms'];
     if (finalConfig['openrouter-key']) finalConfig.openrouterKey = finalConfig['openrouter-key'];
     if (finalConfig['ai-key']) finalConfig.openrouterKey = finalConfig['ai-key']; // Backwards compat
+    if (finalConfig['api-base-url']) finalConfig.apiBaseUrl = finalConfig['api-base-url'];
     if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
     if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
 
@@ -157,8 +164,11 @@ Options:
     if (args['openrouter-key']) {
         finalConfig.openrouterKey = args['openrouter-key'];
     }
-    if (args.model) {
+    if (args.model && args.model.trim() !== '') {
         finalConfig.model = args.model;
+    }
+    if (args['api-base-url'] && args['api-base-url'].trim() !== '') {
+        finalConfig.apiBaseUrl = args['api-base-url'];
     }
     if (args.debug) {
         finalConfig.debug = true;
@@ -177,10 +187,21 @@ Options:
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
     if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.openrouterKey = process.env.TABMINAL_OPENROUTER_KEY;
-    if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
+    if (process.env.TABMINAL_MODEL && process.env.TABMINAL_MODEL.trim() !== '') {
+        finalConfig.model = process.env.TABMINAL_MODEL;
+    }
+    if (process.env.TABMINAL_API_BASE_URL && process.env.TABMINAL_API_BASE_URL.trim() !== '') {
+        finalConfig.apiBaseUrl = process.env.TABMINAL_API_BASE_URL;
+    }
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
     if (process.env.TABMINAL_GOOGLE_CX) finalConfig.googleCx = process.env.TABMINAL_GOOGLE_CX;
+
+    // Validate model - ensure it's not empty string
+    if (finalConfig.model && typeof finalConfig.model === 'string' && finalConfig.model.trim() === '') {
+        // Reset to default if empty string
+        finalConfig.model = DEFAULT_CONFIG.model;
+    }
 
     // Password Logic
     if (!finalConfig.password) {
