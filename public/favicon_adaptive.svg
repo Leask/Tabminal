@@ -1,0 +1,28 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background: Deep Terminal Gradient (Squared for Adaptive Icon) -->
+    <rect width="512" height="512" rx="0" fill="url(#bg_gradient)"/>
+
+    <!-- Scaled down content (60%) centered around 256,256 -->
+    <!-- Matrix calculation:
+         Scale = 0.6
+         Offset = (1 - 0.6) * 256 = 0.4 * 256 = 102.4
+    -->
+    <g transform="matrix(0.6, 0, 0, 0.6, 102.4, 102.4)">
+        <!-- Letter 't': Bright White/Slate -->
+        <!-- Vertical stem -->
+        <path d="M135 80V360C135 400 160 430 200 430" stroke="#E2E8F0" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+        <!-- Horizontal crossbar -->
+        <path d="M75 200H210" stroke="#E2E8F0" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+
+        <!-- Symbol '>': Cyan -->
+        <path d="M310 130L460 255L310 380" stroke="#22D3EE" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- Definitions -->
+    <defs>
+        <linearGradient id="bg_gradient" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#0F172A"/> <!-- Slate 900 -->
+            <stop offset="1" stop-color="#334155"/> <!-- Slate 700 -->
+        </linearGradient>
+    </defs>
+</svg>
