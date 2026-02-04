@@ -18,7 +18,7 @@ import { config } from './config.mjs';
 import { authMiddleware, verifyClient } from './auth.mjs';
 import { setupFsRoutes } from './fs-routes.mjs';
 import * as persistence from './persistence.mjs';
-import { alan, web } from 'utilitas';
+import { alan, network, web } from 'utilitas';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +61,15 @@ if (config.openrouterKey) {
         console.log(`[Server] Alan initialized with model: ${config.model}`);
     } catch (e) {
         console.error('[Server] Failed to initialize Alan (OpenAI):', e.message);
+    }
+}
+
+if (config.cloudflareKey) {
+    try {
+        network.cfTunnel(config.cloudflareKey);
+        console.log('[Server] Cloudflare Tunnel initialized');
+    } catch (e) {
+        console.error('[Server] Failed to initialize Cloudflare Tunnel:', e.message);
     }
 }
 

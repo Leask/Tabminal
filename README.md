@@ -105,6 +105,7 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API Key (Mutually exclusive with OpenRouter) | `null` |
 | `-u`, `--openai-api` | `TABMINAL_OPENAI_API` | OpenAI Base API URL (Optional) | `null` |
 | `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gpt-5.2` (OpenAI) / `gemini-3-flash-preview` (OpenRouter) |
+| `-f`, `--cloudflare-key` | `TABMINAL_CLOUDFLARE_KEY` | Cloudflare Tunnel Token | `null` |
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |

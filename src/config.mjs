@@ -17,7 +17,8 @@ const DEFAULT_CONFIG = {
     googleKey: null,
     googleCx: null,
     openaiKey: null,
-    openaiApi: null
+    openaiApi: null,
+    cloudflareKey: null
 };
 
 function loadJson(filePath) {
@@ -86,6 +87,10 @@ function loadConfig() {
                 type: 'string',
                 short: 'u'
             },
+            'cloudflare-key': {
+                type: 'string',
+                short: 'f'
+            },
             model: {
                 type: 'string',
                 short: 'm'
@@ -127,6 +132,7 @@ Options:
   --openrouter-key, -k  Set OpenRouter API Key
   --openai-key, -o      Set OpenAI API Key
   --openai-api, -u      Set OpenAI API Base URL
+  --cloudflare-key, -f  Set Cloudflare Tunnel Token
   --model, -m           Set AI Model
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
@@ -149,6 +155,7 @@ Options:
     if (finalConfig['openrouter-key']) finalConfig.openrouterKey = finalConfig['openrouter-key'];
     if (finalConfig['openai-key']) finalConfig.openaiKey = finalConfig['openai-key'];
     if (finalConfig['openai-api']) finalConfig.openaiApi = finalConfig['openai-api'];
+    if (finalConfig['cloudflare-key']) finalConfig.cloudflareKey = finalConfig['cloudflare-key'];
     if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
     if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
 
@@ -176,6 +183,9 @@ Options:
     if (args['openai-api']) {
         finalConfig.openaiApi = args['openai-api'];
     }
+    if (args['cloudflare-key']) {
+        finalConfig.cloudflareKey = args['cloudflare-key'];
+    }
     if (args.model) {
         finalConfig.model = args.model;
     }
@@ -198,6 +208,7 @@ Options:
     if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.openrouterKey = process.env.TABMINAL_OPENROUTER_KEY;
     if (process.env.TABMINAL_OPENAI_KEY) finalConfig.openaiKey = process.env.TABMINAL_OPENAI_KEY;
     if (process.env.TABMINAL_OPENAI_API) finalConfig.openaiApi = process.env.TABMINAL_OPENAI_API;
+    if (process.env.TABMINAL_CLOUDFLARE_KEY) finalConfig.cloudflareKey = process.env.TABMINAL_CLOUDFLARE_KEY;
     if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
