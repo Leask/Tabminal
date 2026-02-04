@@ -35,14 +35,14 @@
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^15.3.0",
     "@mozilla/readability": "^0.6.0",
-    "jsdom": "^27.4.0",
+    "jsdom": "^28.0.0",
     "koa": "^3.1.1",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.1.0",
     "openai": "^6.17.0",
-    "utilitas": "^2001.1.117",
+    "utilitas": "^2001.1.123",
     "ws": "^8.19.0"
   },
   "repository": {

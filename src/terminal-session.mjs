@@ -288,7 +288,10 @@ export class TerminalSession {
     }
 
     _isAiEnabled() {
-        return Boolean(config.openrouterKey && String(config.openrouterKey).trim());
+        return Boolean(
+            (config.openrouterKey && String(config.openrouterKey).trim()) ||
+            (config.openaiKey && String(config.openaiKey).trim())
+        );
     }
 
     write(data) {

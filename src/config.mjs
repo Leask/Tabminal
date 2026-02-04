@@ -11,11 +11,13 @@ const DEFAULT_CONFIG = {
     historyLimit: 524288,
     acceptTerms: false,
     password: null,
-    model: 'gemini-3-flash-preview',
+    model: null,
     debug: false,
     openrouterKey: null,
     googleKey: null,
-    googleCx: null
+    googleCx: null,
+    openaiKey: null,
+    openaiApi: null
 };
 
 function loadJson(filePath) {
@@ -76,6 +78,14 @@ function loadConfig() {
                 type: 'string',
                 short: 'k'
             },
+            'openai-key': {
+                type: 'string',
+                short: 'o'
+            },
+            'openai-api': {
+                type: 'string',
+                short: 'u'
+            },
             model: {
                 type: 'string',
                 short: 'm'
@@ -115,6 +125,8 @@ Options:
   --port, -p            Port to listen on (default: 9846)
   --password, -a        Set access password
   --openrouter-key, -k  Set OpenRouter API Key
+  --openai-key, -o      Set OpenAI API Key
+  --openai-api, -u      Set OpenAI API Base URL
   --model, -m           Set AI Model
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
@@ -135,7 +147,8 @@ Options:
     // Normalize config keys (support kebab-case in JSON)
     if (finalConfig['accept-terms']) finalConfig.acceptTerms = finalConfig['accept-terms'];
     if (finalConfig['openrouter-key']) finalConfig.openrouterKey = finalConfig['openrouter-key'];
-    if (finalConfig['ai-key']) finalConfig.openrouterKey = finalConfig['ai-key']; // Backwards compat
+    if (finalConfig['openai-key']) finalConfig.openaiKey = finalConfig['openai-key'];
+    if (finalConfig['openai-api']) finalConfig.openaiApi = finalConfig['openai-api'];
     if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
     if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
 
@@ -157,6 +170,12 @@ Options:
     if (args['openrouter-key']) {
         finalConfig.openrouterKey = args['openrouter-key'];
     }
+    if (args['openai-key']) {
+        finalConfig.openaiKey = args['openai-key'];
+    }
+    if (args['openai-api']) {
+        finalConfig.openaiApi = args['openai-api'];
+    }
     if (args.model) {
         finalConfig.model = args.model;
     }
@@ -177,6 +196,8 @@ Options:
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
     if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.openrouterKey = process.env.TABMINAL_OPENROUTER_KEY;
+    if (process.env.TABMINAL_OPENAI_KEY) finalConfig.openaiKey = process.env.TABMINAL_OPENAI_KEY;
+    if (process.env.TABMINAL_OPENAI_API) finalConfig.openaiApi = process.env.TABMINAL_OPENAI_API;
     if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
@@ -188,6 +209,22 @@ Options:
         console.log('\n[SECURITY] No password provided. Generated temporary password:');
         console.log(`\x1b[36m${finalConfig.password}\x1b[0m`);
         console.log('Please save this password or set a custom one using -a/--passwd.\n');
+    }
+
+    // Validate API Keys (Mutually Exclusive)
+    if (finalConfig.openrouterKey && finalConfig.openaiKey) {
+        console.error('\n[CONFIG ERROR] You cannot set both OpenRouter API Key and OpenAI API Key.');
+        console.error('Please configure only one of them.\n');
+        process.exit(1);
+    }
+
+    // Default Model Logic
+    if (!finalConfig.model) {
+        if (finalConfig.openaiKey) {
+            finalConfig.model = 'gpt-5.2';
+        } else if (finalConfig.openrouterKey) {
+            finalConfig.model = 'gemini-3-flash-preview';
+        }
     }
 
     // Store SHA256 hash in memory

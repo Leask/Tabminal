@@ -27,24 +27,40 @@ const publicDir = path.join(__dirname, '..', 'public');
 const app = new Koa();
 const router = new Router();
 
+if (config.googleKey && config.googleCx) {
+    try {
+        await web.initSearch({
+            provider: 'google',
+            apiKey: config.googleKey,
+            cx: config.googleCx
+        });
+        console.log('[Server] Web Search initialized (Google)');
+    } catch (e) {
+        console.error('[Server] Failed to initialize Web Search:', e.message);
+    }
+}
+
 if (config.openrouterKey) {
     try {
-        if (config.googleKey && config.googleCx) {
-            await web.initSearch({
-                provider: 'google',
-                apiKey: config.googleKey,
-                cx: config.googleCx
-            });
-            console.log('[Server] Web Search initialized (Google)');
-        }
-
         await alan.init({
             apiKey: config.openrouterKey,
             model: config.model
         });
         console.log(`[Server] Alan initialized with model: ${config.model}`);
     } catch (e) {
-        console.error('[Server] Failed to initialize Alan:', e.message);
+        console.error('[Server] Failed to initialize Alan (OpenRouter):', e.message);
+    }
+} else if (config.openaiKey) {
+    try {
+        await alan.init({
+            provider: 'OpenAI',
+            apiKey: config.openaiKey,
+            apiBase: config.openaiApi,
+            model: config.model
+        });
+        console.log(`[Server] Alan initialized with model: ${config.model}`);
+    } catch (e) {
+        console.error('[Server] Failed to initialize Alan (OpenAI):', e.message);
     }
 }
 

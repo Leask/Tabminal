@@ -20,7 +20,7 @@ As a long-time terminal user who frequently needs to step away from my computer 
 - `Fast and stable connection management` delivers a seamless, agile experience across platforms and devices, with native support for network roaming.
 - Enjoy a comprehensive `Progressive Web App (PWA) experience` anytime, anywhere; all you need is a modern browser to start working.
 - `Proactive AI integration` means your terminal becomes your work context. You can ask questions about your current session at any time, and the AI will automatically retrieve the context to accurately solve problems, even proactively offering assistance when commands fail.
-- `Cloud-native design` enables access via Zero Trust or VPN, providing unprecedented convenience for managing cloud servers. 
+- `Cloud-native design` enables access via Zero Trust or VPN, providing unprecedented convenience for managing cloud servers.
 
 <img width="1632" height="1317" alt="Screenshot 2025-11-24 at 10 15 28 PM" src="https://github.com/user-attachments/assets/ad864233-7b22-4b29-8b90-dc81993dd623" />
 
@@ -39,8 +39,8 @@ As a long-time terminal user who frequently needs to step away from my computer 
 </details>
 
 ### 🧠 AI-Native Intelligence
-Powered by **modern AI models** (via OpenRouter), Tabminal understands your context.
-*(Defaults to **Gemini 2.5 Flash** for optimal speed/performance balance if not configured)*
+Powered by **modern AI models** (via OpenRouter or OpenAI), Tabminal understands your context.
+*(Defaults to **Gemini 3 Flash** for OpenRouter or **GPT-5.2** for OpenAI if not configured)*
 *   **Context-Aware Chat**: Type `# how do I...` to ask questions. The AI knows your **CWD**, **Environment**, and **Recent History**.
 *   **Auto-Fix**: Command failed? Tabminal automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
 *   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
@@ -61,7 +61,7 @@ Built from the ground up for **iPadOS** and **iOS**.
 
 ### Prerequisites
 *   Node.js >= 22
-*   (Optional) An [OpenRouter](https://openrouter.ai/) API Key if you want AI features.
+*   (Optional) An [OpenRouter](https://openrouter.ai/) API Key or [OpenAI](https://openai.com/) API Key for AI features.
 *   (Optional) A pair of Google API Key and Search Engine ID (CX) for web search capabilities.
 
 ### ⚠️ Security Warning
@@ -74,6 +74,8 @@ Run directly with `npx`:
 
 ```bash
 npx tabminal --openrouter-key "YOUR_API_KEY" --accept-terms
+# Or use OpenAI:
+npx tabminal --openai-key "YOUR_API_KEY" --accept-terms
 ```
 
 ### Installation
@@ -99,8 +101,10 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-p`, `--port` | `PORT` | Server port | `9846` |
 | `-h`, `--host` | `HOST` | Bind address | `127.0.0.1` |
 | `-a`, `--password` | `TABMINAL_PASSWORD` | Access password | (Randomly Generated) |
-| `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | AI Provider API Key | `null` |
-| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gemini-2.5-flash-preview-09-2025` |
+| `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | OpenRouter API Key (Mutually exclusive with OpenAI) | `null` |
+| `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API Key (Mutually exclusive with OpenRouter) | `null` |
+| `-u`, `--openai-api` | `TABMINAL_OPENAI_API` | OpenAI Base API URL (Optional) | `null` |
+| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gpt-5.2` (OpenAI) / `gemini-3-flash-preview` (OpenRouter) |
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
