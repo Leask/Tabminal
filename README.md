@@ -46,7 +46,7 @@ Powered by **modern AI models** (via OpenRouter or OpenAI), Tabminal understands
 *   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
 
 ### 📱 Ultimate Mobile Experience
-Built from the ground up for **iPadOS** and **iOS**.
+Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **HHKB Virtual Keyboard**: You can perform nearly all terminal operations on any device, without being frustrated by os limitations.
 *   **Responsive Layout**: Auto-adapts to landscape/portrait modes, respecting Safe Areas and Notches.
 *   **PWA Ready**: Install to Home Screen for a full-screen, native app feel.
