@@ -69,13 +69,22 @@ Tabminal provides **full read/write access** to the underlying file system.
 *   **Do NOT expose this to the public internet** without proper protection (VPN, etc).
 *   The `--accept-terms` flag is required to acknowledge that you understand these risks.
 
-### Quick Start (No Install)
-Run directly with `npx`:
+
+### Quick Start (npx)
 
 ```bash
 npx tabminal --openrouter-key "YOUR_API_KEY" --accept-terms
 # Or use OpenAI:
 npx tabminal --openai-key "YOUR_API_KEY" --accept-terms
+```
+
+### Quick Start (Docker)
+
+```bash
+docker run --rm -it -p 9846:9846 \
+  leask/tabminal \
+  --openrouter-key "YOUR_API_KEY" \
+  --accept-terms
 ```
 
 ### Installation
