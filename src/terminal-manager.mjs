@@ -13,7 +13,14 @@ function resolveShell() {
         return process.env.COMSPEC || 'cmd.exe';
     }
     // config.shell has already handled process.env.SHELL and TABMINAL_SHELL via config.mjs
-    return config.shell || '/bin/bash';
+    if (config.shell) {
+        return config.shell;
+    }
+    // Try to use Homebrew installed bash if available (newer version)
+    if (fs.existsSync('/opt/homebrew/bin/bash')) {
+        return '/opt/homebrew/bin/bash';
+    }
+    return '/bin/bash';
 }
 
 const historyLimit = Number.parseInt(
@@ -120,7 +127,7 @@ _tabminal_zsh_postexec() {
   _tabminal_last_command="" # Reset after use
 }
 _tabminal_zsh_apply_prompt_marker() {
-  local marker=$'%{\e]1337;TabminalPrompt\a%}'
+  local marker=$'%{\\033]1337;TabminalPrompt\\a%}'
   if [[ "$PROMPT" != *"TabminalPrompt"* ]]; then
     PROMPT="$PROMPT$marker"
   fi

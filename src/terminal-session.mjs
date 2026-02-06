@@ -22,6 +22,8 @@ const IGNORED_COMMANDS = [
     '__bash_prompt'
 ];
 
+const PROMPT_PREFIX = "You are now operating as an AI terminal assistant. Your name is `Tabminal`. You will assist users in resolving terminal or coding issues and answering other inquiries. When troubleshooting terminal errors, you will be provided with the execution history to understand the context. However, please focus primarily on the most recent runtime errors and the user's latest questions. Keep your answers concise and accurate. Resolve the issue clearly and provide the reasoning while avoiding lengthy elaborations. Most user terminal variable keys are normal under typical circumstances and do not need to be treated as security risks.\n\n";
+
 export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
@@ -350,7 +352,7 @@ export class TerminalSession {
                     this._writeToLogAndBroadcast('\r\n\r\x1b[K');
 
                     // Process AI
-                    this._handleAiCommand(prompt);
+                    this._handleAiCommand(PROMPT_PREFIX + prompt);
 
                     // 3. Skip the \r in the input data (don't send to pty)
                     startIndex = i + 1;
@@ -547,7 +549,7 @@ export class TerminalSession {
             // Don't trigger on simple interruptions (SIGINT=130) or common non-errors?
             // 130 = Ctrl+C. Usually user intention.
             if (exitCode !== 130) {
-                this._handleAiCommand('The previous command failed. Please analyze the error in the history and provide a fix. Keep your answers concise and accurate. Resolve the issue clearly and provide the reasoning while avoiding lengthy elaborations.', { isAutoFix: true });
+                this._handleAiCommand(PROMPT_PREFIX + 'The previous command failed. Help me fix it.', { isAutoFix: true });
             }
         }
     }
