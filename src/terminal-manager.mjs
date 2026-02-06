@@ -6,12 +6,14 @@ import os from 'node:os';
 import pty from 'node-pty';
 import { TerminalSession } from './terminal-session.mjs';
 import * as persistence from './persistence.mjs';
+import { config } from './config.mjs';
 
 function resolveShell() {
     if (process.platform === 'win32') {
         return process.env.COMSPEC || 'cmd.exe';
     }
-    return process.env.SHELL || '/bin/bash';
+    // config.shell has already handled process.env.SHELL and TABMINAL_SHELL via config.mjs
+    return config.shell || '/bin/bash';
 }
 
 const historyLimit = Number.parseInt(
@@ -39,14 +41,14 @@ export class TerminalManager {
         // Use ID from options if present, otherwise generate new
         const id = (restoredData && restoredData.id) ? restoredData.id : crypto.randomUUID();
         const shell = resolveShell();
-        
+
         // Use CWD from options if present, otherwise default
-        const initialCwd = (restoredData && restoredData.cwd) 
-            ? restoredData.cwd 
+        const initialCwd = (restoredData && restoredData.cwd)
+            ? restoredData.cwd
             : (process.env.TABMINAL_CWD || os.homedir());
-        
+
         const env = { ...process.env };
-        
+
         // Inject shell tools
         const shellToolsPath = path.join(process.cwd(), 'shell');
         env.PATH = `${shellToolsPath}:${env.PATH}`;
@@ -100,7 +102,7 @@ export PROMPT_COMMAND
                 initDirPath = path.join(os.tmpdir(), `tabminal-zsh-${id}`);
                 fs.mkdirSync(initDirPath, { recursive: true });
                 initFilePath = path.join(initDirPath, '.zshrc');
-                
+
                 const zshScript = `
 unset ZDOTDIR
 [ -f ~/.zshrc ] && source ~/.zshrc

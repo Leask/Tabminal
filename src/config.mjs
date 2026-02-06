@@ -18,7 +18,8 @@ const DEFAULT_CONFIG = {
     googleCx: null,
     openaiKey: null,
     openaiApi: null,
-    cloudflareKey: null
+    cloudflareKey: null,
+    shell: null
 };
 
 function loadJson(filePath) {
@@ -91,6 +92,10 @@ function loadConfig() {
                 type: 'string',
                 short: 'f'
             },
+            shell: {
+                type: 'string',
+                short: 's'
+            },
             model: {
                 type: 'string',
                 short: 'm'
@@ -133,6 +138,7 @@ Options:
   --openai-key, -o      Set OpenAI API Key
   --openai-api, -u      Set OpenAI API Base URL
   --cloudflare-key, -f  Set Cloudflare Tunnel Token
+  --shell, -s           Set Default Shell
   --model, -m           Set AI Model
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
@@ -186,6 +192,9 @@ Options:
     if (args['cloudflare-key']) {
         finalConfig.cloudflareKey = args['cloudflare-key'];
     }
+    if (args.shell) {
+        finalConfig.shell = args.shell;
+    }
     if (args.model) {
         finalConfig.model = args.model;
     }
@@ -200,8 +209,8 @@ Options:
     }
 
     // Environment variables override (for backward compatibility/container usage)
-    if (process.env.HOST) finalConfig.host = process.env.HOST;
-    if (process.env.PORT) finalConfig.port = parseInt(process.env.PORT, 10);
+    if (process.env.TABMINAL_HOST) finalConfig.host = process.env.TABMINAL_HOST;
+    if (process.env.TABMINAL_PORT) finalConfig.port = parseInt(process.env.TABMINAL_PORT, 10);
     if (process.env.TABMINAL_HEARTBEAT) finalConfig.heartbeatInterval = parseInt(process.env.TABMINAL_HEARTBEAT, 10);
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
@@ -209,6 +218,7 @@ Options:
     if (process.env.TABMINAL_OPENAI_KEY) finalConfig.openaiKey = process.env.TABMINAL_OPENAI_KEY;
     if (process.env.TABMINAL_OPENAI_API) finalConfig.openaiApi = process.env.TABMINAL_OPENAI_API;
     if (process.env.TABMINAL_CLOUDFLARE_KEY) finalConfig.cloudflareKey = process.env.TABMINAL_CLOUDFLARE_KEY;
+    if (process.env.TABMINAL_SHELL) finalConfig.shell = process.env.TABMINAL_SHELL;
     if (process.env.TABMINAL_MODEL) finalConfig.model = process.env.TABMINAL_MODEL;
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
