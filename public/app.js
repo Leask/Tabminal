@@ -2145,7 +2145,7 @@ function openServerModal(mode, server = null) {
             addServerDescription.textContent = 'Register another Tabminal host.';
         }
         if (addServerSubmitButton) {
-            addServerSubmitButton.textContent = 'Register Host';
+            addServerSubmitButton.textContent = 'Register';
         }
         addServerUrlInput.value = '';
         addServerHostInput.value = '';

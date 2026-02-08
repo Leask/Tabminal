@@ -410,10 +410,11 @@ body {
     display: flex;
     gap: 6px;
     align-items: stretch;
+    min-width: 0;
 }
 
 .server-main-button {
-    flex: 1;
+    flex: 1 1 auto;
     border-radius: 6px;
     border: 1px solid var(--border-color);
     background-color: transparent;
@@ -426,6 +427,8 @@ body {
     flex-direction: column;
     justify-content: center;
     gap: 4px;
+    min-width: 0;
+    overflow: hidden;
     cursor: pointer;
     transition: background-color 0.2s ease, border-color 0.2s ease;
 }
@@ -440,6 +443,7 @@ body {
 }
 
 .server-delete-button {
+    flex: 0 0 34px;
     width: 34px;
     border-radius: 6px;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -481,13 +485,15 @@ body {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
 }
 
 .server-latency-group {
     display: inline-flex;
     align-items: center;
     color: #859900;
-    min-width: 56px;
+    min-width: 44px;
+    flex-shrink: 0;
 }
 
 .server-latency-group.offline {
@@ -512,9 +518,9 @@ body {
 }
 
 .server-heartbeat-canvas {
-    flex-grow: 1;
+    flex: 1 1 auto;
     height: 12px;
-    min-width: 56px;
+    min-width: 24px;
     display: block;
     background-color: transparent;
     mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
@@ -1013,6 +1019,14 @@ body {
 
 .modal-content button:hover {
     background-color: #2aa198;
+}
+
+#add-server-form {
+    margin: 0;
+}
+
+#add-server-cancel {
+    margin-top: 0.75rem;
 }
 
 .error-message {
