@@ -483,11 +483,28 @@ body {
     gap: 6px;
 }
 
+.server-latency-group {
+    display: inline-flex;
+    align-items: center;
+    color: #859900;
+    min-width: 56px;
+}
+
+.server-latency-group.offline {
+    color: #dc322f;
+}
+
 .server-latency-value {
     font-size: 10px;
-    color: var(--text-muted);
-    min-width: 40px;
+    color: currentColor;
     line-height: 1;
+}
+
+.server-heartbeat-dot {
+    width: 7px;
+    height: 7px;
+    margin-right: 4px;
+    flex-shrink: 0;
 }
 
 .server-latency-value.offline {
@@ -645,7 +662,7 @@ body {
 .tab-info-overlay .title {
     font-size: 14px;
     color: var(--text-highlight);
-    font-weight: bold;
+    font-weight: normal;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

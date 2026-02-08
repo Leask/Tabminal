@@ -2065,10 +2065,15 @@ function updateServerControlMetric(server) {
     if (!server) return;
     const row = findServerControlRow(server.id);
     if (!row) return;
+    const latencyGroupEl = row.querySelector('.server-latency-group');
     const latencyEl = row.querySelector('.server-latency-value');
+    const offline = !isServerHealthy(server);
+    if (latencyGroupEl) {
+        latencyGroupEl.classList.toggle('offline', offline);
+    }
     if (latencyEl) {
         latencyEl.textContent = formatServerLatency(server);
-        latencyEl.classList.toggle('offline', !isServerHealthy(server));
+        latencyEl.classList.toggle('offline', offline);
     }
 }
 
@@ -2179,10 +2184,16 @@ function renderServerControls() {
         const actionText = requiresReconnectAction
             ? `Reconnect ${hostName}`
             : `New Tab @ ${hostName}`;
+        const latencyClass = isServerHealthy(server)
+            ? 'server-latency-group'
+            : 'server-latency-group offline';
         mainButton.innerHTML = `
             <span class="server-action-text">${actionText}</span>
             <span class="server-metrics">
-                <span class="server-latency-value">${formatServerLatency(server)}</span>
+                <span class="${latencyClass}">
+                    <span class="heartbeat-dot server-heartbeat-dot"></span>
+                    <span class="server-latency-value">${formatServerLatency(server)}</span>
+                </span>
                 <canvas class="server-heartbeat-canvas" aria-hidden="true"></canvas>
             </span>
         `;
