@@ -6,6 +6,7 @@
   "model": "gemini-2.5-flash-preview-09-2025",
   "google-key": "YOUR_GOOGLE_SEARCH_API_KEY",
   "google-cx": "YOUR_GOOGLE_SEARCH_ENGINE_ID",
+  "cors-origin": "*",
   "accept-terms": true,
   "debug": false
 }

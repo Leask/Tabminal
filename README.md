@@ -107,8 +107,8 @@ You can configure Tabminal via command-line arguments, environment variables, or
 
 | Argument | Env Variable | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `-p`, `--port` | `PORT` | Server port | `9846` |
-| `-h`, `--host` | `HOST` | Bind address | `127.0.0.1` |
+| `-p`, `--port` | `TABMINAL_PORT` | Server port | `9846` |
+| `-h`, `--host` | `TABMINAL_HOST` | Bind address | `127.0.0.1` |
 | `-a`, `--password` | `TABMINAL_PASSWORD` | Access password | (Randomly Generated) |
 | `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | OpenRouter API Key (Mutually exclusive with OpenAI) | `null` |
 | `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API Key (Mutually exclusive with OpenRouter) | `null` |
@@ -118,7 +118,8 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
-| `-y`, `--accept-terms` | `TABMINAL_ACCEPT` | **Required**: Accept security risks (Full FS Access) | `false` |
+| `--cors-origin` | `TABMINAL_CORS_ORIGIN` | Allowed CORS origin (`*` or comma-separated list) | `*` |
+| `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
 
 ## ⌨️ Shortcuts & Gestures
 
@@ -138,6 +139,10 @@ You can configure Tabminal via command-line arguments, environment variables, or
 *   **Backend**: [Node.js](https://nodejs.org), [Koa](https://github.com/koajs/koa), [node-pty](https://github.com/microsoft/node-pty), [WebSocket](https://github.com/websockets/ws).
 *   **Frontend**: [Vanilla JS](http://vanilla-js.com/) 😝, [xterm.js](https://github.com/xtermjs/xterm.js), [Monaco Editor](https://github.com/microsoft/monaco-editor).
 *   **AI**: Integration via [utilitas](https://github.com/leask/utilitas).
+
+## 🐛 Troubleshooting
+
+- On macOS, you may need to run `chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper` to fix permission issues.
 
 ## 📄 License
 [MIT](LICENSE)

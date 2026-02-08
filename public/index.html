@@ -149,7 +149,8 @@
             <ul id="tab-list" class="tab-list">
                 <!-- Tabs will be dynamically inserted here -->
                 <li id="new-tab-item" class="new-tab-item">
-                    <button id="new-tab-button" class="new-tab-button" aria-label="New Terminal">+</button>
+                    <div id="server-controls" class="server-controls"></div>
+                    <button id="add-server-button" class="new-tab-button" aria-label="Add Host">+ Add Host</button>
                 </li>
             </ul>
         </aside>
@@ -221,6 +222,20 @@
                 <button type="submit">Login</button>
             </form>
             <p id="login-error" class="error-message"></p>
+        </div>
+    </div>
+    <div id="add-server-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>Add Host</h2>
+            <p>Register another Tabminal backend instance.</p>
+            <form id="add-server-form">
+                <input type="url" id="server-url-input" placeholder="https://example.com:9846" required>
+                <input type="text" id="server-host-input" placeholder="Host (optional)">
+                <input type="password" id="server-password-input" placeholder="Password" required>
+                <button type="submit">Register Host</button>
+            </form>
+            <button id="add-server-cancel" type="button">Cancel</button>
+            <p id="add-server-error" class="error-message"></p>
         </div>
     </div>
     <div id="shortcuts-modal" class="modal" style="display: none;">

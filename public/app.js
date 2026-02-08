@@ -11,18 +11,37 @@ const IS_MOBILE = navigator.maxTouchPoints > 0;
 // #region DOM Elements
 const terminalEl = document.getElementById('terminal');
 const tabListEl = document.getElementById('tab-list');
-const newTabButton = document.getElementById('new-tab-button');
+const legacyNewTabButton = document.getElementById('new-tab-button');
 const systemStatusBarEl = document.getElementById('system-status-bar');
 const loginModal = document.getElementById('login-modal');
 const loginForm = document.getElementById('login-form');
 const passwordInput = document.getElementById('password-input');
 const loginError = document.getElementById('login-error');
+const serverControlsEl = document.getElementById('server-controls');
+const addServerButton = document.getElementById('add-server-button');
+const addServerModal = document.getElementById('add-server-modal');
+const addServerForm = document.getElementById('add-server-form');
+const addServerUrlInput = document.getElementById('server-url-input');
+const addServerHostInput = document.getElementById('server-host-input');
+const addServerPasswordInput = document.getElementById('server-password-input');
+const addServerError = document.getElementById('add-server-error');
+const addServerCancel = document.getElementById('add-server-cancel');
+const addServerTitle = addServerModal?.querySelector('h2') || null;
+const addServerDescription = addServerModal?.querySelector('p') || null;
+const addServerSubmitButton = addServerForm?.querySelector('button[type="submit"]') || null;
 const terminalWrapper = document.getElementById('terminal-wrapper');
 const editorPane = document.getElementById('editor-pane');
 // #endregion
 
 // #region Configuration
 const HEARTBEAT_INTERVAL_MS = 1000;
+const SERVER_STORAGE_KEY = 'tabminal_servers_v2';
+const MAIN_SERVER_ID = 'main';
+const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+const serverModalState = {
+    mode: 'add',
+    targetServerId: null
+};
 // #endregion
 
 // #region Sidebar Toggle (Mobile)
@@ -55,192 +74,259 @@ if (sidebarToggle && sidebar && sidebarOverlay) {
 }
 // #endregion
 
-// #region Auth Manager
-class AuthManager {
-    constructor() {
-        this.token = localStorage.getItem('tabminal_auth_token');
-        this.isAuthenticated = !!this.token;
-        this.heartbeatTimer = null;
+// #region Auth and Server Client
+function normalizeBaseUrl(input) {
+    const raw = String(input || '').trim();
+    const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(candidate);
+    parsed.hash = '';
+    parsed.search = '';
+    let normalized = parsed.toString();
+    if (normalized.endsWith('/')) {
+        normalized = normalized.slice(0, -1);
+    }
+    return normalized;
+}
+
+function normalizeHostAlias(input) {
+    return String(input || '').trim();
+}
+
+function buildTokenStorageKey(serverId) {
+    return `tabminal_auth_token:${serverId}`;
+}
+
+function makeSessionKey(serverId, sessionId) {
+    return `${serverId}:${sessionId}`;
+}
+
+function splitSessionKey(sessionKey) {
+    const index = sessionKey.indexOf(':');
+    if (index < 0) {
+        return { serverId: '', sessionId: sessionKey };
+    }
+    return {
+        serverId: sessionKey.slice(0, index),
+        sessionId: sessionKey.slice(index + 1)
+    };
+}
+
+async function hashPassword(password) {
+    if (window.crypto && window.crypto.subtle) {
+        try {
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch (e) {
+            console.warn('Web Crypto API failed, falling back to JS implementation', e);
+        }
+    }
+    return sha256Fallback(password);
+}
+
+function sha256Fallback(ascii) {
+    function rightRotate(value, amount) {
+        return (value >>> amount) | (value << (32 - amount));
     }
 
-    async hashPassword(password) {
-        if (window.crypto && window.crypto.subtle) {
-            try {
-                const msgBuffer = new TextEncoder().encode(password);
-                const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            } catch (e) {
-                console.warn('Web Crypto API failed, falling back to JS implementation', e);
-            }
-        }
-        return this.sha256Fallback(password);
+    const mathPow = Math.pow;
+    const maxWord = mathPow(2, 32);
+    const lengthProperty = 'length';
+    let i, j;
+    let result = '';
+    const words = [];
+    const asciiBitLength = ascii[lengthProperty] * 8;
+    let hash = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+    ].slice(0);
+    const k = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ];
+
+    ascii += '\x80';
+    while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+
+    for (i = 0; i < ascii[lengthProperty]; i++) {
+        j = ascii.charCodeAt(i);
+        words[i >> 2] |= j << ((3 - i) % 4) * 8;
     }
+    words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+    words[words[lengthProperty]] = (asciiBitLength);
 
-    sha256Fallback(ascii) {
-        function rightRotate(value, amount) {
-            return (value >>> amount) | (value << (32 - amount));
+    for (j = 0; j < words[lengthProperty];) {
+        const w = words.slice(j, j += 16);
+        const oldHash = hash;
+        hash = hash.slice(0, 8);
+
+        for (i = 0; i < 64; i++) {
+            const w15 = w[i - 15], w2 = w[i - 2];
+            const a = hash[0], e = hash[4];
+            const temp1 = hash[7]
+                + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
+                + ((e & hash[5]) ^ ((~e) & hash[6]))
+                + k[i]
+                + (w[i] = (i < 16) ? w[i] : (
+                    w[i - 16]
+                    + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
+                    + w[i - 7]
+                    + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
+                ) | 0
+                );
+            const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
+                + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+            hash = [(temp1 + temp2) | 0].concat(hash);
+            hash[4] = (hash[4] + temp1) | 0;
         }
-        
-        const mathPow = Math.pow;
-        const maxWord = mathPow(2, 32);
-        const lengthProperty = 'length';
-        let i, j;
-        let result = '';
 
-        const words = [];
-        const asciiBitLength = ascii[lengthProperty] * 8;
-        
-        let hash = (this._h = this._h || [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-        ]).slice(0);
-        
-        const k = (this._k = this._k || [
-            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-        ]);
-        
-        ascii += '\x80';
-        while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
-        
-        for (i = 0; i < ascii[lengthProperty]; i++) {
-            j = ascii.charCodeAt(i);
-            words[i >> 2] |= j << ((3 - i) % 4) * 8;
-        }
-        words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
-        words[words[lengthProperty]] = (asciiBitLength);
-        
-        for (j = 0; j < words[lengthProperty];) {
-            const w = words.slice(j, j += 16);
-            const oldHash = hash;
-
-            hash = hash.slice(0, 8);
-            
-            for (i = 0; i < 64; i++) {
-                const i2 = i + j;
-                const w15 = w[i - 15], w2 = w[i - 2];
-
-                const a = hash[0], e = hash[4];
-                const temp1 = hash[7]
-                    + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) // S1
-                    + ((e & hash[5]) ^ ((~e) & hash[6])) // ch
-                    + k[i]
-                    + (w[i] = (i < 16) ? w[i] : (
-                            w[i - 16]
-                            + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) // s0
-                            + w[i - 7]
-                            + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10)) // s1
-                        ) | 0
-                    );
-
-                const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) // S0
-                    + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2])); // maj
-                
-                hash = [(temp1 + temp2) | 0].concat(hash);
-                hash[4] = (hash[4] + temp1) | 0;
-            }
-            
-            for (i = 0; i < 8; i++) {
-                hash[i] = (hash[i] + oldHash[i]) | 0;
-            }
-        }
-        
         for (i = 0; i < 8; i++) {
-            for (j = 3; j + 1; j--) {
-                const b = (hash[i] >> (j * 8)) & 255;
-                result += ((b < 16) ? 0 : '') + b.toString(16);
-            }
+            hash[i] = (hash[i] + oldHash[i]) | 0;
         }
-        return result;
     }
 
-    async login(password) {
-        const hash = await this.hashPassword(password);
-        this.token = hash;
-        localStorage.setItem('tabminal_auth_token', hash);
-        this.isAuthenticated = true;
-        this.hideLoginModal();
-        this.startHeartbeat();
-        // Retry initial sync
-        await initApp();
+    for (i = 0; i < 8; i++) {
+        for (j = 3; j + 1; j--) {
+            const b = (hash[i] >> (j * 8)) & 255;
+            result += ((b < 16) ? 0 : '') + b.toString(16);
+        }
     }
+    return result;
+}
 
-    logout() {
-        this.isAuthenticated = false;
-        this.stopHeartbeat();
-        this.showLoginModal();
-    }
-
+class AuthManager {
     showLoginModal(errorMsg = '') {
         loginModal.style.display = 'flex';
         passwordInput.value = '';
         passwordInput.focus();
-        if (errorMsg) {
-            loginError.textContent = errorMsg;
-        } else {
-            loginError.textContent = '';
-        }
+        loginError.textContent = errorMsg || '';
     }
 
     hideLoginModal() {
         loginModal.style.display = 'none';
         loginError.textContent = '';
     }
+}
+
+class ServerClient {
+    constructor(data, { isPrimary = false } = {}) {
+        this.id = data.id;
+        this.host = normalizeHostAlias(data.host);
+        this.baseUrl = normalizeBaseUrl(data.baseUrl);
+        this.isPrimary = isPrimary;
+        this.connectionStatus = 'disconnected';
+        this.lastSystemData = null;
+        this.lastLatency = 0;
+        this.heartbeatHistory = [];
+        this.heartbeatHasInitialized = false;
+        this.heartbeatLastUpdateTime = performance.now();
+        this.heartbeatSmoothedMaxVal = 1;
+        this.heartbeatTimer = null;
+        this.expandedPaths = new Set();
+        this.modelStore = new Map();
+        this.token = localStorage.getItem(buildTokenStorageKey(this.id)) || '';
+        this.isAuthenticated = !!this.token;
+        this.needsLogin = !this.isAuthenticated;
+    }
+
+    toJSON() {
+        return {
+            id: this.id,
+            host: this.host,
+            baseUrl: this.baseUrl
+        };
+    }
 
     getHeaders() {
         return this.token ? { 'Authorization': this.token } : {};
     }
 
-    async fetch(url, options = {}) {
-        if (!this.isAuthenticated && !url.includes('/healthz')) {
-            // If not authenticated, don't even try, unless it's a public endpoint (none currently)
-            // But we might be in the process of logging in.
-            // Actually, we should try if we have a token.
-        }
+    resolveUrl(path) {
+        return new URL(path, `${this.baseUrl}/`).toString();
+    }
 
+    resolveWsUrl(sessionId, token = '') {
+        const base = new URL(this.baseUrl);
+        const shouldUseSecureWs = (
+            base.protocol === 'https:'
+            || window.location.protocol === 'https:'
+        );
+        const wsProtocol = shouldUseSecureWs ? 'wss:' : 'ws:';
+        const wsUrl = new URL(`/ws/${sessionId}`, `${wsProtocol}//${base.host}`);
+        if (token) {
+            wsUrl.searchParams.set('token', token);
+        }
+        return wsUrl.toString();
+    }
+
+    async login(password) {
+        this.token = await hashPassword(password);
+        localStorage.setItem(buildTokenStorageKey(this.id), this.token);
+        this.isAuthenticated = true;
+        this.needsLogin = false;
+        renderServerControls();
+        await syncServer(this);
+        this.startHeartbeat();
+    }
+
+    clearAuth() {
+        this.token = '';
+        this.isAuthenticated = false;
+        this.needsLogin = true;
+        localStorage.removeItem(buildTokenStorageKey(this.id));
+        this.stopHeartbeat();
+    }
+
+    async fetch(path, options = {}) {
         const headers = {
             ...options.headers,
             ...this.getHeaders()
         };
+        const response = await fetch(this.resolveUrl(path), { ...options, headers });
+        if (response.status === 401) {
+            this.handleUnauthorized();
+            throw new Error('Unauthorized');
+        }
+        if (response.status === 403) {
+            const data = await response.json().catch(() => ({}));
+            this.handleUnauthorized(data.error || 'Service locked');
+            throw new Error('Service locked');
+        }
+        return response;
+    }
 
-        try {
-            const response = await fetch(url, { ...options, headers });
-            
-            if (response.status === 401) {
-                this.logout();
-                throw new Error('Unauthorized');
-            }
-            
-            if (response.status === 403) {
-                const data = await response.json().catch(() => ({}));
-                this.stopHeartbeat();
-                this.showLoginModal(data.error || 'Service locked. Please restart server.');
-                throw new Error('Service locked');
-            }
-
-            return response;
-        } catch (error) {
-            throw error;
+    handleUnauthorized(message = '') {
+        this.clearAuth();
+        setStatus(this, 'reconnecting');
+        renderServerControls();
+        if (this.isPrimary) {
+            auth.showLoginModal(message || 'Authentication required.');
+        } else {
+            alert(`${getDisplayHost(this)} needs login.`, {
+                type: 'warning',
+                title: 'Host'
+            });
         }
     }
 
     startHeartbeat() {
-        if (this.heartbeatTimer) return;
-        this.heartbeatTimer = setInterval(syncSessions, HEARTBEAT_INTERVAL_MS);
+        if (!this.isAuthenticated || this.heartbeatTimer) return;
+        this.heartbeatTimer = setInterval(() => {
+            syncServer(this);
+        }, HEARTBEAT_INTERVAL_MS);
     }
 
     stopHeartbeat() {
-        if (this.heartbeatTimer) {
-            clearInterval(this.heartbeatTimer);
-            this.heartbeatTimer = null;
-        }
+        if (!this.heartbeatTimer) return;
+        clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = null;
     }
 }
 
@@ -251,7 +337,6 @@ const auth = new AuthManager();
 class EditorManager {
     constructor() {
         this.currentSession = null;
-        this.globalModels = new Map(); // path -> { model, type: 'text'|'image' }
         this.iconMap = null;
         
         // DOM Elements
@@ -266,6 +351,22 @@ class EditorManager {
         this.initResizer();
         this.initMonaco();
         this.loadIconMap();
+    }
+
+    getModelStore(session = this.currentSession) {
+        return session ? session.server.modelStore : null;
+    }
+
+    getModel(filePath, session = this.currentSession) {
+        const store = this.getModelStore(session);
+        if (!store) return null;
+        return store.get(filePath) || null;
+    }
+
+    setModel(filePath, value, session = this.currentSession) {
+        const store = this.getModelStore(session);
+        if (!store) return;
+        store.set(filePath, value);
     }
 
     async loadIconMap() {
@@ -388,9 +489,11 @@ class EditorManager {
             monaco.editor.setTheme('solarized-dark');
             
             // Process pending models
-            for (const [path, file] of this.globalModels) {
-                if (file.type === 'text' && !file.model && file.content !== null) {
-                    file.model = monaco.editor.createModel(file.content, undefined, monaco.Uri.file(path));
+            for (const server of state.servers.values()) {
+                for (const [path, file] of server.modelStore) {
+                    if (file.type === 'text' && !file.model && file.content !== null) {
+                        file.model = monaco.editor.createModel(file.content, undefined, monaco.Uri.file(path));
+                    }
                 }
             }
 
@@ -423,7 +526,7 @@ class EditorManager {
         const state = this.currentSession.editorState;
         state.isVisible = !state.isVisible;
         
-        const tab = document.querySelector(`.tab-item[data-session-id="${this.currentSession.id}"]`);
+        const tab = document.querySelector(`.tab-item[data-session-key="${this.currentSession.key}"]`);
         if (tab) {
             if (state.isVisible) tab.classList.add('editor-open');
             else tab.classList.remove('editor-open');
@@ -447,7 +550,7 @@ class EditorManager {
     switchTo(session) {
         if (this.currentSession && this.editor && this.currentSession.editorState.activeFilePath) {
             const prevState = this.currentSession.editorState;
-            const prevFile = this.globalModels.get(prevState.activeFilePath);
+            const prevFile = this.getModel(prevState.activeFilePath, this.currentSession);
             if (prevFile && prevFile.type === 'text') {
                 prevState.viewStates.set(prevState.activeFilePath, this.editor.saveViewState());
             }
@@ -498,7 +601,7 @@ class EditorManager {
 
     async renderTree(dirPath, container, session) {
         try {
-            const res = await auth.fetch(`/api/fs/list?path=${encodeURIComponent(dirPath)}`);
+            const res = await session.server.fetch(`/api/fs/list?path=${encodeURIComponent(dirPath)}`);
             if (!res.ok) return;
             const files = await res.json();
 
@@ -511,7 +614,7 @@ class EditorManager {
                 if (file.isDirectory) div.classList.add('is-dir');
                 
                 let isExpanded = false;
-                if (file.isDirectory && globalExpandedPaths.has(file.path)) {
+                if (file.isDirectory && session.server.expandedPaths.has(file.path)) {
                     isExpanded = true;
                     li.classList.add('expanded');
                 }
@@ -531,16 +634,24 @@ class EditorManager {
                     if (file.isDirectory) {
                         if (li.classList.contains('expanded')) {
                             li.classList.remove('expanded');
-                            globalExpandedPaths.delete(file.path);
-                            auth.fetch('/api/memory/expand', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: file.path, expanded: false }) });
+                            session.server.expandedPaths.delete(file.path);
+                            session.server.fetch('/api/memory/expand', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ path: file.path, expanded: false })
+                            });
                             
                             icon.innerHTML = this.getIcon(file.name, true, false);
                             const childUl = li.querySelector('ul');
                             if (childUl) childUl.remove();
                         } else {
                             li.classList.add('expanded');
-                            globalExpandedPaths.add(file.path);
-                            auth.fetch('/api/memory/expand', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: file.path, expanded: true }) });
+                            session.server.expandedPaths.add(file.path);
+                            session.server.fetch('/api/memory/expand', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ path: file.path, expanded: true })
+                            });
                             
                             icon.innerHTML = this.getIcon(file.name, true, true);
                             await this.renderTree(file.path, li, session);
@@ -575,7 +686,7 @@ class EditorManager {
         
         this.updateEditorPaneVisibility();
 
-        if (!this.globalModels.has(filePath)) {
+        if (!this.getModel(filePath)) {
             const ext = filePath.split('.').pop().toLowerCase();
             const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
             
@@ -585,7 +696,7 @@ class EditorManager {
 
             if (!isImage) {
                 try {
-                    const res = await auth.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
+                    const res = await this.currentSession.server.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
                     if (!res.ok) throw new Error('Failed to read file');
                     const data = await res.json();
                     content = data.content;
@@ -608,7 +719,7 @@ class EditorManager {
                 }
             }
 
-            this.globalModels.set(filePath, {
+            this.setModel(filePath, {
                 type: isImage ? 'image' : 'text',
                 model: model,
                 content: content,
@@ -655,7 +766,7 @@ class EditorManager {
             tab.className = 'editor-tab';
             if (path === state.activeFilePath) tab.classList.add('active');
             
-            const fileModel = this.globalModels.get(path);
+            const fileModel = this.getModel(path);
             if (fileModel && fileModel.readonly) {
                 tab.classList.add('readonly');
             }
@@ -684,7 +795,7 @@ class EditorManager {
         const state = this.currentSession.editorState;
 
         if (!isRestore && state.activeFilePath && state.activeFilePath !== filePath) {
-            const currentGlobal = this.globalModels.get(state.activeFilePath);
+            const currentGlobal = this.getModel(state.activeFilePath);
             if (currentGlobal && currentGlobal.type === 'text' && this.editor) {
                 state.viewStates.set(state.activeFilePath, this.editor.saveViewState());
             }
@@ -692,7 +803,7 @@ class EditorManager {
 
         state.activeFilePath = filePath;
         this.currentSession.saveState();
-        const file = this.globalModels.get(filePath);
+        const file = this.getModel(filePath);
         
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
@@ -712,7 +823,9 @@ class EditorManager {
                 this.imagePreview.onerror = null;
             };
             
-            this.imagePreview.src = `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${auth.token}`;
+            this.imagePreview.src = this.currentSession.server.resolveUrl(
+                `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${this.currentSession.server.token}`
+            );
         } else {
             this.imagePreviewContainer.style.display = 'none';
             this.monacoContainer.style.display = 'block';
@@ -767,8 +880,11 @@ measureFps();
 // #region Session Class
 class Session {
 // ... (keep existing Session class) ...
-    constructor(data) {
+    constructor(data, server) {
+        this.server = server;
+        this.serverId = server.id;
         this.id = data.id;
+        this.key = makeSessionKey(this.serverId, this.id);
         this.createdAt = data.createdAt;
         this.shell = data.shell || 'Terminal';
         this.initialCwd = data.initialCwd || '';
@@ -840,7 +956,7 @@ class Session {
             this.previewTerm.resize(size.cols, size.rows);
             this.updatePreviewScale();
             
-            const pending = getPendingSession(this.id);
+            const pending = getPendingSession(this.key);
             pending.resize = { cols: size.cols, rows: size.rows };
         });
 
@@ -921,7 +1037,7 @@ class Session {
     }
 
     updateTabUI() {
-        const tab = tabListEl.querySelector(`[data-session-id="${this.id}"]`);
+        const tab = tabListEl.querySelector(`[data-session-key="${this.key}"]`);
         if (!tab) return;
 
         if (this.env) {
@@ -933,14 +1049,19 @@ class Session {
 
         const metaEl = tab.querySelector('.meta-cwd');
         if (metaEl) {
-            const shortened = shortenPath(this.cwd);
+            const shortened = shortenPath(this.cwd, this.env);
             metaEl.textContent = `PWD: ${shortened}`;
             metaEl.title = this.cwd;
+        }
+
+        const serverEl = tab.querySelector('.meta-server');
+        if (serverEl) {
+            serverEl.textContent = `HOST: ${formatSessionHost(this)}`;
         }
     }
 
     saveState() {
-        const pending = getPendingSession(this.id);
+        const pending = getPendingSession(this.key);
         pending.editorState = {
             isVisible: this.editorState.isVisible,
             root: this.editorState.root,
@@ -950,22 +1071,33 @@ class Session {
     }
 
     connect() {
-        if (!auth.isAuthenticated) return;
+        if (!this.server.isAuthenticated) return;
 
         // Prevent duplicate connection attempts
         if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
             return;
         }
 
-        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const endpoint = `${protocol}://${window.location.host}/ws/${this.id}`;
-        
-        // Using query param for auth token
-        this.socket = new WebSocket(`${endpoint}?token=${auth.token}`);
+        const endpoint = this.server.resolveWsUrl(this.id, this.server.token);
+        try {
+            this.socket = new WebSocket(endpoint);
+        } catch (error) {
+            const hostName = getDisplayHost(this.server);
+            console.error(`[WS] Failed to connect ${hostName}:`, error);
+            setStatus(this.server, 'reconnecting');
+            if (error?.name === 'SecurityError') {
+                alert(
+                    `${hostName} WebSocket blocked in HTTPS context. `
+                    + 'Use HTTPS/WSS endpoint for this host.',
+                    { type: 'warning', title: 'Connection' }
+                );
+            }
+            return;
+        }
 
         this.socket.addEventListener('open', () => {
             this.reconnectAttempts = 0;
-            if (state.activeSessionId === this.id) this.reportResize();
+            if (state.activeSessionKey === this.key) this.reportResize();
         });
 
         this.socket.addEventListener('message', (event) => {
@@ -1002,7 +1134,7 @@ class Session {
                 this.update(message);
                 break;
             case 'status':
-                if (state.activeSessionId === this.id) setStatus(message.status);
+                if (state.activeSessionKey === this.key) setStatus(this.server, message.status);
                 break;
         }
     }
@@ -1050,12 +1182,13 @@ class Session {
 
 // #region State Management
 const state = {
-    sessions: new Map(), // id -> Session
-    activeSessionId: null
+    servers: new Map(), // serverId -> ServerClient
+    sessions: new Map(), // sessionKey -> Session
+    activeSessionKey: null
 };
 
 const pendingChanges = {
-    sessions: new Map() // id -> { resize, editorState, fileWrites: Map<path, content> }
+    sessions: new Map() // sessionKey -> { resize, editorState, fileWrites: Map<path, content> }
 };
 
 const shiftMap = {
@@ -1070,34 +1203,109 @@ function getPendingSession(id) {
     return pendingChanges.sessions.get(id);
 }
 
-const globalExpandedPaths = new Set();
+function getMainServer() {
+    return state.servers.get(MAIN_SERVER_ID) || null;
+}
 
-async function fetchExpandedPaths() {
+function getActiveSession() {
+    if (!state.activeSessionKey) return null;
+    return state.sessions.get(state.activeSessionKey) || null;
+}
+
+function getActiveServer() {
+    return getActiveSession()?.server || getMainServer();
+}
+
+function getSessionsForServer(serverId) {
+    return Array.from(state.sessions.values()).filter(
+        session => session.serverId === serverId
+    );
+}
+
+function persistServerRegistry() {
+    const servers = Array.from(state.servers.values())
+        .filter(server => !server.isPrimary)
+        .map(server => server.toJSON());
+    localStorage.setItem(SERVER_STORAGE_KEY, JSON.stringify(servers));
+}
+
+function loadServerRegistry() {
+    const stored = localStorage.getItem(SERVER_STORAGE_KEY);
+    if (!stored) return [];
     try {
-        const res = await auth.fetch('/api/memory/expanded');
+        const parsed = JSON.parse(stored);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (_err) {
+        return [];
+    }
+}
+
+function createServerClient(data, { isPrimary = false } = {}) {
+    const { id, baseUrl } = data;
+    const host = normalizeHostAlias(data.host);
+    const normalized = normalizeBaseUrl(baseUrl);
+    const existing = Array.from(state.servers.values()).find(server => {
+        return normalizeBaseUrl(server.baseUrl) === normalized;
+    });
+    if (existing) {
+        if (data.host !== undefined) {
+            existing.host = host;
+        }
+        return existing;
+    }
+    const finalId = id || (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
+    const server = new ServerClient({
+        id: finalId,
+        baseUrl: normalized,
+        host: host
+    }, { isPrimary });
+    state.servers.set(server.id, server);
+    return server;
+}
+
+function bootstrapServers() {
+    createServerClient({
+        id: MAIN_SERVER_ID,
+        baseUrl: window.location.origin
+    }, { isPrimary: true });
+
+    const storedServers = loadServerRegistry();
+    for (const serverData of storedServers) {
+        try {
+            createServerClient(serverData);
+        } catch (error) {
+            console.warn('Skip invalid server config:', serverData, error);
+        }
+    }
+    renderServerControls();
+}
+
+async function fetchExpandedPaths(server) {
+    try {
+        const res = await server.fetch('/api/memory/expanded');
         if (res.ok) {
             const list = await res.json();
-            // console.log('[Memory] Fetched expanded paths:', list);
-            globalExpandedPaths.clear();
-            list.forEach(p => globalExpandedPaths.add(p));
+            server.expandedPaths.clear();
+            list.forEach(path => server.expandedPaths.add(path));
         }
     } catch (e) { console.error(e); }
 }
 
-async function syncSessions() {
-    if (!auth.isAuthenticated) return;
+async function syncServer(server) {
+    if (!server || !server.isAuthenticated) return;
 
-    // Check WebSocket health for all active sessions
-    for (const session of state.sessions.values()) {
+    for (const session of getSessionsForServer(server.id)) {
         if (!session.socket || session.socket.readyState === WebSocket.CLOSED) {
-            // console.log(`[Heartbeat] Session ${session.id} disconnected. Reconnecting...`);
             session.connect();
         }
     }
 
     const updates = { sessions: [] };
-    for (const [id, pending] of pendingChanges.sessions) {
-        const sessionUpdate = { id };
+    for (const [sessionKey, pending] of pendingChanges.sessions) {
+        const { serverId, sessionId } = splitSessionKey(sessionKey);
+        if (serverId !== server.id) continue;
+
+        const sessionUpdate = { id: sessionId };
         let hasUpdate = false;
 
         if (pending.resize) {
@@ -1121,7 +1329,7 @@ async function syncSessions() {
     const startTime = Date.now();
 
     try {
-        const response = await auth.fetch('/api/heartbeat', {
+        const response = await server.fetch('/api/heartbeat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ updates })
@@ -1131,14 +1339,21 @@ async function syncSessions() {
 
         if (!response.ok) {
             console.warn('Heartbeat server error:', response.status);
-            setStatus('reconnecting');
-            updateSystemStatus(null, -1); // Record missing data
+            setStatus(server, 'reconnecting');
+            server.lastLatency = -1;
+            pushServerHeartbeat(server, -1);
+            updateServerControlMetric(server);
+            if (getActiveServer()?.id === server.id) {
+                updateSystemStatus(null, -1, server);
+            }
             return;
         }
         
         // Clear sent updates
         for (const update of updates.sessions) {
-            const pending = pendingChanges.sessions.get(update.id);
+            const pending = pendingChanges.sessions.get(
+                makeSessionKey(server.id, update.id)
+            );
             if (!pending) continue;
             
             if (update.resize) delete pending.resize;
@@ -1152,21 +1367,35 @@ async function syncSessions() {
 
         const data = await response.json();
         
-        setStatus('connected');
+        setStatus(server, 'connected');
         if (data.system) {
-            updateSystemStatus(data.system, latency);
+            server.lastSystemData = data.system;
+            server.lastLatency = latency;
+            pushServerHeartbeat(server, latency);
+            updateServerControlMetric(server);
+            if (getActiveServer()?.id === server.id) {
+                updateSystemStatus(data.system, latency, server);
+            }
+        } else {
+            pushServerHeartbeat(server, latency);
+            updateServerControlMetric(server);
         }
 
         const sessions = Array.isArray(data) ? data : data.sessions;
-        reconcileSessions(sessions);
+        reconcileSessions(server, sessions || []);
     } catch (error) {
         console.error('Heartbeat failed:', error);
-        setStatus('reconnecting');
-        updateSystemStatus(null, -1); // Record missing data
+        if (!server.isAuthenticated) return;
+        setStatus(server, 'reconnecting');
+        server.lastLatency = -1;
+        pushServerHeartbeat(server, -1);
+        updateServerControlMetric(server);
+        if (getActiveServer()?.id === server.id) {
+            updateSystemStatus(null, -1, server);
+        }
     }
 }
 
-let lastSystemData = null;
 let lastLatency = 0;
 const TOTAL_POINTS = 110;
 const VISIBLE_POINTS = 100;
@@ -1216,6 +1445,131 @@ function cubicBSpline(p0, p1, p2, p3, t) {
     const b3 = t3 / 6;
     
     return p0 * b0 + p1 * b1 + p2 * b2 + p3 * b3;
+}
+
+function ensureServerHeartbeatState(server) {
+    if (!server) return;
+    if (!Array.isArray(server.heartbeatHistory) || server.heartbeatHistory.length === 0) {
+        server.heartbeatHistory = new Array(TOTAL_POINTS).fill(0);
+    }
+    if (typeof server.heartbeatHasInitialized !== 'boolean') {
+        server.heartbeatHasInitialized = false;
+    }
+    if (typeof server.heartbeatLastUpdateTime !== 'number') {
+        server.heartbeatLastUpdateTime = performance.now();
+    }
+    if (typeof server.heartbeatSmoothedMaxVal !== 'number') {
+        server.heartbeatSmoothedMaxVal = 1;
+    }
+}
+
+function isServerHealthy(server) {
+    if (!server) return false;
+    return server.connectionStatus === 'connected' || server.connectionStatus === 'ready';
+}
+
+function formatServerLatency(server) {
+    if (!isServerHealthy(server) || !Number.isFinite(server.lastLatency) || server.lastLatency < 0) {
+        return '-- ms';
+    }
+    return `${Math.round(server.lastLatency)} ms`;
+}
+
+function pushServerHeartbeat(server, latency) {
+    if (!server) return;
+    ensureServerHeartbeatState(server);
+    if (!server.heartbeatHasInitialized && latency > 0) {
+        server.heartbeatHasInitialized = true;
+        for (let i = 0; i < TOTAL_POINTS; i++) {
+            server.heartbeatHistory[i] = 10 + Math.random() * 70;
+        }
+    }
+    server.heartbeatLastUpdateTime = performance.now();
+    server.heartbeatHistory.push(latency);
+    if (server.heartbeatHistory.length > TOTAL_POINTS) {
+        server.heartbeatHistory.shift();
+    }
+}
+
+function drawServerHeartbeatCanvas(canvas, server) {
+    if (!canvas || !server) return;
+    ensureServerHeartbeatState(server);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (width === 0 || height === 0) return;
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+
+    const history = server.heartbeatHistory;
+    if (history.length < 2) return;
+
+    const now = performance.now();
+    const progress = Math.min((now - server.heartbeatLastUpdateTime) / 1000, 1.0);
+    const step = width / VISIBLE_POINTS;
+
+    let maxVal = 0;
+    for (const val of history) {
+        if (val > maxVal) maxVal = val;
+    }
+    const effectiveMax = Math.max(maxVal, 50);
+    server.heartbeatSmoothedMaxVal += (effectiveMax - server.heartbeatSmoothedMaxVal) * 0.05;
+
+    const padding = 3;
+    const drawHeight = height - (padding * 2);
+    if (drawHeight <= 0) return;
+    const getY = (val) => (height - padding) - (val / server.heartbeatSmoothedMaxVal) * drawHeight;
+
+    const len = history.length;
+    const getX = (i) => width + step * (BUFFER_POINTS - len + 1 + i - progress);
+    const getVal = (v) => (v === -1 ? 0 : v);
+
+    let p0, p1, p2, p3;
+    ctx.lineWidth = 1.2;
+    ctx.lineJoin = 'round';
+
+    for (let i = 0; i < len - 1; i++) {
+        const rawP1 = history[i];
+        const rawP2 = history[Math.min(len - 1, i + 1)];
+        const isError = rawP1 === -1 || rawP2 === -1;
+
+        ctx.beginPath();
+        ctx.strokeStyle = isError ? '#dc322f' : '#268bd2';
+
+        p0 = getVal(history[Math.max(0, i - 1)]);
+        p1 = getVal(rawP1);
+        p2 = getVal(rawP2);
+        p3 = getVal(history[Math.min(len - 1, i + 2)]);
+
+        for (let t = 0; t <= 1; t += 0.1) {
+            const x = getX(i) + t * step;
+            let val = cubicBSpline(p0, p1, p2, p3, t);
+            if (val < 0) val = 0;
+            if (t === 0) ctx.moveTo(x, getY(val));
+            else ctx.lineTo(x, getY(val));
+        }
+        ctx.stroke();
+    }
+}
+
+function drawServerHeartbeats() {
+    if (!serverControlsEl) return;
+    const canvases = serverControlsEl.querySelectorAll('.server-heartbeat-canvas');
+    for (const canvas of canvases) {
+        const row = canvas.closest('.server-row');
+        if (!row) continue;
+        const serverId = row.dataset.serverId;
+        if (!serverId) continue;
+        const server = state.servers.get(serverId);
+        if (!server) continue;
+        drawServerHeartbeatCanvas(canvas, server);
+    }
 }
 
 function drawHeartbeat() {
@@ -1357,14 +1711,17 @@ function drawHeartbeat() {
 function animateHeartbeat() {
     requestAnimationFrame(animateHeartbeat);
     drawHeartbeat();
+    drawServerHeartbeats();
 }
 animateHeartbeat();
 
-function updateSystemStatus(system, latency) {
+function updateSystemStatus(system, latency, server = getActiveServer()) {
     const textGroup = document.getElementById('status-text-group');
     if (!textGroup) return; // Should exist in HTML now
 
-    if (system) lastSystemData = system;
+    if (server && system) {
+        server.lastSystemData = system;
+    }
     if (latency !== null && latency !== undefined) {
         // Initialize history with random data on first real packet to avoid empty graph
         if (!hasInitializedHistory && latency > 0) {
@@ -1377,6 +1734,9 @@ function updateSystemStatus(system, latency) {
         }
 
         lastLatency = latency;
+        if (server) {
+            server.lastLatency = latency;
+        }
         lastUpdateTime = performance.now();
         latencyHistory.push(latency);
         // Keep enough history to fill screen + buffer
@@ -1384,7 +1744,7 @@ function updateSystemStatus(system, latency) {
         if (latencyHistory.length > TOTAL_POINTS) latencyHistory.shift();
     }
     
-    const data = system || lastSystemData;
+    const data = system || server?.lastSystemData;
     if (!data) return;
 
     const formatBytesPair = (used, total) => {
@@ -1419,20 +1779,23 @@ function updateSystemStatus(system, latency) {
         return parts.join(' ');
     };
 
-    const isHealthy = currentConnectionStatus === 'connected' || currentConnectionStatus === 'ready';
+    const connectionStatus = server?.connectionStatus || 'disconnected';
+    const isHealthy = connectionStatus === 'connected' || connectionStatus === 'ready';
     const heartbeatColor = isHealthy ? '#859900' : '#dc322f';
-    const statusSuffix = isHealthy ? '' : ` (${currentConnectionStatus || 'unknown'})`;
-    const timeText = isHealthy ? `${lastLatency}ms` : 'Offline';
+    const statusSuffix = isHealthy ? '' : ` (${connectionStatus || 'unknown'})`;
+    const timeText = isHealthy ? `${server?.lastLatency ?? lastLatency}ms` : 'Offline';
     const heartbeatValue = `<span style="color: ${heartbeatColor}"><span class="heartbeat-dot"></span>${timeText}${statusSuffix}</span>`;
+    const sessionCount = server ? getSessionsForServer(server.id).length : state.sessions.size;
+    const displayHost = server ? getDisplayHost(server) : (data.hostname || 'N/A');
 
     const items = [
-        { label: 'Host', value: data.hostname },
+        { label: 'Host', value: displayHost },
         { label: 'Kernel', value: data.osName },
         { label: 'IP', value: data.ip },
         { label: 'CPU', value: `${data.cpu.count}x ${data.cpu.speed} ${data.cpu.usagePercent}% ${renderProgressBar(data.cpu.usagePercent)}` },
         { label: 'Mem', value: `${formatBytesPair(data.memory.used, data.memory.total)} ${memPercent.toFixed(0)}% ${renderProgressBar(memPercent)}` },
         { label: 'Up', value: formatUptime(data.uptime) },
-        { label: 'Tabminal', value: `${state.sessions.size}> ${formatUptime(data.processUptime)}` },
+        { label: 'Tabminal', value: `${sessionCount}> ${formatUptime(data.processUptime)}` },
         { label: 'FPS', value: currentFps },
         { label: 'Heartbeat', value: heartbeatValue }
     ];
@@ -1445,34 +1808,31 @@ function updateSystemStatus(system, latency) {
     `).join('');
 }
 
-function reconcileSessions(remoteSessions) {
-    const remoteIds = new Set(remoteSessions.map(s => s.id));
-    const localIds = new Set(state.sessions.keys());
+function reconcileSessions(server, remoteSessions) {
+    const remoteIds = new Set(remoteSessions.map(session => session.id));
+    const localSessions = getSessionsForServer(server.id);
 
-    // 1. Remove stale sessions
-    for (const id of localIds) {
-        if (!remoteIds.has(id)) {
-            removeSession(id);
+    for (const session of localSessions) {
+        if (!remoteIds.has(session.id)) {
+            removeSession(session.key);
         }
     }
 
-    // 2. Add new sessions or update existing
     for (const data of remoteSessions) {
-        if (state.sessions.has(data.id)) {
-            state.sessions.get(data.id).update(data);
+        const key = makeSessionKey(server.id, data.id);
+        if (state.sessions.has(key)) {
+            state.sessions.get(key).update(data);
         } else {
-            const session = new Session(data);
-            state.sessions.set(session.id, session);
-            // If this is the first session, activate it
-            if (!state.activeSessionId) {
-                switchToSession(session.id);
+            const session = new Session(data, server);
+            state.sessions.set(key, session);
+            if (!state.activeSessionKey) {
+                switchToSession(session.key);
             }
         }
     }
 
-    // 3. Ensure active session is valid
-    if (state.activeSessionId && !state.sessions.has(state.activeSessionId)) {
-        state.activeSessionId = null;
+    if (state.activeSessionKey && !state.sessions.has(state.activeSessionKey)) {
+        state.activeSessionKey = null;
         if (state.sessions.size > 0) {
             switchToSession(state.sessions.keys().next().value);
         } else {
@@ -1483,38 +1843,41 @@ function reconcileSessions(remoteSessions) {
     renderTabs();
 }
 
-async function createNewSession() {
+async function createNewSession(server = getActiveServer()) {
+    if (!server) return;
+    if (server.needsLogin || !server.isAuthenticated) {
+        const password = window.prompt(`Password for ${getDisplayHost(server)}`);
+        if (!password) return;
+        await server.login(password);
+    }
     try {
         const options = {};
-        if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
-            const active = state.sessions.get(state.activeSessionId);
-            if (active.cwd) {
-                options.cwd = active.cwd;
-            }
+        const activeSession = getActiveSession();
+        if (activeSession && activeSession.serverId === server.id && activeSession.cwd) {
+            options.cwd = activeSession.cwd;
         }
 
-        const response = await auth.fetch('/api/sessions', {
+        const response = await server.fetch('/api/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(options)
         });
-        
         if (!response.ok) throw new Error('Failed to create session');
         const newSession = await response.json();
-        // Immediate sync to reflect the new session
-        await syncSessions();
-        switchToSession(newSession.id);
+        await syncServer(server);
+        switchToSession(makeSessionKey(server.id, newSession.id));
     } catch (error) {
         console.error('Failed to create session:', error);
     }
 }
 
-function removeSession(id) {
-    const session = state.sessions.get(id);
+function removeSession(key) {
+    const session = state.sessions.get(key);
     if (session) {
         session.dispose();
-        state.sessions.delete(id);
+        state.sessions.delete(key);
     }
+    pendingChanges.sessions.delete(key);
 }
 // #endregion
 
@@ -1527,14 +1890,14 @@ function renderTabs() {
     // Remove tabs that are no longer in state
     const tabElements = tabListEl.querySelectorAll('.tab-item');
     for (const el of tabElements) {
-        if (!state.sessions.has(el.dataset.sessionId)) {
+        if (!state.sessions.has(el.dataset.sessionKey)) {
             el.remove();
         }
     }
 
     // Add or update tabs
-    for (const [id, session] of state.sessions) {
-        let tab = tabListEl.querySelector(`[data-session-id="${id}"]`);
+    for (const [key, session] of state.sessions) {
+        let tab = tabListEl.querySelector(`[data-session-key="${key}"]`);
         if (!tab) {
             tab = createTabElement(session);
             if (newTabItem) {
@@ -1560,7 +1923,7 @@ function renderTabs() {
             tab.classList.remove('editor-open');
         }
 
-        if (id === state.activeSessionId) {
+        if (key === state.activeSessionKey) {
             tab.classList.add('active');
         } else {
             tab.classList.remove('active');
@@ -1574,15 +1937,15 @@ function createTabElement(session) {
     if (session.editorState && session.editorState.isVisible) {
         tab.classList.add('editor-open');
     }
-    tab.dataset.sessionId = session.id;
+    tab.dataset.sessionKey = session.key;
     
     const closeBtn = document.createElement('button');
     closeBtn.className = 'close-tab-button';
-    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.innerHTML = CLOSE_ICON_SVG;
     closeBtn.title = 'Close Terminal';
     closeBtn.onclick = (e) => {
         e.stopPropagation();
-        auth.fetch(`/api/sessions/${session.id}`, { method: 'DELETE' });
+        closeSession(session.key);
     };
     tab.appendChild(closeBtn);
 
@@ -1592,8 +1955,8 @@ function createTabElement(session) {
     toggleEditorBtn.title = 'Toggle File Editor';
     toggleEditorBtn.onclick = (e) => {
         e.stopPropagation();
-        if (state.activeSessionId !== session.id) {
-            switchToSession(session.id).then(() => editorManager.toggle());
+        if (state.activeSessionKey !== session.key) {
+            switchToSession(session.key).then(() => editorManager.toggle());
         } else {
             editorManager.toggle();
         }
@@ -1630,6 +1993,10 @@ function createTabElement(session) {
     const metaCwd = document.createElement('div');
     metaCwd.className = 'meta meta-cwd';
 
+    const metaServer = document.createElement('div');
+    metaServer.className = 'meta meta-server';
+    metaServer.textContent = `HOST: ${formatSessionHost(session)}`;
+
     const metaTime = document.createElement('div');
     metaTime.className = 'meta';
     
@@ -1647,13 +2014,14 @@ function createTabElement(session) {
 
     overlay.appendChild(title);
     overlay.appendChild(metaId);
+    overlay.appendChild(metaServer);
     overlay.appendChild(metaCwd);
     overlay.appendChild(metaTime);
 
     tab.appendChild(previewContainer);
     tab.appendChild(overlay);
     
-    tab.onclick = () => switchToSession(session.id);
+    tab.onclick = () => switchToSession(session.key);
 
     // Fix iOS double-tap issue
     let touchStartY = 0;
@@ -1676,10 +2044,188 @@ function createTabElement(session) {
         if (e.target.closest('button') || e.target.closest('.file-tree-item')) return;
         
         if (e.cancelable) e.preventDefault(); // Prevent mouse emulation (hover/click)
-        switchToSession(session.id);
+        switchToSession(session.key);
     });
     
     return tab;
+}
+
+function findServerControlRow(serverId) {
+    if (!serverControlsEl) return null;
+    const rows = serverControlsEl.querySelectorAll('.server-row');
+    for (const row of rows) {
+        if (row.dataset.serverId === serverId) {
+            return row;
+        }
+    }
+    return null;
+}
+
+function updateServerControlMetric(server) {
+    if (!server) return;
+    const row = findServerControlRow(server.id);
+    if (!row) return;
+    const latencyEl = row.querySelector('.server-latency-value');
+    if (latencyEl) {
+        latencyEl.textContent = formatServerLatency(server);
+        latencyEl.classList.toggle('offline', !isServerHealthy(server));
+    }
+}
+
+async function removeServer(serverId) {
+    const server = state.servers.get(serverId);
+    if (!server || server.isPrimary) return;
+
+    server.stopHeartbeat();
+    const keysToDelete = Array.from(state.sessions.values())
+        .filter(session => session.serverId === serverId)
+        .map(session => session.key);
+    for (const key of keysToDelete) {
+        removeSession(key);
+    }
+
+    state.servers.delete(serverId);
+    localStorage.removeItem(buildTokenStorageKey(serverId));
+    persistServerRegistry();
+
+    if (state.activeSessionKey && !state.sessions.has(state.activeSessionKey)) {
+        state.activeSessionKey = null;
+    }
+    if (!state.activeSessionKey && state.sessions.size > 0) {
+        await switchToSession(state.sessions.keys().next().value);
+    } else {
+        renderTabs();
+    }
+    renderServerControls();
+}
+
+function closeServerModal() {
+    if (!addServerModal) return;
+    addServerModal.style.display = 'none';
+    if (addServerError) {
+        addServerError.textContent = '';
+    }
+}
+
+function openServerModal(mode, server = null) {
+    if (
+        !addServerModal
+        || !addServerUrlInput
+        || !addServerHostInput
+        || !addServerPasswordInput
+    ) {
+        return false;
+    }
+
+    serverModalState.mode = mode;
+    serverModalState.targetServerId = server?.id || null;
+
+    if (mode === 'reconnect' && server) {
+        if (addServerTitle) {
+            addServerTitle.textContent = 'Reconnect Host';
+        }
+        if (addServerDescription) {
+            addServerDescription.textContent = 'Update host, URL, and password.';
+        }
+        if (addServerSubmitButton) {
+            addServerSubmitButton.textContent = 'Save and Reconnect';
+        }
+        addServerUrlInput.value = server.baseUrl;
+        addServerHostInput.value = server.host || '';
+    } else {
+        if (addServerTitle) {
+            addServerTitle.textContent = 'Add Host';
+        }
+        if (addServerDescription) {
+            addServerDescription.textContent = 'Register another Tabminal host.';
+        }
+        if (addServerSubmitButton) {
+            addServerSubmitButton.textContent = 'Register Host';
+        }
+        addServerUrlInput.value = '';
+        addServerHostInput.value = '';
+    }
+
+    addServerPasswordInput.value = '';
+    if (addServerError) {
+        addServerError.textContent = '';
+    }
+    addServerModal.style.display = 'flex';
+    addServerUrlInput.focus();
+    return true;
+}
+
+function renderServerControls() {
+    if (!serverControlsEl) return;
+    serverControlsEl.innerHTML = '';
+
+    for (const server of state.servers.values()) {
+        const row = document.createElement('div');
+        row.className = 'server-row';
+        row.dataset.serverId = server.id;
+        const hostName = getDisplayHost(server);
+
+        const mainButton = document.createElement('button');
+        mainButton.type = 'button';
+        mainButton.className = 'server-main-button';
+        const requiresReconnectAction = (
+            server.needsLogin
+            || !server.isAuthenticated
+            || server.connectionStatus === 'reconnecting'
+        );
+        if (requiresReconnectAction) {
+            mainButton.classList.add('needs-login');
+        }
+        const actionText = requiresReconnectAction
+            ? `Reconnect ${hostName}`
+            : `New Tab @ ${hostName}`;
+        mainButton.innerHTML = `
+            <span class="server-action-text">${actionText}</span>
+            <span class="server-metrics">
+                <span class="server-latency-value">${formatServerLatency(server)}</span>
+                <canvas class="server-heartbeat-canvas" aria-hidden="true"></canvas>
+            </span>
+        `;
+        mainButton.onclick = async () => {
+            try {
+                if (requiresReconnectAction) {
+                    const opened = openServerModal('reconnect', server);
+                    if (!opened) {
+                        const password = window.prompt(`Password for ${hostName}`);
+                        if (!password) return;
+                        await server.login(password);
+                        await fetchExpandedPaths(server);
+                    }
+                } else {
+                    await createNewSession(server);
+                }
+            } catch (err) {
+                console.error(err);
+                alert(`Failed to connect ${hostName}.`, {
+                    type: 'error',
+                    title: 'Host'
+                });
+            }
+            renderServerControls();
+        };
+
+        row.appendChild(mainButton);
+        if (!server.isPrimary) {
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'server-delete-button';
+            deleteButton.title = `Remove ${hostName}`;
+            deleteButton.innerHTML = CLOSE_ICON_SVG;
+            deleteButton.onclick = async () => {
+                const confirmed = window.confirm(`Remove host "${hostName}"?`);
+                if (!confirmed) return;
+                await removeServer(server.id);
+            };
+            row.appendChild(deleteButton);
+        }
+        serverControlsEl.appendChild(row);
+        updateServerControlMetric(server);
+    }
 }
 
 document.addEventListener('click', () => {
@@ -1856,13 +2402,18 @@ window.alert = (message, options = {}) => {
 };
 // #endregion
 
-let currentConnectionStatus = null;
+const statusMemory = new Map();
 
-function setStatus(status) {
-    if (status === currentConnectionStatus) return;
-    
-    const prevStatus = currentConnectionStatus;
-    currentConnectionStatus = status;
+function setStatus(server, status) {
+    if (!server) return;
+    const prevStatus = statusMemory.get(server.id) || null;
+    if (status === prevStatus) return;
+    statusMemory.set(server.id, status);
+    server.connectionStatus = status;
+    renderServerControls();
+
+    const activeServer = getActiveServer();
+    if (!activeServer || activeServer.id !== server.id) return;
 
     if (status === 'reconnecting') {
         alert('Lost connection. Reconnecting...', { type: 'warning', title: 'Connection' });
@@ -1871,18 +2422,18 @@ function setStatus(status) {
     } else if (status === 'terminated') {
         alert('Session has ended.', { type: 'error', title: 'Connection' });
     } else if (status === 'connected' && !prevStatus) {
-        alert('Connected to server.', { type: 'success', title: 'Connection' });
+        alert('Connected to host.', { type: 'success', title: 'Connection' });
     }
 }
 
-async function switchToSession(sessionId) {
-    if (!sessionId || !state.sessions.has(sessionId)) return;
-    if (state.activeSessionId === sessionId) return;
+async function switchToSession(sessionKey) {
+    if (!sessionKey || !state.sessions.has(sessionKey)) return;
+    if (state.activeSessionKey === sessionKey) return;
 
-    state.activeSessionId = sessionId;
+    state.activeSessionKey = sessionKey;
     renderTabs();
 
-    const session = state.sessions.get(sessionId);
+    const session = state.sessions.get(sessionKey);
     
     // Clear main view
     terminalEl.innerHTML = '';
@@ -1901,48 +2452,124 @@ async function switchToSession(sessionId) {
     
     // Sync editor state
     editorManager.switchTo(session);
+    if (session.server.lastSystemData) {
+        updateSystemStatus(session.server.lastSystemData, session.server.lastLatency, session.server);
+    }
 }
 
-function shortenPath(path) {
-    if (!path) return '';
-    const parts = path.split('/').filter(p => p.length > 0);
-    if (parts.length === 0) return '/';
-    if (parts.length <= 2) return path;
-    const lastPart = parts.pop();
-    const shortenedParts = parts.map(p => p[0]);
-    let result = '/' + shortenedParts.join('/') + '/' + lastPart;
-    if (result.length > 30) {
-        result = '.../' + lastPart;
+function shortenPath(path, envText = '') {
+    return shortenPathFishStyle(path, envText);
+}
+
+function getEnvValue(envText, key) {
+    if (!envText || !key) return '';
+    const prefix = `${key}=`;
+    const lines = String(envText).split('\n');
+    for (const line of lines) {
+        if (line.startsWith(prefix)) {
+            return line.slice(prefix.length);
+        }
     }
-    return result;
+    return '';
+}
+
+function getHostFromBaseUrl(baseUrl) {
+    if (!baseUrl) return '';
+    try {
+        return new URL(baseUrl).hostname;
+    } catch (_err) {
+        return '';
+    }
+}
+
+function getDisplayHost(server) {
+    if (!server) return 'unknown';
+    return normalizeHostAlias(server.host)
+        || server.lastSystemData?.hostname
+        || getHostFromBaseUrl(server.baseUrl)
+        || 'unknown';
+}
+
+function formatSessionHost(session) {
+    if (!session) return 'unknown';
+    const user = getEnvValue(session.env, 'USER')
+        || getEnvValue(session.env, 'LOGNAME')
+        || getEnvValue(session.env, 'USERNAME');
+    const host = getDisplayHost(session.server);
+    if (user && host) return `${user}@${host}`;
+    return host || user || 'unknown';
+}
+
+function shortenPathFishStyle(path, envText = '') {
+    if (!path) return '';
+    const rawPath = String(path);
+    const normalizedPath = rawPath.replace(/\\/g, '/');
+    const home = getEnvValue(envText, 'HOME');
+
+    let displayPath = normalizedPath;
+    if (home && (normalizedPath === home || normalizedPath.startsWith(`${home}/`))) {
+        displayPath = `~${normalizedPath.slice(home.length)}`;
+    }
+
+    if (displayPath === '/') return '/';
+    if (displayPath === '~') return '~';
+
+    const hasRoot = displayPath.startsWith('/');
+    const hasHome = displayPath.startsWith('~');
+    const prefix = hasHome ? '~' : (hasRoot ? '/' : '');
+    const remainder = displayPath.slice(prefix.length);
+    const parts = remainder.split('/').filter(Boolean);
+
+    if (parts.length === 0) return prefix || '/';
+    if (parts.length === 1) {
+        if (prefix === '~') return `~/${parts[0]}`;
+        if (prefix === '/') return `/${parts[0]}`;
+        return parts[0];
+    }
+
+    const leaf = parts.pop();
+    const compactParents = parts.map((part) => part[0]).join('/');
+    let shortened;
+
+    if (prefix === '~') {
+        shortened = compactParents ? `~/${compactParents}/${leaf}` : `~/${leaf}`;
+    } else if (prefix === '/') {
+        shortened = compactParents ? `/${compactParents}/${leaf}` : `/${leaf}`;
+    } else {
+        shortened = compactParents ? `${compactParents}/${leaf}` : leaf;
+    }
+
+    if (shortened.length > 40) {
+        return `.../${leaf}`;
+    }
+    return shortened;
 }
 // #endregion
 
-async function closeSession(id) {
+async function closeSession(sessionKey) {
+    const session = state.sessions.get(sessionKey);
+    if (!session) return;
     try {
-        await auth.fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+        const orderedKeys = Array.from(state.sessions.keys());
+        const currentIndex = orderedKeys.indexOf(sessionKey);
+        await session.server.fetch(`/api/sessions/${session.id}`, { method: 'DELETE' });
+        await syncServer(session.server);
         
-        const sessionIds = Array.from(state.sessions.keys());
-        const index = sessionIds.indexOf(id);
-        
-        if (state.activeSessionId === id) {
-            let nextId = null;
-            if (index > 0) {
-                nextId = sessionIds[index - 1];
-            } else if (index < sessionIds.length - 1) {
-                nextId = sessionIds[index + 1];
+        if (state.activeSessionKey === sessionKey) {
+            const keys = Array.from(state.sessions.keys());
+            let nextKey = null;
+            if (keys.length > 0) {
+                const fallbackIndex = Math.max(0, Math.min(currentIndex, keys.length - 1));
+                nextKey = keys[fallbackIndex];
             }
-            
-            if (nextId) {
-                switchToSession(nextId);
+
+            if (nextKey) {
+                switchToSession(nextKey);
             } else {
-                state.activeSessionId = null;
+                state.activeSessionKey = null;
                 terminalEl.innerHTML = '';
             }
         }
-        
-        await syncSessions();
-        
     } catch (error) {
         console.error('Failed to close session:', error);
     }
@@ -1950,8 +2577,8 @@ async function closeSession(id) {
 
 // #region Initialization & Event Listeners
 const resizeObserver = new ResizeObserver(() => {
-    if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
-        const session = state.sessions.get(state.activeSessionId);
+    if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+        const session = state.sessions.get(state.activeSessionKey);
         session.mainFitAddon.fit();
         session.reportResize();
         
@@ -1960,70 +2587,240 @@ const resizeObserver = new ResizeObserver(() => {
         }
     }
 });
-resizeObserver.observe(terminalWrapper);
-resizeObserver.observe(editorPane);
+if (terminalWrapper) {
+    resizeObserver.observe(terminalWrapper);
+}
+if (editorPane) {
+    resizeObserver.observe(editorPane);
+}
 
-tabListEl.addEventListener('click', (event) => {
-    const closeBtn = event.target.closest('.close-tab-button');
-    if (closeBtn) {
-        event.stopPropagation(); // Prevent switching to the tab we are closing
-        const tabItem = closeBtn.closest('.tab-item');
-        if (tabItem) {
-            closeSession(tabItem.dataset.sessionId);
+if (tabListEl) {
+    tabListEl.addEventListener('click', (event) => {
+        const closeBtn = event.target.closest('.close-tab-button');
+        if (closeBtn) {
+            event.stopPropagation(); // Prevent switching to the tab we are closing
+            const tabItem = closeBtn.closest('.tab-item');
+            if (tabItem) {
+                closeSession(tabItem.dataset.sessionKey);
+            }
+            return;
         }
-        return;
-    }
 
-    const tabItem = event.target.closest('.tab-item');
-    if (tabItem) {
-        switchToSession(tabItem.dataset.sessionId);
-    }
-});
+        const tabItem = event.target.closest('.tab-item');
+        if (tabItem) {
+            switchToSession(tabItem.dataset.sessionKey);
+        }
+    });
+}
 
-newTabButton.addEventListener('click', () => {
-    createNewSession();
-});
+if (
+    addServerButton
+    && addServerModal
+    && addServerForm
+    && addServerUrlInput
+    && addServerHostInput
+    && addServerPasswordInput
+    && addServerError
+    && addServerCancel
+) {
+    addServerButton.addEventListener('click', () => {
+        openServerModal('add');
+    });
 
-loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const password = passwordInput.value;
-    try {
-        await auth.login(password);
-    } catch (err) {
-        console.error(err);
-    }
-});
+    addServerCancel.addEventListener('click', () => {
+        closeServerModal();
+    });
+
+    addServerModal.addEventListener('click', (event) => {
+        if (event.target === addServerModal) {
+            closeServerModal();
+        }
+    });
+
+    addServerForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        addServerError.textContent = '';
+
+        const url = addServerUrlInput.value.trim();
+        const host = addServerHostInput.value.trim();
+        const password = addServerPasswordInput.value;
+        if (!url || !password) {
+            addServerError.textContent = 'URL and password are required.';
+            return;
+        }
+
+        let normalizedUrl = '';
+        let normalizedHost = '';
+        const mode = serverModalState.mode;
+
+        let server = null;
+        let createdNewServer = false;
+        let replacedServerEndpoint = false;
+
+        try {
+            normalizedUrl = normalizeBaseUrl(url);
+            normalizedHost = normalizeHostAlias(host);
+
+            if (mode === 'reconnect' && serverModalState.targetServerId) {
+                server = state.servers.get(serverModalState.targetServerId) || null;
+                if (!server) {
+                    addServerError.textContent = 'Host no longer exists.';
+                    return;
+                }
+
+                const duplicated = Array.from(state.servers.values()).find(item => {
+                    return item.id !== server.id
+                        && normalizeBaseUrl(item.baseUrl) === normalizedUrl;
+                });
+                if (duplicated) {
+                    addServerError.textContent = `URL already registered as "${getDisplayHost(duplicated)}".`;
+                    return;
+                }
+
+                const currentNormalizedUrl = normalizeBaseUrl(server.baseUrl);
+                replacedServerEndpoint = currentNormalizedUrl !== normalizedUrl;
+                server.host = normalizedHost;
+
+                if (replacedServerEndpoint) {
+                    server.stopHeartbeat();
+                    const serverSessionKeys = getSessionsForServer(server.id).map(
+                        session => session.key
+                    );
+                    for (const sessionKey of serverSessionKeys) {
+                        removeSession(sessionKey);
+                    }
+                    if (
+                        state.activeSessionKey
+                        && serverSessionKeys.includes(state.activeSessionKey)
+                    ) {
+                        state.activeSessionKey = null;
+                        terminalEl.innerHTML = '';
+                    }
+
+                    server.baseUrl = normalizedUrl;
+                    server.modelStore.clear();
+                    server.expandedPaths.clear();
+                    server.lastSystemData = null;
+                    server.lastLatency = 0;
+                    server.connectionStatus = 'disconnected';
+                    statusMemory.delete(server.id);
+                }
+            } else {
+                const existing = Array.from(state.servers.values()).find(item => {
+                    return normalizeBaseUrl(item.baseUrl) === normalizedUrl;
+                });
+                if (existing) {
+                    server = existing;
+                    server.host = normalizedHost;
+                } else {
+                    createdNewServer = true;
+                    server = createServerClient({
+                        baseUrl: normalizedUrl,
+                        host: normalizedHost
+                    });
+                }
+            }
+        } catch (_err) {
+            addServerError.textContent = 'Invalid URL.';
+            return;
+        }
+
+        try {
+            await server.login(password);
+            await fetchExpandedPaths(server);
+            await syncServer(server);
+            server.startHeartbeat();
+            persistServerRegistry();
+            renderServerControls();
+            renderTabs();
+            addServerForm.reset();
+            closeServerModal();
+            if (!state.activeSessionKey && state.sessions.size > 0) {
+                await switchToSession(state.sessions.keys().next().value);
+            }
+        } catch (error) {
+            console.error(error);
+            addServerError.textContent = 'Failed to authenticate this host.';
+            if (createdNewServer && !server.isPrimary) {
+                removeServer(server.id);
+            } else if (replacedServerEndpoint) {
+                alert(`Failed to reconnect ${getDisplayHost(server)}. Check URL/password.`, {
+                    type: 'warning',
+                    title: 'Host'
+                });
+            }
+        }
+    });
+} else if (legacyNewTabButton) {
+    console.warn('[Tabminal] Legacy sidebar detected, enabling fallback new-tab button.');
+    legacyNewTabButton.addEventListener('click', () => {
+        createNewSession(getMainServer());
+    });
+}
+
+if (loginForm && passwordInput) {
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const password = passwordInput.value;
+        try {
+            const mainServer = getMainServer();
+            if (!mainServer) return;
+            await mainServer.login(password);
+            auth.hideLoginModal();
+            await initApp();
+        } catch (err) {
+            console.error(err);
+        }
+    });
+}
 
 window.addEventListener('beforeunload', () => {
     resizeObserver.disconnect();
     for (const session of state.sessions.values()) {
         session.dispose();
     }
+    for (const server of state.servers.values()) {
+        server.stopHeartbeat();
+    }
 });
 
 async function initApp() {
-    if (!auth.isAuthenticated) {
+    const mainServer = getMainServer();
+    if (!mainServer) return;
+
+    if (!mainServer.isAuthenticated) {
         auth.showLoginModal();
         return;
     }
-    
-    auth.startHeartbeat();
-    await syncSessions();
-    // If no sessions, create one
+
+    auth.hideLoginModal();
+
+    for (const server of state.servers.values()) {
+        if (!server.isAuthenticated) continue;
+        await fetchExpandedPaths(server);
+        await syncServer(server);
+        server.startHeartbeat();
+    }
+
     if (state.sessions.size === 0) {
-        await createNewSession();
-    } else if (state.activeSessionId) {
-        const session = state.sessions.get(state.activeSessionId);
+        await createNewSession(mainServer);
+    } else if (state.activeSessionKey) {
+        const session = state.sessions.get(state.activeSessionKey);
         if (session) session.mainTerm.focus();
+    } else {
+        await switchToSession(state.sessions.keys().next().value);
     }
     
     // Force focus again after layout settles
     setTimeout(() => {
-        if (state.activeSessionId) {
-            const session = state.sessions.get(state.activeSessionId);
+        if (state.activeSessionKey) {
+            const session = state.sessions.get(state.activeSessionKey);
             if (session) session.mainTerm.focus();
         }
     }, 200);
+
+    renderTabs();
+    renderServerControls();
 }
 
 // Start the app
@@ -2031,8 +2828,8 @@ const virtualKeys = document.getElementById('virtual-keys');
 
 if (virtualKeys) {
     const handleKey = (key, btn) => {
-        if (!state.activeSessionId || !state.sessions.has(state.activeSessionId)) return;
-        const session = state.sessions.get(state.activeSessionId);
+        if (!state.activeSessionKey || !state.sessions.has(state.activeSessionKey)) return;
+        const session = state.sessions.get(state.activeSessionKey);
         
         if (navigator.vibrate) navigator.vibrate(10);
 
@@ -2225,8 +3022,8 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
             data = '\x1b' + data;
         }
 
-        if (state.activeSessionId) {
-            state.sessions.get(state.activeSessionId).send({ type: 'input', data });
+        if (state.activeSessionKey) {
+            state.sessions.get(state.activeSessionKey).send({ type: 'input', data });
         }
         
         // Auto-close Logic
@@ -2275,8 +3072,8 @@ if (searchBar) {
     };
 
     const doSearch = (forward = true) => {
-        if (!state.activeSessionId || !state.sessions.has(state.activeSessionId)) return;
-        const addon = state.sessions.get(state.activeSessionId).searchAddon;
+        if (!state.activeSessionKey || !state.sessions.has(state.activeSessionKey)) return;
+        const addon = state.sessions.get(state.activeSessionKey).searchAddon;
         const term = searchInput.value;
         
         let found = false;
@@ -2301,7 +3098,7 @@ if (searchBar) {
     searchPrev.disabled = true;
 
     searchInput.addEventListener('input', (e) => {
-        if (!state.activeSessionId) return;
+        if (!state.activeSessionKey) return;
         const term = e.target.value;
         if (!term) {
             updateUI(false);
@@ -2312,7 +3109,7 @@ if (searchBar) {
         }
         
         // Incremental search
-        const found = state.sessions.get(state.activeSessionId).searchAddon.findNext(term, { 
+        const found = state.sessions.get(state.activeSessionKey).searchAddon.findNext(term, {
             incremental: true, 
             ...searchOptions 
         });
@@ -2328,7 +3125,7 @@ if (searchBar) {
         if (e.key === 'Escape') {
             e.preventDefault();
             searchBar.style.display = 'none';
-            state.sessions.get(state.activeSessionId)?.mainTerm.focus();
+            state.sessions.get(state.activeSessionKey)?.mainTerm.focus();
         }
     });
 
@@ -2337,7 +3134,7 @@ if (searchBar) {
     
     searchClose.addEventListener('click', () => {
         searchBar.style.display = 'none';
-        state.sessions.get(state.activeSessionId)?.mainTerm.focus();
+        state.sessions.get(state.activeSessionKey)?.mainTerm.focus();
     });
 }
 
@@ -2376,8 +3173,8 @@ document.addEventListener('keydown', (e) => {
         // Ctrl + Shift + W: Close Tab
         if (key === 'w') {
             e.preventDefault();
-            if (state.activeSessionId) {
-                closeSession(state.activeSessionId);
+            if (state.activeSessionKey) {
+                closeSession(state.activeSessionKey);
             }
             return;
         }
@@ -2385,8 +3182,8 @@ document.addEventListener('keydown', (e) => {
         // Ctrl + Shift + E: Toggle Editor
         if (key === 'e') {
             e.preventDefault();
-            if (editorManager && state.activeSessionId && state.sessions.has(state.activeSessionId)) {
-                editorManager.toggle(state.sessions.get(state.activeSessionId));
+            if (editorManager && state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+                editorManager.toggle(state.sessions.get(state.activeSessionKey));
             }
             return;
         }
@@ -2403,8 +3200,8 @@ document.addEventListener('keydown', (e) => {
                 modal.onclick = (ev) => {
                     if (ev.target === modal) {
                         modal.style.display = 'none';
-                        if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
-                            state.sessions.get(state.activeSessionId).mainTerm.focus();
+                        if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+                            state.sessions.get(state.activeSessionKey).mainTerm.focus();
                         }
                     }
                 };
@@ -2419,7 +3216,7 @@ document.addEventListener('keydown', (e) => {
             
             const sessionIds = Array.from(state.sessions.keys());
             if (sessionIds.length > 1) {
-                const currentIdx = sessionIds.indexOf(state.activeSessionId);
+                const currentIdx = sessionIds.indexOf(state.activeSessionKey);
                 let newIdx = currentIdx + direction;
                 if (newIdx < 0) newIdx = sessionIds.length - 1;
                 if (newIdx >= sessionIds.length) newIdx = 0;
@@ -2439,8 +3236,8 @@ document.addEventListener('keydown', (e) => {
         }
         if (code === 'ArrowDown') {
             e.preventDefault();
-            if (state.activeSessionId && state.sessions.has(state.activeSessionId)) {
-                state.sessions.get(state.activeSessionId).mainTerm.focus();
+            if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+                state.sessions.get(state.activeSessionKey).mainTerm.focus();
             }
             return;
         }
@@ -2470,5 +3267,6 @@ document.addEventListener('keydown', (e) => {
 
 
 // Start the app
+bootstrapServers();
 initApp();
 // #endregion

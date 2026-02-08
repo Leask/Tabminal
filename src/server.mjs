@@ -27,6 +27,34 @@ const publicDir = path.join(__dirname, '..', 'public');
 const app = new Koa();
 const router = new Router();
 
+function isOriginAllowed(origin) {
+    if (!origin) return false;
+    if (!config.corsOrigin || config.corsOrigin === '*') return true;
+    const allowList = String(config.corsOrigin)
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+    return allowList.includes(origin);
+}
+
+app.use(async (ctx, next) => {
+    const origin = ctx.get('Origin');
+    if (origin && isOriginAllowed(origin)) {
+        ctx.set('Access-Control-Allow-Origin', origin);
+        ctx.set('Vary', 'Origin');
+    } else if (config.corsOrigin === '*') {
+        ctx.set('Access-Control-Allow-Origin', '*');
+    }
+    ctx.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    ctx.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+
+    if (ctx.method === 'OPTIONS') {
+        ctx.status = 204;
+        return;
+    }
+    await next();
+});
+
 if (config.googleKey && config.googleCx) {
     try {
         await web.initSearch({

@@ -382,15 +382,130 @@ body {
 
 .new-tab-button {
     width: 100%;
-    padding: 10px;
-    /* margin-top removed */
+    min-height: 44px;
+    padding: 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--border-color);
     background-color: transparent;
     color: var(--text-highlight);
-    font-size: 1.5rem;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: background-color 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.server-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.server-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+}
+
+.server-main-button {
+    flex: 1;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background-color: transparent;
+    color: var(--text-highlight);
+    font-size: 12px;
+    text-align: left;
+    padding: 8px 10px;
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.server-main-button:hover {
+    background-color: var(--bg-surface);
+}
+
+.server-main-button.needs-login {
+    border-color: #dc322f;
+    color: #dc322f;
+}
+
+.server-delete-button {
+    width: 34px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(0, 0, 0, 0.6);
+    color: var(--text-highlight);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.server-delete-button svg {
+    width: 16px;
+    height: 16px;
+}
+
+.server-delete-button:hover {
+    background-color: rgba(220, 50, 47, 0.8);
+    border-color: rgba(220, 50, 47, 1);
+    color: white;
+}
+
+.server-delete-button:active {
+    background-color: rgba(220, 50, 47, 1);
+    transform: translateY(1px);
+}
+
+.server-action-text {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+}
+
+.server-metrics {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.server-latency-value {
+    font-size: 10px;
+    color: var(--text-muted);
+    min-width: 40px;
+    line-height: 1;
+}
+
+.server-latency-value.offline {
+    color: #dc322f;
+}
+
+.server-heartbeat-canvas {
+    flex-grow: 1;
+    height: 12px;
+    min-width: 56px;
+    display: block;
+    background-color: transparent;
+    mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+}
+
+.server-main-button.needs-login .server-latency-value {
+    color: #dc322f;
 }
 
 /* Desktop Hover Effects */
@@ -536,18 +651,6 @@ body {
     text-overflow: ellipsis;
     line-height: 1.2;
     margin-bottom: 2px;
-}
-
-.new-tab-button {
-    width: 100%;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background-color: transparent;
-    color: var(--text-highlight);
-    font-size: 1.5rem;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
 }
 
 .new-tab-button:hover {

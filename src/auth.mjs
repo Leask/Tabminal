@@ -27,6 +27,11 @@ export function checkAuth(providedHash) {
 }
 
 export async function authMiddleware(ctx, next) {
+    if (ctx.method === 'OPTIONS') {
+        ctx.status = 204;
+        return;
+    }
+
     // Allow health check without auth
     if (ctx.path === '/healthz') {
         return next();
