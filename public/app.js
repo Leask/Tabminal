@@ -35,6 +35,7 @@ const editorPane = document.getElementById('editor-pane');
 
 // #region Configuration
 const HEARTBEAT_INTERVAL_MS = 1000;
+const RECONNECT_RETRY_MS = 5000;
 const SERVER_STORAGE_KEY = 'tabminal_servers_v2';
 const MAIN_SERVER_ID = 'main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
@@ -229,6 +230,7 @@ class ServerClient {
         this.heartbeatLastUpdateTime = performance.now();
         this.heartbeatSmoothedMaxVal = 1;
         this.heartbeatTimer = null;
+        this.nextSyncAt = 0;
         this.expandedPaths = new Set();
         this.modelStore = new Map();
         this.token = localStorage.getItem(buildTokenStorageKey(this.id)) || '';
@@ -271,6 +273,7 @@ class ServerClient {
         localStorage.setItem(buildTokenStorageKey(this.id), this.token);
         this.isAuthenticated = true;
         this.needsLogin = false;
+        this.nextSyncAt = 0;
         renderServerControls();
         await syncServer(this);
         this.startHeartbeat();
@@ -280,6 +283,7 @@ class ServerClient {
         this.token = '';
         this.isAuthenticated = false;
         this.needsLogin = true;
+        this.nextSyncAt = 0;
         localStorage.removeItem(buildTokenStorageKey(this.id));
         this.stopHeartbeat();
     }
@@ -1293,6 +1297,14 @@ async function fetchExpandedPaths(server) {
 
 async function syncServer(server) {
     if (!server || !server.isAuthenticated) return;
+    const now = Date.now();
+    if (
+        server.connectionStatus === 'reconnecting'
+        && server.nextSyncAt
+        && now < server.nextSyncAt
+    ) {
+        return;
+    }
 
     for (const session of getSessionsForServer(server.id)) {
         if (!session.socket || session.socket.readyState === WebSocket.CLOSED) {
@@ -1338,7 +1350,13 @@ async function syncServer(server) {
         const latency = Date.now() - startTime;
 
         if (!response.ok) {
-            console.warn('Heartbeat server error:', response.status);
+            const wasReconnecting = server.connectionStatus === 'reconnecting';
+            if (!wasReconnecting) {
+                console.warn(
+                    `[Heartbeat] ${getDisplayHost(server)} returned HTTP ${response.status}. Reconnecting...`
+                );
+            }
+            server.nextSyncAt = Date.now() + RECONNECT_RETRY_MS;
             setStatus(server, 'reconnecting');
             server.lastLatency = -1;
             pushServerHeartbeat(server, -1);
@@ -1366,7 +1384,7 @@ async function syncServer(server) {
         }
 
         const data = await response.json();
-        
+        server.nextSyncAt = 0;
         setStatus(server, 'connected');
         if (data.system) {
             server.lastSystemData = data.system;
@@ -1384,8 +1402,14 @@ async function syncServer(server) {
         const sessions = Array.isArray(data) ? data : data.sessions;
         reconcileSessions(server, sessions || []);
     } catch (error) {
-        console.error('Heartbeat failed:', error);
+        const wasReconnecting = server.connectionStatus === 'reconnecting';
+        if (!wasReconnecting) {
+            console.warn(
+                `[Heartbeat] ${getDisplayHost(server)} unavailable (${formatHeartbeatError(error)}). Reconnecting...`
+            );
+        }
         if (!server.isAuthenticated) return;
+        server.nextSyncAt = Date.now() + RECONNECT_RETRY_MS;
         setStatus(server, 'reconnecting');
         server.lastLatency = -1;
         pushServerHeartbeat(server, -1);
@@ -1394,6 +1418,19 @@ async function syncServer(server) {
             updateSystemStatus(null, -1, server);
         }
     }
+}
+
+function formatHeartbeatError(error) {
+    if (!error) return 'unknown error';
+    if (typeof error === 'string') return error;
+    const name = typeof error.name === 'string' ? error.name : '';
+    const message = typeof error.message === 'string' ? error.message : '';
+    if (name === 'TypeError' && message.includes('Failed to fetch')) {
+        return 'network blocked or endpoint unreachable';
+    }
+    if (message) return message;
+    if (name) return name;
+    return 'unknown error';
 }
 
 let lastLatency = 0;
