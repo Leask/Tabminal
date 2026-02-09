@@ -1120,7 +1120,7 @@ class Session {
 
         const serverEl = tab.querySelector('.meta-server');
         if (serverEl) {
-            serverEl.textContent = `HOST: ${formatSessionHost(this)}`;
+            renderSessionHostMeta(serverEl, this);
         }
     }
 
@@ -2261,7 +2261,7 @@ function createTabElement(session) {
 
     const metaServer = document.createElement('div');
     metaServer.className = 'meta meta-server';
-    metaServer.textContent = `HOST: ${formatSessionHost(session)}`;
+    renderSessionHostMeta(metaServer, session);
 
     const metaTime = document.createElement('div');
     metaTime.className = 'meta';
@@ -2455,14 +2455,11 @@ function renderServerControls() {
         if (requiresReconnectAction) {
             mainButton.classList.add('needs-login');
         }
-        const actionText = requiresReconnectAction
-            ? `Reconnect ${hostName}`
-            : `New Tab @ ${hostName}`;
         const latencyClass = isServerHealthy(server)
             ? 'server-latency-group'
             : 'server-latency-group offline';
         mainButton.innerHTML = `
-            <span class="server-action-text">${actionText}</span>
+            <span class="server-action-text"></span>
             <span class="server-metrics">
                 <span class="${latencyClass}">
                     <span class="heartbeat-dot server-heartbeat-dot"></span>
@@ -2471,6 +2468,15 @@ function renderServerControls() {
                 <canvas class="server-heartbeat-canvas" aria-hidden="true"></canvas>
             </span>
         `;
+        const actionTextEl = mainButton.querySelector('.server-action-text');
+        if (actionTextEl) {
+            const prefix = requiresReconnectAction ? 'Reconnect ' : 'New Tab @ ';
+            actionTextEl.textContent = prefix;
+            const hostEl = document.createElement('span');
+            hostEl.className = 'host-emphasis';
+            hostEl.textContent = hostName;
+            actionTextEl.appendChild(hostEl);
+        }
         mainButton.onclick = async () => {
             try {
                 if (requiresReconnectAction) {
@@ -2775,14 +2781,33 @@ function getDisplayHost(server) {
         || 'unknown';
 }
 
-function formatSessionHost(session) {
-    if (!session) return 'unknown';
+function getSessionHostParts(session) {
+    if (!session) {
+        return { user: '', host: 'unknown' };
+    }
     const user = getEnvValue(session.env, 'USER')
         || getEnvValue(session.env, 'LOGNAME')
         || getEnvValue(session.env, 'USERNAME');
     const host = getDisplayHost(session.server);
-    if (user && host) return `${user}@${host}`;
-    return host || user || 'unknown';
+    return { user, host };
+}
+
+function renderSessionHostMeta(metaServerEl, session) {
+    if (!metaServerEl) return;
+    const { user, host } = getSessionHostParts(session);
+    const hostText = host || 'unknown';
+
+    metaServerEl.textContent = '';
+    metaServerEl.appendChild(document.createTextNode('HOST: '));
+
+    if (user) {
+        metaServerEl.appendChild(document.createTextNode(`${user}@`));
+    }
+
+    const hostEl = document.createElement('span');
+    hostEl.className = 'host-emphasis';
+    hostEl.textContent = hostText;
+    metaServerEl.appendChild(hostEl);
 }
 
 function shortenPathFishStyle(path, envText = '') {
