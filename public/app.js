@@ -293,7 +293,11 @@ class ServerClient {
             ...options.headers,
             ...this.getHeaders()
         };
-        const response = await fetch(this.resolveUrl(path), { ...options, headers });
+        const response = await fetch(this.resolveUrl(path), {
+            ...options,
+            headers,
+            credentials: options.credentials || 'include'
+        });
         if (response.status === 401) {
             this.handleUnauthorized();
             throw new Error('Unauthorized');
