@@ -19,8 +19,7 @@ const DEFAULT_CONFIG = {
     openaiKey: null,
     openaiApi: null,
     cloudflareKey: null,
-    shell: null,
-    corsOrigin: '*'
+    shell: null
 };
 
 function loadJson(filePath) {
@@ -122,9 +121,6 @@ function loadConfig() {
             help: {
                 type: 'boolean'
             },
-            'cors-origin': {
-                type: 'string'
-            },
             'accept-terms': {
                 type: 'boolean',
                 short: 'y'
@@ -153,7 +149,6 @@ Options:
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
   --debug, -d           Enable debug mode
-  --cors-origin         Set CORS allowed origin (default: *)
   --accept-terms, -y    Accept security warning and start server
   --help                Show this help message
         `);
@@ -175,7 +170,6 @@ Options:
     if (finalConfig['cloudflare-key']) finalConfig.cloudflareKey = finalConfig['cloudflare-key'];
     if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
     if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
-    if (finalConfig['cors-origin']) finalConfig.corsOrigin = finalConfig['cors-origin'];
 
     if (args.host) {
         finalConfig.host = args.host;
@@ -219,9 +213,6 @@ Options:
     if (args['google-cx']) {
         finalConfig.googleCx = args['google-cx'];
     }
-    if (args['cors-origin']) {
-        finalConfig.corsOrigin = args['cors-origin'];
-    }
 
     // Environment variables override (for backward compatibility/container usage)
     if (process.env.TABMINAL_HOST) finalConfig.host = process.env.TABMINAL_HOST;
@@ -238,7 +229,6 @@ Options:
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
     if (process.env.TABMINAL_GOOGLE_CX) finalConfig.googleCx = process.env.TABMINAL_GOOGLE_CX;
-    if (process.env.TABMINAL_CORS_ORIGIN) finalConfig.corsOrigin = process.env.TABMINAL_CORS_ORIGIN;
     if (parseBool(process.env.TABMINAL_ACCEPT) || parseBool(process.env.TABMINAL_ACCEPT_TERMS)) {
         finalConfig.acceptTerms = true;
     }
