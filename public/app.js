@@ -50,6 +50,8 @@ const serverModalState = {
     mode: 'add',
     targetServerId: null
 };
+let primaryServerBootId = '';
+let runtimeReloadScheduled = false;
 // #endregion
 
 function clusterDebug(...args) {
@@ -126,6 +128,89 @@ function getServerEndpointKeyFromUrl(input) {
 
 function normalizeHostAlias(input) {
     return String(input || '').trim();
+}
+
+function isAccessRedirectResponse(response) {
+    if (!response) return false;
+    if (response.type === 'opaqueredirect') return true;
+    return response.status === 302;
+}
+
+function buildAccessLoginUrl(server) {
+    return normalizeBaseUrl(server?.baseUrl || '');
+}
+
+function isLikelyAccessLoginResponse(response) {
+    if (!response) return false;
+    if (isAccessRedirectResponse(response)) return true;
+    const responseUrl = String(response.url || '');
+    if (responseUrl.includes('/cdn-cgi/access/login')) return true;
+    const location = response.headers?.get?.('location') || '';
+    if (location.includes('/cdn-cgi/access/login')) return true;
+    return false;
+}
+
+async function probeAccessLoginUrl(server, path = '/api/heartbeat') {
+    if (!server || server.isPrimary) return '';
+    try {
+        const response = await fetch(server.resolveUrl(path), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...server.getHeaders()
+            },
+            body: JSON.stringify({ updates: { sessions: [] } }),
+            credentials: 'include',
+            redirect: 'manual',
+            cache: 'no-store'
+        });
+        if (!isLikelyAccessLoginResponse(response)) {
+            return '';
+        }
+        return buildAccessLoginUrl(server);
+    } catch (_err) {
+        return '';
+    }
+}
+
+function openAccessLoginPage(server) {
+    if (!server || server.isPrimary) return false;
+    const targetUrl = buildAccessLoginUrl(server);
+    const link = document.createElement('a');
+    link.href = targetUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return true;
+}
+
+function buildReloadUrlWithRuntimeBootId(bootId) {
+    const current = new URL(window.location.href);
+    current.searchParams.set('rt', bootId);
+    return current.toString();
+}
+
+function handlePrimaryRuntimeVersion(data) {
+    const runtime = data?.runtime;
+    const bootIdRaw = runtime?.bootId;
+    if (!bootIdRaw) return;
+    const bootId = String(bootIdRaw);
+    if (!bootId) return;
+
+    if (!primaryServerBootId) {
+        primaryServerBootId = bootId;
+        return;
+    }
+    if (primaryServerBootId === bootId) return;
+    if (runtimeReloadScheduled) return;
+
+    runtimeReloadScheduled = true;
+    primaryServerBootId = bootId;
+    console.info('[Runtime] Main server restarted. Reloading app shell.');
+    window.location.replace(buildReloadUrlWithRuntimeBootId(bootId));
 }
 
 function buildTokenStorageKey(serverId) {
@@ -266,6 +351,8 @@ class ServerClient {
         this.heartbeatSmoothedMaxVal = 1;
         this.heartbeatTimer = null;
         this.nextSyncAt = 0;
+        this.needsAccessLogin = false;
+        this.accessLoginUrl = '';
         this.expandedPaths = new Set();
         this.modelStore = new Map();
         const key = buildTokenStorageKey(this.id);
@@ -331,6 +418,8 @@ class ServerClient {
 
     async loginWithToken(token) {
         this.setToken(token);
+        this.needsAccessLogin = false;
+        this.accessLoginUrl = '';
         renderServerControls();
         await syncServer(this);
         this.startHeartbeat();
@@ -338,6 +427,8 @@ class ServerClient {
 
     clearAuth() {
         this.setToken('');
+        this.needsAccessLogin = false;
+        this.accessLoginUrl = '';
         this.stopHeartbeat();
         if (!this.isPrimary) {
             syncServerList().catch(() => {});
@@ -352,8 +443,15 @@ class ServerClient {
         const response = await fetch(this.resolveUrl(path), {
             ...options,
             headers,
-            credentials: options.credentials || 'include'
+            credentials: options.credentials || 'include',
+            redirect: options.redirect || (this.isPrimary ? 'follow' : 'manual')
         });
+        if (!this.isPrimary && isAccessRedirectResponse(response)) {
+            this.handleAccessRedirect(path, response);
+            const error = new Error('Cloudflare Access redirect');
+            error.code = 'ACCESS_REDIRECT';
+            throw error;
+        }
         if (response.status === 401) {
             this.handleUnauthorized();
             throw new Error('Unauthorized');
@@ -367,6 +465,8 @@ class ServerClient {
     }
 
     handleUnauthorized(message = '') {
+        this.needsAccessLogin = false;
+        this.accessLoginUrl = '';
         this.clearAuth();
         setStatus(this, 'reconnecting');
         renderServerControls();
@@ -377,6 +477,26 @@ class ServerClient {
                 type: 'warning',
                 title: 'Host'
             });
+        }
+    }
+
+    handleAccessRedirect(_path, _response) {
+        if (this.isPrimary) return;
+        const loginUrl = buildAccessLoginUrl(this);
+        const wasRequired = this.needsAccessLogin;
+        this.needsAccessLogin = true;
+        this.accessLoginUrl = loginUrl;
+        setStatus(this, 'reconnecting');
+        renderServerControls();
+        if (!wasRequired) {
+            alert(
+                `${getDisplayHost(this)} needs Cloudflare login. `
+                + 'Click "Cloudflare Login".',
+                {
+                    type: 'warning',
+                    title: 'Host'
+                }
+            );
         }
     }
 
@@ -1386,6 +1506,8 @@ function resetServerEndpoint(server, normalizedUrl) {
     server.expandedPaths.clear();
     server.lastSystemData = null;
     server.lastLatency = 0;
+    server.needsAccessLogin = false;
+    server.accessLoginUrl = '';
     server.connectionStatus = 'disconnected';
     statusMemory.delete(server.id);
     return true;
@@ -1614,6 +1736,11 @@ async function syncServer(server) {
 
         const data = await response.json();
         server.nextSyncAt = 0;
+        if (server.isPrimary) {
+            handlePrimaryRuntimeVersion(data);
+        }
+        server.needsAccessLogin = false;
+        server.accessLoginUrl = '';
         setStatus(server, 'connected');
         if (data.system) {
             server.lastSystemData = data.system;
@@ -1652,6 +1779,9 @@ async function syncServer(server) {
 function formatHeartbeatError(error) {
     if (!error) return 'unknown error';
     if (typeof error === 'string') return error;
+    if (error.code === 'ACCESS_REDIRECT') {
+        return 'cloudflare access login required';
+    }
     const name = typeof error.name === 'string' ? error.name : '';
     const message = typeof error.message === 'string' ? error.message : '';
     if (name === 'TypeError' && message.includes('Failed to fetch')) {
@@ -2446,14 +2576,14 @@ function openServerModal(mode, server = null) {
             addServerTitle.textContent = 'Reconnect Host';
         }
         if (addServerDescription) {
-            addServerDescription.textContent = 'Update host, URL, and password.';
+            addServerDescription.textContent = 'Update host and URL.';
         }
         if (addServerSubmitButton) {
             addServerSubmitButton.textContent = 'Save and Reconnect';
         }
         addServerHostInput.placeholder = 'Host (auto-detect)';
-        addServerPasswordInput.placeholder = 'Password';
-        addServerPasswordInput.required = true;
+        addServerPasswordInput.placeholder = 'Password (use current)';
+        addServerPasswordInput.required = false;
         addServerUrlInput.value = server.baseUrl;
         addServerHostInput.value = server.host || '';
     } else {
@@ -2518,7 +2648,9 @@ function renderServerControls() {
         `;
         const actionTextEl = mainButton.querySelector('.server-action-text');
         if (actionTextEl) {
-            const prefix = requiresReconnectAction ? 'Reconnect ' : 'New Tab @ ';
+            const prefix = server.needsAccessLogin
+                ? 'Cloudflare Login '
+                : (requiresReconnectAction ? 'Reconnect ' : 'New Tab @ ');
             actionTextEl.textContent = prefix;
             const hostEl = document.createElement('span');
             hostEl.className = 'host-emphasis';
@@ -2528,12 +2660,31 @@ function renderServerControls() {
         mainButton.onclick = async () => {
             try {
                 if (requiresReconnectAction) {
-                    const opened = openServerModal('reconnect', server);
-                    if (!opened) {
-                        const password = window.prompt(`Password for ${hostName}`);
-                        if (!password) return;
-                        await server.login(password);
-                        await fetchExpandedPaths(server);
+                    if (server.needsAccessLogin) {
+                        openAccessLoginPage(server);
+                    } else {
+                        const shouldProbeAccessLogin = (
+                            !server.isPrimary
+                            && server.isAuthenticated
+                            && server.connectionStatus === 'reconnecting'
+                        );
+                        if (shouldProbeAccessLogin) {
+                            const loginUrl = await probeAccessLoginUrl(server);
+                            if (loginUrl) {
+                                server.needsAccessLogin = true;
+                                server.accessLoginUrl = loginUrl;
+                                renderServerControls();
+                                openAccessLoginPage(server);
+                                return;
+                            }
+                        }
+                        const opened = openServerModal('reconnect', server);
+                        if (!opened) {
+                            const password = window.prompt(`Password for ${hostName}`);
+                            if (!password) return;
+                            await server.login(password);
+                            await fetchExpandedPaths(server);
+                        }
                     }
                 } else {
                     await createNewSession(server);
@@ -3032,10 +3183,6 @@ if (
             addServerError.textContent = 'URL is required.';
             return;
         }
-        if (mode === 'reconnect' && !password) {
-            addServerError.textContent = 'Password is required for reconnect.';
-            return;
-        }
 
         let normalizedUrl = '';
         let normalizedHost = '';
@@ -3092,7 +3239,12 @@ if (
             if (password) {
                 authToken = await hashPassword(password);
             } else {
-                const inheritedServer = getActiveServer() || getMainServer();
+                const candidates = [];
+                if (mode === 'reconnect' && server) {
+                    candidates.push(server);
+                }
+                candidates.push(getActiveServer(), getMainServer());
+                const inheritedServer = candidates.find(item => item?.token) || null;
                 authToken = inheritedServer?.token || '';
                 if (!authToken) {
                     addServerError.textContent = 'No inherited password available.';

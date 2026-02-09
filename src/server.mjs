@@ -26,6 +26,7 @@ const publicDir = path.join(__dirname, '..', 'public');
 
 const app = new Koa();
 const router = new Router();
+const SERVER_BOOT_ID = `${Date.now()}`;
 
 app.use(async (ctx, next) => {
     const origin = ctx.get('Origin');
@@ -167,7 +168,10 @@ router.all('/api/heartbeat', async (ctx) => {
 
     ctx.body = {
         sessions: terminalManager.listSessions(),
-        system: systemMonitor.getStats()
+        system: systemMonitor.getStats(),
+        runtime: {
+            bootId: SERVER_BOOT_ID
+        }
     };
 });
 
