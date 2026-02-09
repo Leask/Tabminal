@@ -408,7 +408,7 @@ body {
 
 .server-row {
     display: flex;
-    gap: 6px;
+    position: relative;
     align-items: stretch;
     min-width: 0;
 }
@@ -443,18 +443,35 @@ body {
 }
 
 .server-delete-button {
-    flex: 0 0 34px;
-    width: 34px;
-    border-radius: 6px;
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    right: auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
     border: 1px solid rgba(255, 255, 255, 0.2);
     background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     color: var(--text-highlight);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 10;
     cursor: pointer;
-    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    transition: all 0.2s ease;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.server-row:hover .server-delete-button,
+.server-row:focus-within .server-delete-button {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 .server-delete-button svg {
