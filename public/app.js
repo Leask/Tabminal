@@ -36,14 +36,43 @@ const editorPane = document.getElementById('editor-pane');
 // #region Configuration
 const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
-const SERVER_STORAGE_KEY = 'tabminal_servers_v2';
 const MAIN_SERVER_ID = 'main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+const CLUSTER_DEBUG_STORAGE_KEY = 'tabminal_cluster_debug';
+function resolveClusterDebugFlag() {
+    const query = new URLSearchParams(window.location.search).get('clusterDebug');
+    if (query === '1' || query === 'true') return true;
+    if (query === '0' || query === 'false') return false;
+    return localStorage.getItem(CLUSTER_DEBUG_STORAGE_KEY) === '1';
+}
+const CLUSTER_DEBUG = resolveClusterDebugFlag();
 const serverModalState = {
     mode: 'add',
     targetServerId: null
 };
 // #endregion
+
+function clusterDebug(...args) {
+    if (!CLUSTER_DEBUG) return;
+    console.log('[ClusterDebug]', ...args);
+}
+
+window.TabminalDebug = window.TabminalDebug || {};
+window.TabminalDebug.setClusterDebug = (enabled) => {
+    const on = !!enabled;
+    if (on) {
+        localStorage.setItem(CLUSTER_DEBUG_STORAGE_KEY, '1');
+    } else {
+        localStorage.removeItem(CLUSTER_DEBUG_STORAGE_KEY);
+    }
+    window.TabminalDebug.clusterDebugEnabled = on;
+};
+window.TabminalDebug.clusterDebugEnabled = CLUSTER_DEBUG;
+
+clusterDebug('app.js loaded', {
+    href: window.location.href,
+    at: new Date().toISOString()
+});
 
 // #region Sidebar Toggle (Mobile)
 const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -87,6 +116,12 @@ function normalizeBaseUrl(input) {
         normalized = normalized.slice(0, -1);
     }
     return normalized;
+}
+
+function getServerEndpointKeyFromUrl(input) {
+    const parsed = new URL(normalizeBaseUrl(input));
+    const host = parsed.hostname.toLowerCase();
+    return parsed.port ? `${host}:${parsed.port}` : host;
 }
 
 function normalizeHostAlias(input) {
@@ -233,16 +268,37 @@ class ServerClient {
         this.nextSyncAt = 0;
         this.expandedPaths = new Set();
         this.modelStore = new Map();
-        this.token = localStorage.getItem(buildTokenStorageKey(this.id)) || '';
+        const key = buildTokenStorageKey(this.id);
+        const persistedToken = typeof data.token === 'string' ? data.token : '';
+        this.token = persistedToken || localStorage.getItem(key) || '';
+        if (this.token) {
+            localStorage.setItem(key, this.token);
+        }
         this.isAuthenticated = !!this.token;
         this.needsLogin = !this.isAuthenticated;
+    }
+
+    setToken(token) {
+        const normalizedToken = typeof token === 'string' ? token.trim() : '';
+        this.token = normalizedToken;
+        this.isAuthenticated = !!this.token;
+        this.needsLogin = !this.isAuthenticated;
+        this.nextSyncAt = 0;
+
+        const key = buildTokenStorageKey(this.id);
+        if (this.token) {
+            localStorage.setItem(key, this.token);
+        } else {
+            localStorage.removeItem(key);
+        }
     }
 
     toJSON() {
         return {
             id: this.id,
             host: this.host,
-            baseUrl: this.baseUrl
+            baseUrl: this.baseUrl,
+            token: this.token
         };
     }
 
@@ -269,23 +325,23 @@ class ServerClient {
     }
 
     async login(password) {
-        this.token = await hashPassword(password);
-        localStorage.setItem(buildTokenStorageKey(this.id), this.token);
-        this.isAuthenticated = true;
-        this.needsLogin = false;
-        this.nextSyncAt = 0;
+        const hashed = await hashPassword(password);
+        await this.loginWithToken(hashed);
+    }
+
+    async loginWithToken(token) {
+        this.setToken(token);
         renderServerControls();
         await syncServer(this);
         this.startHeartbeat();
     }
 
     clearAuth() {
-        this.token = '';
-        this.isAuthenticated = false;
-        this.needsLogin = true;
-        this.nextSyncAt = 0;
-        localStorage.removeItem(buildTokenStorageKey(this.id));
+        this.setToken('');
         this.stopHeartbeat();
+        if (!this.isPrimary) {
+            syncServerList().catch(() => {});
+        }
     }
 
     async fetch(path, options = {}) {
@@ -1192,7 +1248,8 @@ class Session {
 const state = {
     servers: new Map(), // serverId -> ServerClient
     sessions: new Map(), // sessionKey -> Session
-    activeSessionKey: null
+    activeSessionKey: null,
+    serverRegistryLoaded: false
 };
 
 const pendingChanges = {
@@ -1230,38 +1287,140 @@ function getSessionsForServer(serverId) {
     );
 }
 
-function persistServerRegistry() {
-    const servers = Array.from(state.servers.values())
-        .filter(server => !server.isPrimary)
-        .map(server => server.toJSON());
-    localStorage.setItem(SERVER_STORAGE_KEY, JSON.stringify(servers));
+function getServerEndpointKey(server) {
+    if (!server) return '';
+    return getServerEndpointKeyFromUrl(server.baseUrl);
 }
 
-function loadServerRegistry() {
-    const stored = localStorage.getItem(SERVER_STORAGE_KEY);
-    if (!stored) return [];
-    try {
-        const parsed = JSON.parse(stored);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (_err) {
-        return [];
+function findServerByEndpointKey(endpointKey, excludeServerId = '') {
+    for (const server of state.servers.values()) {
+        if (excludeServerId && server.id === excludeServerId) continue;
+        try {
+            if (getServerEndpointKey(server) === endpointKey) {
+                return server;
+            }
+        } catch (_err) {
+            // Ignore invalid entries and continue.
+        }
     }
+    return null;
+}
+
+function getPersistedServers() {
+    return Array.from(state.servers.values())
+        .filter(server => !server.isPrimary)
+        .map(server => server.toJSON());
+}
+
+async function saveServerRegistryToBackend() {
+    const mainServer = getMainServer();
+    if (!mainServer || !mainServer.isAuthenticated) return;
+    const payload = { servers: getPersistedServers() };
+    clusterDebug('saveServerRegistryToBackend', {
+        main: mainServer.baseUrl,
+        count: payload.servers.length
+    });
+
+    const response = await mainServer.fetch('/api/cluster', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    clusterDebug('saveServerRegistryToBackend response', { status: response.status });
+    if (!response.ok) {
+        throw new Error(`Failed to save host list: HTTP ${response.status}`);
+    }
+}
+
+async function loadServerRegistryFromBackend() {
+    const mainServer = getMainServer();
+    if (!mainServer || !mainServer.isAuthenticated) return [];
+    clusterDebug('loadServerRegistryFromBackend request', {
+        main: mainServer.baseUrl,
+        authenticated: mainServer.isAuthenticated
+    });
+    const response = await mainServer.fetch('/api/cluster');
+    if (!response.ok) {
+        clusterDebug('loadServerRegistryFromBackend non-ok', { status: response.status });
+        throw new Error(`Failed to load host list: HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    const raw = await response.text();
+    clusterDebug('loadServerRegistryFromBackend response', {
+        status: response.status,
+        contentType,
+        length: raw.length
+    });
+    let payload = null;
+    try {
+        payload = raw ? JSON.parse(raw) : {};
+    } catch (_err) {
+        clusterDebug('loadServerRegistryFromBackend invalid json', raw.slice(0, 180));
+        throw new Error('Failed to load host list: invalid JSON response');
+    }
+    if (Array.isArray(payload)) {
+        return payload;
+    }
+    if (Array.isArray(payload?.servers)) {
+        return payload.servers;
+    }
+    throw new Error('Failed to load host list: missing servers array');
+}
+
+function resetServerEndpoint(server, normalizedUrl) {
+    const currentUrl = normalizeBaseUrl(server.baseUrl);
+    if (currentUrl === normalizedUrl) return false;
+
+    server.stopHeartbeat();
+    const sessionKeys = getSessionsForServer(server.id).map(session => session.key);
+    for (const sessionKey of sessionKeys) {
+        removeSession(sessionKey);
+    }
+    if (state.activeSessionKey && sessionKeys.includes(state.activeSessionKey)) {
+        state.activeSessionKey = null;
+        terminalEl.innerHTML = '';
+    }
+
+    server.baseUrl = normalizedUrl;
+    server.modelStore.clear();
+    server.expandedPaths.clear();
+    server.lastSystemData = null;
+    server.lastLatency = 0;
+    server.connectionStatus = 'disconnected';
+    statusMemory.delete(server.id);
+    return true;
 }
 
 function createServerClient(data, { isPrimary = false } = {}) {
     const { id, baseUrl } = data;
     const host = normalizeHostAlias(data.host);
     const normalized = normalizeBaseUrl(baseUrl);
-    const existing = Array.from(state.servers.values()).find(server => {
-        return normalizeBaseUrl(server.baseUrl) === normalized;
-    });
+    const endpointKey = getServerEndpointKeyFromUrl(normalized);
+    const existing = findServerByEndpointKey(endpointKey);
     if (existing) {
         if (data.host !== undefined) {
             existing.host = host;
         }
+        if (typeof data.token === 'string') {
+            existing.token = data.token;
+            existing.isAuthenticated = !!existing.token;
+            existing.needsLogin = !existing.isAuthenticated;
+            if (existing.token) {
+                localStorage.setItem(buildTokenStorageKey(existing.id), existing.token);
+            } else {
+                localStorage.removeItem(buildTokenStorageKey(existing.id));
+            }
+        }
+        resetServerEndpoint(existing, normalized);
+        if (isPrimary) {
+            existing.isPrimary = true;
+        }
         return existing;
     }
-    const finalId = id || (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
+    const safeId = typeof id === 'string' ? id.trim() : '';
+    const finalId = safeId && !state.servers.has(safeId)
+        ? safeId
+        : (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
     const server = new ServerClient({
         id: finalId,
         baseUrl: normalized,
@@ -1276,16 +1435,82 @@ function bootstrapServers() {
         id: MAIN_SERVER_ID,
         baseUrl: window.location.origin
     }, { isPrimary: true });
+    const mainServer = getMainServer();
+    clusterDebug('bootstrapServers', {
+        main: mainServer?.baseUrl || 'n/a',
+        authenticated: !!mainServer?.isAuthenticated
+    });
+    renderServerControls();
+}
 
-    const storedServers = loadServerRegistry();
-    for (const serverData of storedServers) {
-        try {
-            createServerClient(serverData);
-        } catch (error) {
-            console.warn('Skip invalid server config:', serverData, error);
+async function hydrateServerRegistry() {
+    if (state.serverRegistryLoaded) {
+        clusterDebug('hydrateServerRegistry skip: already loaded');
+        return;
+    }
+    const mainServer = getMainServer();
+    if (!mainServer) {
+        clusterDebug('hydrateServerRegistry skip: no main server');
+        return;
+    }
+    if (!mainServer.isAuthenticated) {
+        clusterDebug('hydrateServerRegistry skip: main not authenticated');
+        return;
+    }
+    clusterDebug('hydrateServerRegistry start', { main: mainServer.baseUrl });
+    try {
+        const serverConfigs = await loadServerRegistryFromBackend();
+        clusterDebug('hydrateServerRegistry loaded configs', { count: serverConfigs.length });
+        const mainKey = getServerEndpointKey(mainServer);
+        const deduplicated = new Map();
+        for (const raw of serverConfigs) {
+            try {
+                const normalizedUrl = normalizeBaseUrl(raw?.baseUrl);
+                const endpointKey = getServerEndpointKeyFromUrl(normalizedUrl);
+                if (!endpointKey || endpointKey === mainKey) {
+                    continue;
+                }
+                deduplicated.set(endpointKey, {
+                    id: typeof raw?.id === 'string' ? raw.id : '',
+                    baseUrl: normalizedUrl,
+                    host: normalizeHostAlias(raw?.host),
+                    token: typeof raw?.token === 'string' ? raw.token : ''
+                });
+            } catch (error) {
+                console.warn('Skip invalid host config from backend:', raw, error);
+            }
         }
+
+        for (const serverData of deduplicated.values()) {
+            createServerClient(serverData);
+        }
+        clusterDebug('hydrateServerRegistry applied configs', {
+            deduplicated: deduplicated.size,
+            totalServers: state.servers.size
+        });
+        state.serverRegistryLoaded = true;
+    } catch (error) {
+        console.warn('Failed to load host list from backend:', error);
+        clusterDebug('hydrateServerRegistry failed', error);
+        state.serverRegistryLoaded = false;
+        alert('Failed to load host list from backend.', {
+            type: 'warning',
+            title: 'Host'
+        });
     }
     renderServerControls();
+}
+
+async function syncServerList() {
+    try {
+        await saveServerRegistryToBackend();
+    } catch (error) {
+        console.warn('Failed to save host list:', error);
+        alert('Failed to save host list.', {
+            type: 'warning',
+            title: 'Host'
+        });
+    }
 }
 
 async function fetchExpandedPaths(server) {
@@ -2118,7 +2343,7 @@ function updateServerControlMetric(server) {
     }
 }
 
-async function removeServer(serverId) {
+async function removeServer(serverId, { persist = true } = {}) {
     const server = state.servers.get(serverId);
     if (!server || server.isPrimary) return;
 
@@ -2132,7 +2357,9 @@ async function removeServer(serverId) {
 
     state.servers.delete(serverId);
     localStorage.removeItem(buildTokenStorageKey(serverId));
-    persistServerRegistry();
+    if (persist) {
+        await syncServerList();
+    }
 
     if (state.activeSessionKey && !state.sessions.has(state.activeSessionKey)) {
         state.activeSessionKey = null;
@@ -2176,6 +2403,9 @@ function openServerModal(mode, server = null) {
         if (addServerSubmitButton) {
             addServerSubmitButton.textContent = 'Save and Reconnect';
         }
+        addServerHostInput.placeholder = 'Host (auto-detect)';
+        addServerPasswordInput.placeholder = 'Password';
+        addServerPasswordInput.required = true;
         addServerUrlInput.value = server.baseUrl;
         addServerHostInput.value = server.host || '';
     } else {
@@ -2188,6 +2418,9 @@ function openServerModal(mode, server = null) {
         if (addServerSubmitButton) {
             addServerSubmitButton.textContent = 'Register';
         }
+        addServerHostInput.placeholder = 'Host (auto-detect)';
+        addServerPasswordInput.placeholder = 'Password (use current)';
+        addServerPasswordInput.required = false;
         addServerUrlInput.value = '';
         addServerHostInput.value = '';
     }
@@ -2689,6 +2922,13 @@ if (
         }
     });
 
+    addServerModal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeServerModal();
+        }
+    });
+
     addServerForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         addServerError.textContent = '';
@@ -2696,22 +2936,29 @@ if (
         const url = addServerUrlInput.value.trim();
         const host = addServerHostInput.value.trim();
         const password = addServerPasswordInput.value;
-        if (!url || !password) {
-            addServerError.textContent = 'URL and password are required.';
+        const mode = serverModalState.mode;
+
+        if (!url) {
+            addServerError.textContent = 'URL is required.';
+            return;
+        }
+        if (mode === 'reconnect' && !password) {
+            addServerError.textContent = 'Password is required for reconnect.';
             return;
         }
 
         let normalizedUrl = '';
         let normalizedHost = '';
-        const mode = serverModalState.mode;
 
         let server = null;
         let createdNewServer = false;
         let replacedServerEndpoint = false;
+        let duplicateServerToRemove = null;
 
         try {
             normalizedUrl = normalizeBaseUrl(url);
             normalizedHost = normalizeHostAlias(host);
+            const endpointKey = getServerEndpointKeyFromUrl(normalizedUrl);
 
             if (mode === 'reconnect' && serverModalState.targetServerId) {
                 server = state.servers.get(serverModalState.targetServerId) || null;
@@ -2720,50 +2967,23 @@ if (
                     return;
                 }
 
-                const duplicated = Array.from(state.servers.values()).find(item => {
-                    return item.id !== server.id
-                        && normalizeBaseUrl(item.baseUrl) === normalizedUrl;
-                });
+                const duplicated = findServerByEndpointKey(endpointKey, server.id);
                 if (duplicated) {
-                    addServerError.textContent = `URL already registered as "${getDisplayHost(duplicated)}".`;
-                    return;
+                    if (duplicated.isPrimary) {
+                        addServerError.textContent = 'Main host already uses this URL.';
+                        return;
+                    }
+                    duplicateServerToRemove = duplicated.id;
                 }
 
-                const currentNormalizedUrl = normalizeBaseUrl(server.baseUrl);
-                replacedServerEndpoint = currentNormalizedUrl !== normalizedUrl;
                 server.host = normalizedHost;
-
-                if (replacedServerEndpoint) {
-                    server.stopHeartbeat();
-                    const serverSessionKeys = getSessionsForServer(server.id).map(
-                        session => session.key
-                    );
-                    for (const sessionKey of serverSessionKeys) {
-                        removeSession(sessionKey);
-                    }
-                    if (
-                        state.activeSessionKey
-                        && serverSessionKeys.includes(state.activeSessionKey)
-                    ) {
-                        state.activeSessionKey = null;
-                        terminalEl.innerHTML = '';
-                    }
-
-                    server.baseUrl = normalizedUrl;
-                    server.modelStore.clear();
-                    server.expandedPaths.clear();
-                    server.lastSystemData = null;
-                    server.lastLatency = 0;
-                    server.connectionStatus = 'disconnected';
-                    statusMemory.delete(server.id);
-                }
+                replacedServerEndpoint = resetServerEndpoint(server, normalizedUrl);
             } else {
-                const existing = Array.from(state.servers.values()).find(item => {
-                    return normalizeBaseUrl(item.baseUrl) === normalizedUrl;
-                });
+                const existing = findServerByEndpointKey(endpointKey);
                 if (existing) {
                     server = existing;
                     server.host = normalizedHost;
+                    replacedServerEndpoint = resetServerEndpoint(server, normalizedUrl);
                 } else {
                     createdNewServer = true;
                     server = createServerClient({
@@ -2778,11 +2998,29 @@ if (
         }
 
         try {
-            await server.login(password);
+            let authToken = '';
+            if (password) {
+                authToken = await hashPassword(password);
+            } else {
+                const inheritedServer = getActiveServer() || getMainServer();
+                authToken = inheritedServer?.token || '';
+                if (!authToken) {
+                    addServerError.textContent = 'No inherited password available.';
+                    if (createdNewServer && !server.isPrimary) {
+                        await removeServer(server.id, { persist: false });
+                    }
+                    return;
+                }
+            }
+
+            await server.loginWithToken(authToken);
             await fetchExpandedPaths(server);
             await syncServer(server);
             server.startHeartbeat();
-            persistServerRegistry();
+            if (duplicateServerToRemove) {
+                await removeServer(duplicateServerToRemove, { persist: false });
+            }
+            await syncServerList();
             renderServerControls();
             renderTabs();
             addServerForm.reset();
@@ -2794,7 +3032,7 @@ if (
             console.error(error);
             addServerError.textContent = 'Failed to authenticate this host.';
             if (createdNewServer && !server.isPrimary) {
-                removeServer(server.id);
+                await removeServer(server.id, { persist: false });
             } else if (replacedServerEndpoint) {
                 alert(`Failed to reconnect ${getDisplayHost(server)}. Check URL/password.`, {
                     type: 'warning',
@@ -2839,13 +3077,20 @@ window.addEventListener('beforeunload', () => {
 async function initApp() {
     const mainServer = getMainServer();
     if (!mainServer) return;
+    clusterDebug('initApp start', {
+        main: mainServer.baseUrl,
+        authenticated: mainServer.isAuthenticated,
+        loaded: state.serverRegistryLoaded
+    });
 
     if (!mainServer.isAuthenticated) {
+        clusterDebug('initApp stop: main authentication required');
         auth.showLoginModal();
         return;
     }
 
     auth.hideLoginModal();
+    await hydrateServerRegistry();
 
     for (const server of state.servers.values()) {
         if (!server.isAuthenticated) continue;

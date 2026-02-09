@@ -42,6 +42,20 @@ self.addEventListener('activate', event => {
                 .filter(name => name !== CACHE_NAME)
                 .map(name => caches.delete(name))
         );
+        const cache = await caches.open(CACHE_NAME);
+        const keys = await cache.keys();
+        await Promise.all(
+            keys
+                .filter((request) => {
+                    try {
+                        const url = new URL(request.url);
+                        return url.pathname.startsWith('/api/');
+                    } catch (_err) {
+                        return false;
+                    }
+                })
+                .map((request) => cache.delete(request))
+        );
         await self.clients.claim();
     })());
 });
@@ -52,6 +66,7 @@ self.addEventListener('fetch', event => {
 
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return;
+    if (url.pathname.startsWith('/api/')) return;
 
     const isDocument = (
         request.mode === 'navigate'

@@ -236,6 +236,29 @@ router.get('/api/memory/expanded', async (ctx) => {
     ctx.body = list;
 });
 
+router.get('/api/cluster', async (ctx) => {
+    const servers = await persistence.loadCluster();
+    ctx.body = { servers };
+});
+
+router.put('/api/cluster', async (ctx) => {
+    const body = ctx.request.body;
+    const servers = Array.isArray(body) ? body : body?.servers;
+    if (!Array.isArray(servers)) {
+        ctx.status = 400;
+        ctx.body = { error: 'servers must be an array' };
+        return;
+    }
+    try {
+        await persistence.saveCluster(servers);
+        ctx.body = { servers: await persistence.loadCluster() };
+    } catch (err) {
+        console.error('[API] Failed to save cluster:', err);
+        ctx.status = 500;
+        ctx.body = { error: 'Failed to save cluster config' };
+    }
+});
+
 // Middleware
 app.use(router.routes());
 app.use(router.allowedMethods());

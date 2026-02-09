@@ -56,6 +56,7 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **Built-in Editor**: Integrated **Monaco Editor** (VS Code core) allows you to edit files directly on the server.
 *   **Visual File Manager**: Sidebar file tree for easy navigation.
 *   **Network Heartbeat**: Real-time latency visualization.
+*   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash).
 
 ## 🚀 Getting Started
 

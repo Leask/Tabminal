@@ -6,6 +6,7 @@ const HOME_DIR = os.homedir();
 const BASE_DIR = path.join(HOME_DIR, '.tabminal');
 const SESSIONS_DIR = path.join(BASE_DIR, 'sessions');
 const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
+const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');
 
 // Ensure directories exist
 const init = async () => {
@@ -137,6 +138,51 @@ export const updateExpandedFolder = async (folderPath, isExpanded) => {
 export const getExpandedFolders = async () => {
     const memory = await loadMemory();
     return (memory.expandedFolders || []).map(item => item.path);
+};
+
+// --- Cluster Persistence (Server Registry) ---
+
+function normalizeClusterServers(servers) {
+    if (!Array.isArray(servers)) return [];
+    const normalized = [];
+    for (const entry of servers) {
+        if (!entry || typeof entry !== 'object') continue;
+        const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+        const baseUrl = typeof entry.baseUrl === 'string'
+            ? entry.baseUrl.trim()
+            : '';
+        const host = typeof entry.host === 'string' ? entry.host.trim() : '';
+        const token = typeof entry.token === 'string' ? entry.token.trim() : '';
+        if (!id || !baseUrl) continue;
+        normalized.push({ id, baseUrl, host, token });
+    }
+    return normalized;
+}
+
+export const loadCluster = async () => {
+    await init();
+    try {
+        const content = await fs.readFile(CLUSTER_FILE, 'utf-8');
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+            return normalizeClusterServers(parsed);
+        }
+        return normalizeClusterServers(parsed?.servers);
+    } catch (e) {
+        return [];
+    }
+};
+
+export const saveCluster = async (servers) => {
+    await init();
+    const normalized = normalizeClusterServers(servers);
+    const payload = { servers: normalized };
+    try {
+        await fs.writeFile(CLUSTER_FILE, JSON.stringify(payload, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save cluster:', e);
+        throw e;
+    }
 };
 
 // --- Raw Log Persistence ---
