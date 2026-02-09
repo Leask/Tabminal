@@ -2920,6 +2920,7 @@ async function closeSession(sessionKey) {
     const session = state.sessions.get(sessionKey);
     if (!session) return;
     try {
+        const mainServer = getMainServer();
         const orderedKeys = Array.from(state.sessions.keys());
         const currentIndex = orderedKeys.indexOf(sessionKey);
         await session.server.fetch(`/api/sessions/${session.id}`, { method: 'DELETE' });
@@ -2939,6 +2940,10 @@ async function closeSession(sessionKey) {
                 state.activeSessionKey = null;
                 terminalEl.innerHTML = '';
             }
+        }
+
+        if (state.sessions.size === 0 && mainServer) {
+            await createNewSession(mainServer);
         }
     } catch (error) {
         console.error('Failed to close session:', error);

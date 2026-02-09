@@ -269,11 +269,6 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             this.sessions.delete(id);
             persistence.deleteSession(id);
             console.log(`[Manager] Removed session ${id}`);
-            // If the last session is closed, create a new one automatically
-            if (this.sessions.size === 0 && !this.disposing) {
-                console.log('[Manager] No sessions left, creating a new one.');
-                this.createSession();
-            }
         }
     }
 
@@ -291,14 +286,6 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             editorState: s.editorState,
             executions: s.executions
         }));
-    }
-
-    // Ensure at least one session exists at startup
-    ensureOneSession() {
-        if (this.sessions.size === 0) {
-            console.log('[Manager] No initial sessions, creating one.');
-            this.createSession();
-        }
     }
 
     dispose() {

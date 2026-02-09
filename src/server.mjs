@@ -130,8 +130,6 @@ const terminalManager = new TerminalManager();
         for (const data of restoredSessions) {
             terminalManager.createSession(data);
         }
-    } else {
-        terminalManager.ensureOneSession();
     }
 })();
 
