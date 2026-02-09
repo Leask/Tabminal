@@ -411,6 +411,7 @@ body {
         max-height: 112px;
         overflow-y: auto;
         overflow-x: hidden;
+        touch-action: pan-y;
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
     }

@@ -123,3 +123,6 @@ dist
 
 # Tabminal specific
 /config.json
+
+# local helper scripts
+reploy.sh

@@ -126,6 +126,14 @@ function getServerEndpointKeyFromUrl(input) {
     return parsed.port ? `${host}:${parsed.port}` : host;
 }
 
+function getUrlHostname(input) {
+    try {
+        return new URL(normalizeBaseUrl(input)).hostname.toLowerCase();
+    } catch (_err) {
+        return '';
+    }
+}
+
 function normalizeHostAlias(input) {
     return String(input || '').trim();
 }
@@ -1584,12 +1592,18 @@ async function hydrateServerRegistry() {
         const serverConfigs = await loadServerRegistryFromBackend();
         clusterDebug('hydrateServerRegistry loaded configs', { count: serverConfigs.length });
         const mainKey = getServerEndpointKey(mainServer);
+        const mainHostname = getUrlHostname(mainServer.baseUrl);
         const deduplicated = new Map();
         for (const raw of serverConfigs) {
             try {
                 const normalizedUrl = normalizeBaseUrl(raw?.baseUrl);
                 const endpointKey = getServerEndpointKeyFromUrl(normalizedUrl);
-                if (!endpointKey || endpointKey === mainKey) {
+                const hostname = getUrlHostname(normalizedUrl);
+                if (
+                    !endpointKey
+                    || endpointKey === mainKey
+                    || (hostname && mainHostname && hostname === mainHostname)
+                ) {
                     continue;
                 }
                 deduplicated.set(endpointKey, {
