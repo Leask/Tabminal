@@ -118,8 +118,29 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
-| `--cors-origin` | `TABMINAL_CORS_ORIGIN` | Allowed CORS origin (`*` or comma-separated list) | `*` |
+| `--cors-origin` | `TABMINAL_CORS_ORIGIN` | Allowed CORS origins (`*`, comma-separated string, repeated args, or JSON array) | `*` |
 | `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
+
+Examples for `cors-origin`:
+
+```bash
+# Repeatable CLI flags
+tabminal --cors-origin https://a.example.com --cors-origin https://b.example.com
+
+# Environment variable (comma-separated)
+TABMINAL_CORS_ORIGIN="https://a.example.com,https://b.example.com" tabminal
+```
+
+```json
+{
+  "cors-origin": [
+    "https://a.example.com",
+    "https://b.example.com"
+  ]
+}
+```
+
+When `cors-origin` is `*`, Tabminal reflects the request `Origin` and allows credentials.
 
 ## ⌨️ Shortcuts & Gestures
 

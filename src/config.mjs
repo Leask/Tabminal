@@ -49,6 +49,24 @@ function parseBool(value) {
     return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
+function normalizeCorsOrigins(value) {
+    if (value === undefined || value === null || value === '') {
+        return '*';
+    }
+
+    const rawItems = Array.isArray(value) ? value : [value];
+    const origins = rawItems
+        .flatMap((item) => String(item).split(','))
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    if (origins.length === 0 || origins.includes('*')) {
+        return '*';
+    }
+
+    return Array.from(new Set(origins));
+}
+
 function loadConfig() {
     // 1. Load from ~/.tabminal/config.json
     const configDir = path.join(os.homedir(), '.tabminal');
@@ -123,7 +141,8 @@ function loadConfig() {
                 type: 'boolean'
             },
             'cors-origin': {
-                type: 'string'
+                type: 'string',
+                multiple: true
             },
             'accept-terms': {
                 type: 'boolean',
@@ -153,7 +172,7 @@ Options:
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
   --debug, -d           Enable debug mode
-  --cors-origin         Set CORS allowed origin (default: *)
+  --cors-origin         Set CORS origin (repeatable or comma-separated, default: *)
   --accept-terms, -y    Accept security warning and start server
   --help                Show this help message
         `);
@@ -266,6 +285,8 @@ Options:
             finalConfig.model = 'gemini-3-flash-preview';
         }
     }
+
+    finalConfig.corsOrigin = normalizeCorsOrigins(finalConfig.corsOrigin);
 
     // Store SHA256 hash in memory
     finalConfig.passwordHash = sha256(finalConfig.password);

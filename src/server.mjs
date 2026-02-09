@@ -28,21 +28,28 @@ const app = new Koa();
 const router = new Router();
 
 function isOriginAllowed(origin) {
-    if (!origin) return false;
-    if (!config.corsOrigin || config.corsOrigin === '*') return true;
-    const allowList = String(config.corsOrigin)
-        .split(',')
+    if (!origin) {
+        return false;
+    }
+    if (!config.corsOrigin || config.corsOrigin === '*') {
+        return true;
+    }
+    const allowList = (Array.isArray(config.corsOrigin) ? config.corsOrigin : [config.corsOrigin])
+        .flatMap((item) => String(item).split(','))
         .map(item => item.trim())
         .filter(Boolean);
     return allowList.includes(origin);
 }
 
 app.use(async (ctx, next) => {
+    const allowAllOrigins = !config.corsOrigin || config.corsOrigin === '*';
     const origin = ctx.get('Origin');
     if (origin && isOriginAllowed(origin)) {
+        // Reflect request origin so credentialed CORS works in wildcard mode.
         ctx.set('Access-Control-Allow-Origin', origin);
         ctx.set('Vary', 'Origin');
-    } else if (config.corsOrigin === '*') {
+        ctx.set('Access-Control-Allow-Credentials', 'true');
+    } else if (allowAllOrigins) {
         ctx.set('Access-Control-Allow-Origin', '*');
     }
     ctx.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
