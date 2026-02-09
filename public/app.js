@@ -2130,8 +2130,12 @@ async function createNewSession(server = getActiveServer()) {
         });
         if (!response.ok) throw new Error('Failed to create session');
         const newSession = await response.json();
+        const sessionKey = makeSessionKey(server.id, newSession.id);
         await syncServer(server);
-        switchToSession(makeSessionKey(server.id, newSession.id));
+        await switchToSession(
+            sessionKey,
+            { scrollTabIntoView: true }
+        );
     } catch (error) {
         console.error('Failed to create session:', error);
     }
@@ -2195,6 +2199,50 @@ function renderTabs() {
             tab.classList.remove('active');
         }
     }
+}
+
+function scrollSessionTabIntoView(sessionKey, behavior = 'smooth') {
+    if (!tabListEl || !sessionKey) return;
+    const tab = tabListEl.querySelector(`.tab-item[data-session-key="${sessionKey}"]`);
+    if (!tab) return;
+
+    const containerRect = tabListEl.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const newTabItem = document.getElementById('new-tab-item');
+
+    let obscuredBottom = 0;
+    if (newTabItem) {
+        const newTabRect = newTabItem.getBoundingClientRect();
+        obscuredBottom = Math.max(0, containerRect.bottom - newTabRect.top);
+        obscuredBottom = Math.min(obscuredBottom, tabListEl.clientHeight);
+    }
+
+    const visibleTop = tabListEl.scrollTop;
+    const visibleBottom = (
+        tabListEl.scrollTop
+        + tabListEl.clientHeight
+        - obscuredBottom
+    );
+
+    const tabTop = tabRect.top - containerRect.top + tabListEl.scrollTop;
+    const tabBottom = tabRect.bottom - containerRect.top + tabListEl.scrollTop;
+
+    let targetTop = tabListEl.scrollTop;
+    if (tabTop < visibleTop) {
+        targetTop = tabTop;
+    } else if (tabBottom > visibleBottom) {
+        targetTop = tabBottom - (tabListEl.clientHeight - obscuredBottom);
+    } else {
+        return;
+    }
+
+    const maxTop = Math.max(0, tabListEl.scrollHeight - tabListEl.clientHeight);
+    targetTop = Math.min(Math.max(0, targetTop), maxTop);
+
+    tabListEl.scrollTo({
+        top: targetTop,
+        behavior
+    });
 }
 
 function createTabElement(session) {
@@ -2717,12 +2765,24 @@ function setStatus(server, status) {
     }
 }
 
-async function switchToSession(sessionKey) {
+async function switchToSession(sessionKey, options = {}) {
+    const { scrollTabIntoView = false } = options;
     if (!sessionKey || !state.sessions.has(sessionKey)) return;
-    if (state.activeSessionKey === sessionKey) return;
+    if (state.activeSessionKey === sessionKey) {
+        if (scrollTabIntoView) {
+            scrollSessionTabIntoView(sessionKey);
+        }
+        return;
+    }
 
     state.activeSessionKey = sessionKey;
     renderTabs();
+    if (scrollTabIntoView) {
+        scrollSessionTabIntoView(sessionKey);
+        requestAnimationFrame(() => {
+            scrollSessionTabIntoView(sessionKey, 'auto');
+        });
+    }
 
     const session = state.sessions.get(sessionKey);
     
