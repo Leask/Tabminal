@@ -22,7 +22,6 @@ import {
     getDisplayHost,
     renderSessionHostMeta
 } from './modules/session-meta.js';
-import { createClusterDebug } from './modules/cluster-debug.js';
 import {
     NotificationManager,
     ToastManager
@@ -61,7 +60,6 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-const { clusterDebug } = createClusterDebug();
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -69,11 +67,6 @@ const serverModalState = {
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
 // #endregion
-
-clusterDebug('app.js loaded', {
-    href: window.location.href,
-    at: new Date().toISOString()
-});
 
 // #region Sidebar Toggle (Mobile)
 const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -1290,17 +1283,12 @@ async function saveServerRegistryToBackend() {
     const mainServer = getMainServer();
     if (!mainServer || !mainServer.isAuthenticated) return;
     const payload = { servers: getPersistedServers() };
-    clusterDebug('saveServerRegistryToBackend', {
-        main: mainServer.baseUrl,
-        count: payload.servers.length
-    });
 
     const response = await mainServer.fetch('/api/cluster', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
-    clusterDebug('saveServerRegistryToBackend response', { status: response.status });
     if (!response.ok) {
         throw new Error(`Failed to save host list: HTTP ${response.status}`);
     }
@@ -1309,27 +1297,15 @@ async function saveServerRegistryToBackend() {
 async function loadServerRegistryFromBackend() {
     const mainServer = getMainServer();
     if (!mainServer || !mainServer.isAuthenticated) return [];
-    clusterDebug('loadServerRegistryFromBackend request', {
-        main: mainServer.baseUrl,
-        authenticated: mainServer.isAuthenticated
-    });
     const response = await mainServer.fetch('/api/cluster');
     if (!response.ok) {
-        clusterDebug('loadServerRegistryFromBackend non-ok', { status: response.status });
         throw new Error(`Failed to load host list: HTTP ${response.status}`);
     }
-    const contentType = response.headers.get('content-type') || '';
     const raw = await response.text();
-    clusterDebug('loadServerRegistryFromBackend response', {
-        status: response.status,
-        contentType,
-        length: raw.length
-    });
     let payload = null;
     try {
         payload = raw ? JSON.parse(raw) : {};
     } catch {
-        clusterDebug('loadServerRegistryFromBackend invalid json', raw.slice(0, 180));
         throw new Error('Failed to load host list: invalid JSON response');
     }
     if (Array.isArray(payload)) {
@@ -1405,32 +1381,22 @@ function bootstrapServers() {
         id: MAIN_SERVER_ID,
         baseUrl: window.location.origin
     }, { isPrimary: true });
-    const mainServer = getMainServer();
-    clusterDebug('bootstrapServers', {
-        main: mainServer?.baseUrl || 'n/a',
-        authenticated: !!mainServer?.isAuthenticated
-    });
     renderServerControls();
 }
 
 async function hydrateServerRegistry() {
     if (state.serverRegistryLoaded) {
-        clusterDebug('hydrateServerRegistry skip: already loaded');
         return;
     }
     const mainServer = getMainServer();
     if (!mainServer) {
-        clusterDebug('hydrateServerRegistry skip: no main server');
         return;
     }
     if (!mainServer.isAuthenticated) {
-        clusterDebug('hydrateServerRegistry skip: main not authenticated');
         return;
     }
-    clusterDebug('hydrateServerRegistry start', { main: mainServer.baseUrl });
     try {
         const serverConfigs = await loadServerRegistryFromBackend();
-        clusterDebug('hydrateServerRegistry loaded configs', { count: serverConfigs.length });
         const mainKey = getServerEndpointKey(mainServer);
         const mainHostname = getUrlHostname(mainServer.baseUrl);
         const deduplicated = new Map();
@@ -1460,14 +1426,9 @@ async function hydrateServerRegistry() {
         for (const serverData of deduplicated.values()) {
             createServerClient(serverData);
         }
-        clusterDebug('hydrateServerRegistry applied configs', {
-            deduplicated: deduplicated.size,
-            totalServers: state.servers.size
-        });
         state.serverRegistryLoaded = true;
     } catch (error) {
         console.warn('Failed to load host list from backend:', error);
-        clusterDebug('hydrateServerRegistry failed', error);
         state.serverRegistryLoaded = false;
         alert('Failed to load host list from backend.', {
             type: 'warning',
@@ -2927,14 +2888,8 @@ window.addEventListener('beforeunload', () => {
 async function initApp() {
     const mainServer = getMainServer();
     if (!mainServer) return;
-    clusterDebug('initApp start', {
-        main: mainServer.baseUrl,
-        authenticated: mainServer.isAuthenticated,
-        loaded: state.serverRegistryLoaded
-    });
 
     if (!mainServer.isAuthenticated) {
-        clusterDebug('initApp stop: main authentication required');
         auth.showLoginModal();
         return;
     }
