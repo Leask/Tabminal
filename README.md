@@ -22,7 +22,7 @@ As a long-time terminal user who frequently needs to step away from my computer 
 - `Proactive AI integration` means your terminal becomes your work context. You can ask questions about your current session at any time, and the AI will automatically retrieve the context to accurately solve problems, even proactively offering assistance when commands fail.
 - `Cloud-native design` enables access via Zero Trust or VPN, providing unprecedented convenience for managing cloud servers.
 
-<img width="1632" height="1317" alt="Screenshot 2025-11-24 at 10 15 28 PM" src="https://github.com/user-attachments/assets/ad864233-7b22-4b29-8b90-dc81993dd623" />
+<img width="1689" height="1386" alt="Screenshot 2026-02-10 at 1 10 01 AM" src="https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5" />
 
 <details>
 
