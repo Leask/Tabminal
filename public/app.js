@@ -2615,15 +2615,29 @@ function setStatus(server, status) {
 
     const activeServer = getActiveServer();
     if (!activeServer || activeServer.id !== server.id) return;
+    const hostName = getDisplayHost(server);
+    const target = hostName || 'host';
 
     if (status === 'reconnecting') {
-        alert('Lost connection. Reconnecting...', { type: 'warning', title: 'Connection' });
+        alert(`Lost connection to ${target}. Reconnecting...`, {
+            type: 'warning',
+            title: 'Connection'
+        });
     } else if (status === 'connected' && prevStatus === 'reconnecting') {
-        alert('Connection restored.', { type: 'success', title: 'Connection' });
+        alert(`Connection to ${target} restored.`, {
+            type: 'success',
+            title: 'Connection'
+        });
     } else if (status === 'terminated') {
-        alert('Session has ended.', { type: 'error', title: 'Connection' });
+        alert(`Session on ${target} has ended.`, {
+            type: 'error',
+            title: 'Connection'
+        });
     } else if (status === 'connected' && !prevStatus) {
-        alert('Connected to host.', { type: 'success', title: 'Connection' });
+        alert(`Connected to ${target}.`, {
+            type: 'success',
+            title: 'Connection'
+        });
     }
 }
 
