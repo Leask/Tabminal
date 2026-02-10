@@ -49,12 +49,6 @@ export function isLikelyAccessLoginResponse(response) {
     return false;
 }
 
-export function buildReloadUrlWithRuntimeBootId(bootId) {
-    const current = new URL(window.location.href);
-    current.searchParams.set('rt', bootId);
-    return current.toString();
-}
-
 export function buildTokenStorageKey(serverId) {
     return `tabminal_auth_token:${serverId}`;
 }

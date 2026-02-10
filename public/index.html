@@ -119,9 +119,13 @@
     </script>
     <script>
         (function() {
-            const runtimeBootId = (
-                new URLSearchParams(window.location.search).get('rt') || 'stable'
-            );
+            const runtimeStorageKey = 'tabminal_runtime_boot_id';
+            let runtimeBootId = 'stable';
+            try {
+                runtimeBootId = localStorage.getItem(runtimeStorageKey) || 'stable';
+            } catch {
+                runtimeBootId = 'stable';
+            }
             const link = document.createElement('link');
             link.rel = 'stylesheet';
             link.href = `./styles.css?v=${encodeURIComponent(runtimeBootId)}`;
@@ -278,10 +282,17 @@
         </div>
     </div>
     <script>
+        function getRuntimeBootIdForAssets() {
+            const runtimeStorageKey = 'tabminal_runtime_boot_id';
+            try {
+                return localStorage.getItem(runtimeStorageKey) || 'stable';
+            } catch {
+                return 'stable';
+            }
+        }
+
         (function() {
-            const runtimeBootId = (
-                new URLSearchParams(window.location.search).get('rt') || 'stable'
-            );
+            const runtimeBootId = getRuntimeBootIdForAssets();
             const script = document.createElement('script');
             script.type = 'module';
             script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
@@ -290,9 +301,7 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                const runtimeBootId = (
-                    new URLSearchParams(window.location.search).get('rt') || 'stable'
-                );
+                const runtimeBootId = getRuntimeBootIdForAssets();
                 navigator.serviceWorker.register(
                     `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
                 )

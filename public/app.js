@@ -11,7 +11,6 @@ import {
     isAccessRedirectResponse,
     buildAccessLoginUrl,
     isLikelyAccessLoginResponse,
-    buildReloadUrlWithRuntimeBootId,
     buildTokenStorageKey,
     makeSessionKey,
     splitSessionKey,
@@ -59,6 +58,7 @@ const editorPane = document.getElementById('editor-pane');
 const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
+const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const serverModalState = {
     mode: 'add',
@@ -136,30 +136,61 @@ function openAccessLoginPage(server) {
     return true;
 }
 
+function readRuntimeBootId() {
+    try {
+        return localStorage.getItem(RUNTIME_BOOT_ID_STORAGE_KEY) || '';
+    } catch {
+        return '';
+    }
+}
+
+function persistRuntimeBootId(bootId) {
+    try {
+        localStorage.setItem(RUNTIME_BOOT_ID_STORAGE_KEY, bootId);
+        return localStorage.getItem(RUNTIME_BOOT_ID_STORAGE_KEY) === bootId;
+    } catch {
+        return false;
+    }
+}
+
 function handlePrimaryRuntimeVersion(data) {
     const runtime = data?.runtime;
     const bootIdRaw = runtime?.bootId;
     if (!bootIdRaw) return;
     const bootId = String(bootIdRaw);
     if (!bootId) return;
-    const currentRt = new URL(window.location.href).searchParams.get('rt') || '';
+    const storedBootId = readRuntimeBootId();
 
     if (!primaryServerBootId) {
         primaryServerBootId = bootId;
-        if (currentRt !== bootId && !runtimeReloadScheduled) {
+        if (storedBootId === bootId) {
+            return;
+        }
+        const persisted = persistRuntimeBootId(bootId);
+        if (storedBootId && persisted && !runtimeReloadScheduled) {
             runtimeReloadScheduled = true;
             console.info('[Runtime] Syncing app shell cache key with server boot id.');
-            window.location.replace(buildReloadUrlWithRuntimeBootId(bootId));
+            window.location.reload();
         }
         return;
     }
-    if (primaryServerBootId === bootId) return;
+    if (primaryServerBootId === bootId) {
+        if (storedBootId !== bootId) {
+            persistRuntimeBootId(bootId);
+        }
+        return;
+    }
     if (runtimeReloadScheduled) return;
 
-    runtimeReloadScheduled = true;
     primaryServerBootId = bootId;
+    const persisted = persistRuntimeBootId(bootId);
+    if (!persisted) {
+        console.warn('[Runtime] Failed to persist cache key; skip forced reload.');
+        return;
+    }
+    runtimeReloadScheduled = true;
     console.info('[Runtime] Main server restarted. Reloading app shell.');
-    window.location.replace(buildReloadUrlWithRuntimeBootId(bootId));
+    window.location.reload();
 }
 
 class AuthManager {
