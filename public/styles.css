@@ -165,6 +165,13 @@
     /* Visual center tweak */
 }
 
+/* Make search selection highly visible. */
+.xterm .xterm-selection div {
+    background-color: #ffffff !important;
+    mix-blend-mode: difference;
+    opacity: 1 !important;
+}
+
 :root {
     color-scheme: dark;
     --bg-base: #002b36;

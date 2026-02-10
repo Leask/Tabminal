@@ -119,16 +119,26 @@
     </script>
     <script>
         (function() {
-            const runtimeStorageKey = 'tabminal_runtime_boot_id';
-            let runtimeBootId = 'stable';
-            try {
-                runtimeBootId = localStorage.getItem(runtimeStorageKey) || 'stable';
-            } catch {
-                runtimeBootId = 'stable';
+            const currentUrl = new URL(window.location.href);
+            if (currentUrl.searchParams.has('rt')) {
+                currentUrl.searchParams.delete('rt');
+                const query = currentUrl.searchParams.toString();
+                const normalizedUrl = `${currentUrl.pathname}${query ? `?${query}` : ''}${currentUrl.hash}`;
+                window.history.replaceState(window.history.state, '', normalizedUrl);
             }
+
+            const runtimeStorageKey = 'tabminal_runtime_boot_id';
+            let runtimeBootId = '';
+            try {
+                runtimeBootId = localStorage.getItem(runtimeStorageKey) || '';
+            } catch {
+                runtimeBootId = '';
+            }
+            const runtimeAssetKey = runtimeBootId || `cold-${Date.now()}`;
+            window.__tabminalRuntimeAssetKey = runtimeAssetKey;
             const link = document.createElement('link');
             link.rel = 'stylesheet';
-            link.href = `./styles.css?v=${encodeURIComponent(runtimeBootId)}`;
+            link.href = `./styles.css?v=${encodeURIComponent(runtimeAssetKey)}`;
             document.head.appendChild(link);
         })();
     </script>
@@ -282,17 +292,26 @@
         </div>
     </div>
     <script>
-        function getRuntimeBootIdForAssets() {
+        function getRuntimeAssetKey() {
             const runtimeStorageKey = 'tabminal_runtime_boot_id';
             try {
-                return localStorage.getItem(runtimeStorageKey) || 'stable';
+                const bootId = localStorage.getItem(runtimeStorageKey) || '';
+                if (bootId) {
+                    return bootId;
+                }
             } catch {
-                return 'stable';
+                // Fall through to cold key.
             }
+            if (window.__tabminalRuntimeAssetKey) {
+                return window.__tabminalRuntimeAssetKey;
+            }
+            const coldKey = `cold-${Date.now()}`;
+            window.__tabminalRuntimeAssetKey = coldKey;
+            return coldKey;
         }
 
         (function() {
-            const runtimeBootId = getRuntimeBootIdForAssets();
+            const runtimeBootId = getRuntimeAssetKey();
             const script = document.createElement('script');
             script.type = 'module';
             script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
@@ -301,7 +320,7 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                const runtimeBootId = getRuntimeBootIdForAssets();
+                const runtimeBootId = getRuntimeAssetKey();
                 navigator.serviceWorker.register(
                     `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
                 )
