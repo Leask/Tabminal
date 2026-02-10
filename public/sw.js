@@ -79,6 +79,7 @@ self.addEventListener('fetch', event => {
         url.pathname === '/app.js'
         || url.pathname === '/styles.css'
         || url.pathname === '/sw.js'
+        || url.pathname.startsWith('/modules/')
     );
 
     if (isDocument || isAppShell) {

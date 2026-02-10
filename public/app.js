@@ -3,6 +3,30 @@ import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+es
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
 import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/+esm';
+import {
+    normalizeBaseUrl,
+    getServerEndpointKeyFromUrl,
+    getUrlHostname,
+    normalizeHostAlias,
+    isAccessRedirectResponse,
+    buildAccessLoginUrl,
+    isLikelyAccessLoginResponse,
+    buildReloadUrlWithRuntimeBootId,
+    buildTokenStorageKey,
+    makeSessionKey,
+    splitSessionKey,
+    hashPassword
+} from './modules/url-auth.js';
+import {
+    shortenPath,
+    getDisplayHost,
+    renderSessionHostMeta
+} from './modules/session-meta.js';
+import { createClusterDebug } from './modules/cluster-debug.js';
+import {
+    NotificationManager,
+    ToastManager
+} from './modules/notifications.js';
 
 // Detect Mobile/Tablet (focus on touch capability for font sizing)
 // Logic: If the device supports touch, we assume it needs larger fonts (14px)
@@ -37,14 +61,7 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-const CLUSTER_DEBUG_STORAGE_KEY = 'tabminal_cluster_debug';
-function resolveClusterDebugFlag() {
-    const query = new URLSearchParams(window.location.search).get('clusterDebug');
-    if (query === '1' || query === 'true') return true;
-    if (query === '0' || query === 'false') return false;
-    return localStorage.getItem(CLUSTER_DEBUG_STORAGE_KEY) === '1';
-}
-const CLUSTER_DEBUG = resolveClusterDebugFlag();
+const { clusterDebug } = createClusterDebug();
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -52,23 +69,6 @@ const serverModalState = {
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
 // #endregion
-
-function clusterDebug(...args) {
-    if (!CLUSTER_DEBUG) return;
-    console.log('[ClusterDebug]', ...args);
-}
-
-window.TabminalDebug = window.TabminalDebug || {};
-window.TabminalDebug.setClusterDebug = (enabled) => {
-    const on = !!enabled;
-    if (on) {
-        localStorage.setItem(CLUSTER_DEBUG_STORAGE_KEY, '1');
-    } else {
-        localStorage.removeItem(CLUSTER_DEBUG_STORAGE_KEY);
-    }
-    window.TabminalDebug.clusterDebugEnabled = on;
-};
-window.TabminalDebug.clusterDebugEnabled = CLUSTER_DEBUG;
 
 clusterDebug('app.js loaded', {
     href: window.location.href,
@@ -106,57 +106,6 @@ if (sidebarToggle && sidebar && sidebarOverlay) {
 // #endregion
 
 // #region Auth and Server Client
-function normalizeBaseUrl(input) {
-    const raw = String(input || '').trim();
-    const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    const parsed = new URL(candidate);
-    parsed.hash = '';
-    parsed.search = '';
-    let normalized = parsed.toString();
-    if (normalized.endsWith('/')) {
-        normalized = normalized.slice(0, -1);
-    }
-    return normalized;
-}
-
-function getServerEndpointKeyFromUrl(input) {
-    const parsed = new URL(normalizeBaseUrl(input));
-    const host = parsed.hostname.toLowerCase();
-    return parsed.port ? `${host}:${parsed.port}` : host;
-}
-
-function getUrlHostname(input) {
-    try {
-        return new URL(normalizeBaseUrl(input)).hostname.toLowerCase();
-    } catch {
-        return '';
-    }
-}
-
-function normalizeHostAlias(input) {
-    return String(input || '').trim();
-}
-
-function isAccessRedirectResponse(response) {
-    if (!response) return false;
-    if (response.type === 'opaqueredirect') return true;
-    return response.status === 302;
-}
-
-function buildAccessLoginUrl(server) {
-    return normalizeBaseUrl(server?.baseUrl || '');
-}
-
-function isLikelyAccessLoginResponse(response) {
-    if (!response) return false;
-    if (isAccessRedirectResponse(response)) return true;
-    const responseUrl = String(response.url || '');
-    if (responseUrl.includes('/cdn-cgi/access/login')) return true;
-    const location = response.headers?.get?.('location') || '';
-    if (location.includes('/cdn-cgi/access/login')) return true;
-    return false;
-}
-
 async function probeAccessLoginUrl(server, path = '/api/heartbeat') {
     if (!server || server.isPrimary) return '';
     try {
@@ -194,12 +143,6 @@ function openAccessLoginPage(server) {
     return true;
 }
 
-function buildReloadUrlWithRuntimeBootId(bootId) {
-    const current = new URL(window.location.href);
-    current.searchParams.set('rt', bootId);
-    return current.toString();
-}
-
 function handlePrimaryRuntimeVersion(data) {
     const runtime = data?.runtime;
     const bootIdRaw = runtime?.bootId;
@@ -224,115 +167,6 @@ function handlePrimaryRuntimeVersion(data) {
     primaryServerBootId = bootId;
     console.info('[Runtime] Main server restarted. Reloading app shell.');
     window.location.replace(buildReloadUrlWithRuntimeBootId(bootId));
-}
-
-function buildTokenStorageKey(serverId) {
-    return `tabminal_auth_token:${serverId}`;
-}
-
-function makeSessionKey(serverId, sessionId) {
-    return `${serverId}:${sessionId}`;
-}
-
-function splitSessionKey(sessionKey) {
-    const index = sessionKey.indexOf(':');
-    if (index < 0) {
-        return { serverId: '', sessionId: sessionKey };
-    }
-    return {
-        serverId: sessionKey.slice(0, index),
-        sessionId: sessionKey.slice(index + 1)
-    };
-}
-
-async function hashPassword(password) {
-    if (window.crypto && window.crypto.subtle) {
-        try {
-            const msgBuffer = new TextEncoder().encode(password);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        } catch (e) {
-            console.warn('Web Crypto API failed, falling back to JS implementation', e);
-        }
-    }
-    return sha256Fallback(password);
-}
-
-function sha256Fallback(ascii) {
-    function rightRotate(value, amount) {
-        return (value >>> amount) | (value << (32 - amount));
-    }
-
-    const mathPow = Math.pow;
-    const maxWord = mathPow(2, 32);
-    const lengthProperty = 'length';
-    let i, j;
-    let result = '';
-    const words = [];
-    const asciiBitLength = ascii[lengthProperty] * 8;
-    let hash = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-    ].slice(0);
-    const k = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-    ];
-
-    ascii += '\x80';
-    while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
-
-    for (i = 0; i < ascii[lengthProperty]; i++) {
-        j = ascii.charCodeAt(i);
-        words[i >> 2] |= j << ((3 - i) % 4) * 8;
-    }
-    words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
-    words[words[lengthProperty]] = (asciiBitLength);
-
-    for (j = 0; j < words[lengthProperty];) {
-        const w = words.slice(j, j += 16);
-        const oldHash = hash;
-        hash = hash.slice(0, 8);
-
-        for (i = 0; i < 64; i++) {
-            const w15 = w[i - 15], w2 = w[i - 2];
-            const a = hash[0], e = hash[4];
-            const temp1 = hash[7]
-                + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
-                + ((e & hash[5]) ^ ((~e) & hash[6]))
-                + k[i]
-                + (w[i] = (i < 16) ? w[i] : (
-                    w[i - 16]
-                    + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
-                    + w[i - 7]
-                    + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
-                ) | 0
-                );
-            const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
-                + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
-            hash = [(temp1 + temp2) | 0].concat(hash);
-            hash[4] = (hash[4] + temp1) | 0;
-        }
-
-        for (i = 0; i < 8; i++) {
-            hash[i] = (hash[i] + oldHash[i]) | 0;
-        }
-    }
-
-    for (i = 0; i < 8; i++) {
-        for (j = 3; j + 1; j--) {
-            const b = (hash[i] >> (j * 8)) & 255;
-            result += ((b < 16) ? 0 : '') + b.toString(16);
-        }
-    }
-    return result;
 }
 
 class AuthManager {
@@ -2738,43 +2572,6 @@ function renderServerControls() {
 }
 
 // #region Notification Manager
-class NotificationManager {
-    constructor() {
-        this.hasPermission = false;
-        if ('Notification' in window) {
-            this.hasPermission = Notification.permission === 'granted';
-        }
-    }
-
-    requestPermission() {
-        if (!('Notification' in window)) return;
-        if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-            Notification.requestPermission().then(permission => {
-                this.hasPermission = permission === 'granted';
-            });
-        }
-    }
-
-    send(title, body) {
-        if (!('Notification' in window)) return false;
-        
-        // Check permission status directly
-        if (Notification.permission === 'granted') {
-            try {
-                new Notification(title, {
-                    body: body,
-                    icon: '/apple-touch-icon.png',
-                    tag: 'tabminal-status'
-                });
-                return true;
-            } catch (e) {
-                console.error('Notification error:', e);
-                return false;
-            }
-        }
-        return false;
-    }
-}
 const notificationManager = new NotificationManager();
 
 document.addEventListener('click', () => {
@@ -2783,103 +2580,6 @@ document.addEventListener('click', () => {
 // #endregion
 
 // #region Toast Manager
-class ToastManager {
-    constructor() {
-        this.container = document.getElementById('notification-container');
-    }
-
-    show(title, message, type = 'info') {
-        if (!this.container) return;
-        
-        if (message === undefined || (typeof message === 'string' && ['info', 'warning', 'error', 'success'].includes(message))) {
-            type = message || 'info';
-            message = title;
-            title = 'Tabminal';
-        }
-
-        const existingToasts = Array.from(this.container.children);
-        for (const toast of existingToasts) {
-            if (toast.dataset.title === title && toast.dataset.message === message && !toast.classList.contains('hiding')) {
-                this.extendLife(toast);
-                return;
-            }
-        }
-
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.dataset.title = title;
-        toast.dataset.message = message;
-        
-        const content = document.createElement('div');
-        content.className = 'toast-content';
-        
-        const titleEl = document.createElement('div');
-        titleEl.className = 'toast-title';
-        titleEl.textContent = title;
-        
-        const msgEl = document.createElement('div');
-        msgEl.className = 'toast-message';
-        msgEl.textContent = message;
-        
-        content.appendChild(titleEl);
-        content.appendChild(msgEl);
-        
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'toast-close';
-        closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-        closeBtn.onclick = () => this.dismiss(toast);
-        
-        toast.appendChild(content);
-        toast.appendChild(closeBtn);
-        
-        this.container.insertBefore(toast, this.container.firstChild);
-        
-        requestAnimationFrame(() => this.prune());
-
-        this.startTimer(toast);
-    }
-
-    startTimer(toast) {
-        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
-        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 5000);
-    }
-
-    extendLife(toast) {
-        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
-        toast.classList.remove('hiding'); // Ensure it's visible if it was fading out
-        toast.style.animation = 'none';
-        toast.offsetHeight; /* trigger reflow */
-        toast.style.animation = null; 
-        toast.dismissTimer = setTimeout(() => this.dismiss(toast), 3000);
-    }
-
-    prune() {
-        const viewportHeight = window.innerHeight;
-        const bottomLimit = viewportHeight - 20;
-        const toasts = Array.from(this.container.children);
-        
-        for (const toast of toasts) {
-            const rect = toast.getBoundingClientRect();
-            if (rect.bottom > bottomLimit) {
-                this.dismiss(toast);
-            }
-        }
-    }
-
-    dismiss(toast) {
-        if (!toast || toast.classList.contains('hiding')) return;
-        if (toast.dismissTimer) clearTimeout(toast.dismissTimer);
-        
-        toast.classList.add('hiding');
-        
-        const remove = () => {
-            if (toast.parentElement) toast.remove();
-        };
-        
-        toast.addEventListener('transitionend', remove, { once: true });
-        setTimeout(remove, 550);
-    }
-}
 const toastManager = new ToastManager();
 // Unified Notification Hub
 window.alert = (message, options = {}) => {
@@ -2973,112 +2673,6 @@ async function switchToSession(sessionKey, options = {}) {
     }
 }
 
-function shortenPath(path, envText = '') {
-    return shortenPathFishStyle(path, envText);
-}
-
-function getEnvValue(envText, key) {
-    if (!envText || !key) return '';
-    const prefix = `${key}=`;
-    const lines = String(envText).split('\n');
-    for (const line of lines) {
-        if (line.startsWith(prefix)) {
-            return line.slice(prefix.length);
-        }
-    }
-    return '';
-}
-
-function getHostFromBaseUrl(baseUrl) {
-    if (!baseUrl) return '';
-    try {
-        return new URL(baseUrl).hostname;
-    } catch {
-        return '';
-    }
-}
-
-function getDisplayHost(server) {
-    if (!server) return 'unknown';
-    return normalizeHostAlias(server.host)
-        || server.lastSystemData?.hostname
-        || getHostFromBaseUrl(server.baseUrl)
-        || 'unknown';
-}
-
-function getSessionHostParts(session) {
-    if (!session) {
-        return { user: '', host: 'unknown' };
-    }
-    const user = getEnvValue(session.env, 'USER')
-        || getEnvValue(session.env, 'LOGNAME')
-        || getEnvValue(session.env, 'USERNAME');
-    const host = getDisplayHost(session.server);
-    return { user, host };
-}
-
-function renderSessionHostMeta(metaServerEl, session) {
-    if (!metaServerEl) return;
-    const { user, host } = getSessionHostParts(session);
-    const hostText = host || 'unknown';
-
-    metaServerEl.textContent = '';
-    metaServerEl.appendChild(document.createTextNode('HOST: '));
-
-    if (user) {
-        metaServerEl.appendChild(document.createTextNode(`${user}@`));
-    }
-
-    const hostEl = document.createElement('span');
-    hostEl.className = 'host-emphasis';
-    hostEl.textContent = hostText;
-    metaServerEl.appendChild(hostEl);
-}
-
-function shortenPathFishStyle(path, envText = '') {
-    if (!path) return '';
-    const rawPath = String(path);
-    const normalizedPath = rawPath.replace(/\\/g, '/');
-    const home = getEnvValue(envText, 'HOME');
-
-    let displayPath = normalizedPath;
-    if (home && (normalizedPath === home || normalizedPath.startsWith(`${home}/`))) {
-        displayPath = `~${normalizedPath.slice(home.length)}`;
-    }
-
-    if (displayPath === '/') return '/';
-    if (displayPath === '~') return '~';
-
-    const hasRoot = displayPath.startsWith('/');
-    const hasHome = displayPath.startsWith('~');
-    const prefix = hasHome ? '~' : (hasRoot ? '/' : '');
-    const remainder = displayPath.slice(prefix.length);
-    const parts = remainder.split('/').filter(Boolean);
-
-    if (parts.length === 0) return prefix || '/';
-    if (parts.length === 1) {
-        if (prefix === '~') return `~/${parts[0]}`;
-        if (prefix === '/') return `/${parts[0]}`;
-        return parts[0];
-    }
-
-    const leaf = parts.pop();
-    const compactParents = parts.map((part) => part[0]).join('/');
-    let shortened;
-
-    if (prefix === '~') {
-        shortened = compactParents ? `~/${compactParents}/${leaf}` : `~/${leaf}`;
-    } else if (prefix === '/') {
-        shortened = compactParents ? `/${compactParents}/${leaf}` : `/${leaf}`;
-    } else {
-        shortened = compactParents ? `${compactParents}/${leaf}` : leaf;
-    }
-
-    if (shortened.length > 40) {
-        return `.../${leaf}`;
-    }
-    return shortened;
-}
 // #endregion
 
 async function closeSession(sessionKey) {
