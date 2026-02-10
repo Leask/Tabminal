@@ -24,6 +24,11 @@ function resolveShell() {
 }
 
 const historyLimit = config.historyLimit;
+function debugLog(...args) {
+    if (config.debug) {
+        console.log(...args);
+    }
+}
 const initialCols = Number.parseInt(
     process.env.TABMINAL_COLS ?? '',
     10
@@ -204,11 +209,11 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             try {
                 if (initFilePath && fs.existsSync(initFilePath)) fs.unlinkSync(initFilePath);
                 if (initDirPath && fs.existsSync(initDirPath)) fs.rmSync(initDirPath, { recursive: true, force: true });
-            } catch (e) { /* ignore cleanup errors */ }
+            } catch { /* ignore cleanup errors */ }
         });
 
         this.sessions.set(id, session);
-        console.log(`[Manager] Created session ${id}`);
+        debugLog(`[Manager] Created session ${id}`);
         return session;
     }
 
@@ -246,7 +251,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     }
 
     resizeAll(cols, rows) {
-        console.log(`[Manager] Resizing all sessions to ${cols}x${rows}`);
+        debugLog(`[Manager] Resizing all sessions to ${cols}x${rows}`);
         this.lastCols = cols;
         this.lastRows = rows;
         for (const session of this.sessions.values()) {
@@ -265,7 +270,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             session.dispose();
             this.sessions.delete(id);
             persistence.deleteSession(id);
-            console.log(`[Manager] Removed session ${id}`);
+            debugLog(`[Manager] Removed session ${id}`);
         }
     }
 
@@ -286,12 +291,12 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     }
 
     dispose() {
-        console.log('[Manager] Disposing all sessions.');
+        debugLog('[Manager] Disposing all sessions.');
         this.disposing = true;
         for (const session of this.sessions.values()) {
             try {
                 session.pty.kill('SIGHUP');
-            } catch (_err) {
+            } catch {
                 // ignore
             }
         }

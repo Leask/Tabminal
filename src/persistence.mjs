@@ -98,7 +98,7 @@ export const loadMemory = async () => {
     try {
         const content = await fs.readFile(MEMORY_FILE, 'utf-8');
         return { ...defaultMemory, ...JSON.parse(content) };
-    } catch (e) {
+    } catch {
         return defaultMemory;
     }
 };
@@ -168,7 +168,7 @@ export const loadCluster = async () => {
             return normalizeClusterServers(parsed);
         }
         return normalizeClusterServers(parsed?.servers);
-    } catch (e) {
+    } catch {
         return [];
     }
 };

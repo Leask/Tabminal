@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import { constants } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -78,7 +77,7 @@ export const setupFsRoutes = (router) => {
             try {
                 const handle = await fs.open(fullPath, 'r+');
                 await handle.close();
-            } catch (e) {
+            } catch {
                 readonly = true;
             }
 
@@ -118,7 +117,7 @@ export const setupFsRoutes = (router) => {
                 ctx.status = 400;
                 ctx.body = 'Unsupported file type for raw access';
             }
-        } catch (err) {
+        } catch {
             ctx.status = 404;
         }
     });

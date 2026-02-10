@@ -70,7 +70,7 @@ export function verifyClient(info, cb) {
         try {
             const url = new URL(req.url, `http://${req.headers.host}`);
             authHeader = url.searchParams.get('token');
-        } catch (e) {
+        } catch {
             // ignore invalid url
         }
     }

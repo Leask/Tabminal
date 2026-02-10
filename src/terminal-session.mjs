@@ -16,6 +16,7 @@ const DCS_SEQUENCE_REGEX = /\u001bP[\s\S]*?(?:\u0007|\u001b\\)/g;
 const SOS_PM_APC_SEQUENCE_REGEX = /\u001b[\^_][\s\S]*?\u001b\\/g;
 const TWO_CHAR_ESCAPE_REGEX = /\u001b[@-Z\\-_]/g;
 const CONTROL_CHAR_REGEX = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+const TITLE_POLL_INTERVAL_MS = 3000;
 
 const IGNORED_COMMANDS = [
     'export PROMPT_COMMAND',
@@ -73,7 +74,7 @@ export class TerminalSession {
                                 this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
                             }
                         }
-                    } catch (_e) { /* ignore */ }
+                    } catch { /* ignore */ }
                 }
             },
         });
@@ -153,7 +154,7 @@ export class TerminalSession {
                         const pids = stdout.trim().split('\n').filter(Boolean).map(p => parseInt(p, 10));
                         if (pids.length === 0) break;
                         currentPid = Math.max(...pids);
-                    } catch (e) { break; }
+                    } catch { break; }
                 }
 
                 let newTitle;
@@ -197,7 +198,7 @@ export class TerminalSession {
                             newEnv = envs.join('\n');
                         }
                     }
-                } catch (e) { /* ignore */ }
+                } catch { /* ignore */ }
 
                 // Poll CWD
                 let newCwd = this.cwd;
@@ -215,7 +216,7 @@ export class TerminalSession {
                             }
                         }
                     }
-                } catch (e) { /* ignore */ }
+                } catch { /* ignore */ }
 
                 const titleChanged = newTitle && newTitle !== this.title;
                 const envChanged = newEnv !== null && newEnv !== this.env;
@@ -227,11 +228,11 @@ export class TerminalSession {
                     if (cwdChanged) this.cwd = newCwd;
                     this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
                 }
-            } catch (_err) { /* ignore */ }
+            } catch { /* ignore */ }
         };
 
         poll(); // Run immediately
-        this.pollingInterval = setInterval(poll, 2000);
+        this.pollingInterval = setInterval(poll, TITLE_POLL_INTERVAL_MS);
     }
 
     stopTitlePolling() {
@@ -277,7 +278,7 @@ export class TerminalSession {
         let payload;
         try {
             payload = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
-        } catch (_err) { return; }
+        } catch { return; }
 
         switch (payload.type) {
             case 'input': this._handleInput(payload.data); break;
@@ -409,7 +410,7 @@ export class TerminalSession {
         return { conversationHistory, pendingShellHistory };
     }
 
-    async _handleAiCommand(prompt, options = {}) {
+    async _handleAiCommand(prompt) {
         // Prevent duplicate logging from shell integration
         this.skipNextShellLog = true;
         // Ensure clean line start and set Cyan color (No prefix yet)
@@ -722,7 +723,6 @@ export class TerminalSession {
         let match;
         while ((match = newlineRegex.exec(text)) !== null) {
             const lineEnd = match.index;
-            const newlineSeq = match[0];
             segments.push({
                 raw: text.slice(lastIndex, newlineRegex.lastIndex),
                 plain: text.slice(lastIndex, lineEnd)

@@ -27,6 +27,11 @@ const publicDir = path.join(__dirname, '..', 'public');
 const app = new Koa();
 const router = new Router();
 const SERVER_BOOT_ID = `${Date.now()}`;
+function debugLog(...args) {
+    if (config.debug) {
+        console.log(...args);
+    }
+}
 
 app.use(async (ctx, next) => {
     const origin = ctx.get('Origin');
@@ -227,7 +232,7 @@ router.post('/api/fs/write', async (ctx) => {
 // Memory: Expand/Collapse
 router.post('/api/memory/expand', async (ctx) => {
     const { path: folderPath, expanded } = ctx.request.body;
-    console.log('[API] Expand:', folderPath, expanded);
+    debugLog('[API] Expand:', folderPath, expanded);
     if (!folderPath) {
         ctx.status = 400;
         return;
@@ -304,7 +309,7 @@ wss.on('connection', (socket, session, ua) => {
     socket.on('pong', () => {
         socket.isAlive = true;
     });
-    console.log(`[Server] WebSocket connected to session ${session.id} [${ua}]`);
+    debugLog(`[Server] WebSocket connected to session ${session.id} [${ua}]`);
     session.attach(socket);
 });
 

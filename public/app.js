@@ -12,7 +12,6 @@ const IS_MOBILE = navigator.maxTouchPoints > 0;
 const terminalEl = document.getElementById('terminal');
 const tabListEl = document.getElementById('tab-list');
 const legacyNewTabButton = document.getElementById('new-tab-button');
-const systemStatusBarEl = document.getElementById('system-status-bar');
 const loginModal = document.getElementById('login-modal');
 const loginForm = document.getElementById('login-form');
 const passwordInput = document.getElementById('password-input');
@@ -129,7 +128,7 @@ function getServerEndpointKeyFromUrl(input) {
 function getUrlHostname(input) {
     try {
         return new URL(normalizeBaseUrl(input)).hostname.toLowerCase();
-    } catch (_err) {
+    } catch {
         return '';
     }
 }
@@ -176,7 +175,7 @@ async function probeAccessLoginUrl(server, path = '/api/heartbeat') {
             return '';
         }
         return buildAccessLoginUrl(server);
-    } catch (_err) {
+    } catch {
         return '';
     }
 }
@@ -470,7 +469,7 @@ class ServerClient {
             redirect: options.redirect || (this.isPrimary ? 'follow' : 'manual')
         });
         if (!this.isPrimary && isAccessRedirectResponse(response)) {
-            this.handleAccessRedirect(path, response);
+            this.handleAccessRedirect();
             const error = new Error('Cloudflare Access redirect');
             error.code = 'ACCESS_REDIRECT';
             throw error;
@@ -503,7 +502,7 @@ class ServerClient {
         }
     }
 
-    handleAccessRedirect(_path, _response) {
+    handleAccessRedirect() {
         if (this.isPrimary) return;
         const loginUrl = buildAccessLoginUrl(this);
         const wasRequired = this.needsAccessLogin;
@@ -882,7 +881,7 @@ class EditorManager {
         }
     }
 
-    async openFile(filePath, restoreOnly = false) {
+    async openFile(filePath) {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
@@ -1221,7 +1220,6 @@ class Session {
             
             const container = this.wrapperElement.parentElement;
             const availableWidth = container.clientWidth;
-            const availableHeight = container.clientHeight; // Use clientHeight to respect min-height
             
             // Calculate scale to fit width
             const scale = availableWidth / termWidth;
@@ -1310,10 +1308,10 @@ class Session {
         this.socket.addEventListener('message', (event) => {
             try {
                 this.handleMessage(JSON.parse(event.data));
-            } catch (_err) { /* ignore */ }
+            } catch { /* ignore */ }
         });
 
-        this.socket.addEventListener('close', (event) => {
+        this.socket.addEventListener('close', () => {
             // We rely on the global heartbeat (syncSessions) to handle reconnection.
             // This event listener just allows the socket to be garbage collected.
         });
@@ -1442,7 +1440,7 @@ function findServerByEndpointKey(endpointKey, excludeServerId = '') {
             if (getServerEndpointKey(server) === endpointKey) {
                 return server;
             }
-        } catch (_err) {
+        } catch {
             // Ignore invalid entries and continue.
         }
     }
@@ -1496,7 +1494,7 @@ async function loadServerRegistryFromBackend() {
     let payload = null;
     try {
         payload = raw ? JSON.parse(raw) : {};
-    } catch (_err) {
+    } catch {
         clusterDebug('loadServerRegistryFromBackend invalid json', raw.slice(0, 180));
         throw new Error('Failed to load host list: invalid JSON response');
     }
@@ -1825,7 +1823,6 @@ let smoothedMaxVal = 1;
 let currentBottomGap = 0;
 
 const heartbeatCanvas = document.getElementById('heartbeat-canvas');
-const heartbeatCtx = heartbeatCanvas ? heartbeatCanvas.getContext('2d') : null;
 
 function updateCanvasSize() {
     if (!heartbeatCanvas) return;
@@ -2996,7 +2993,7 @@ function getHostFromBaseUrl(baseUrl) {
     if (!baseUrl) return '';
     try {
         return new URL(baseUrl).hostname;
-    } catch (_err) {
+    } catch {
         return '';
     }
 }
@@ -3246,7 +3243,7 @@ if (
                     });
                 }
             }
-        } catch (_err) {
+        } catch {
             addServerError.textContent = 'Invalid URL.';
             return;
         }
@@ -3383,7 +3380,7 @@ async function initApp() {
 const virtualKeys = document.getElementById('virtual-keys');
 
 if (virtualKeys) {
-    const handleKey = (key, btn) => {
+    const handleKey = (key) => {
         if (!state.activeSessionKey || !state.sessions.has(state.activeSessionKey)) return;
         const session = state.sessions.get(state.activeSessionKey);
         
@@ -3606,7 +3603,6 @@ const searchResults = document.getElementById('search-results');
 const searchCaseBtn = document.getElementById('search-case');
 const searchWordBtn = document.getElementById('search-word');
 const searchRegexBtn = document.getElementById('search-regex');
-const searchToggleBtn = document.getElementById('search-toggle-replace');
 
 let searchOptions = {
     caseSensitive: false,
