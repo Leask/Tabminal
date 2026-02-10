@@ -119,10 +119,12 @@
     </script>
     <script>
         (function() {
-            const t = Math.floor(Date.now() / 1000); // Seconds for dev
+            const runtimeBootId = (
+                new URLSearchParams(window.location.search).get('rt') || 'stable'
+            );
             const link = document.createElement('link');
             link.rel = 'stylesheet';
-            link.href = `./styles.css?t=${t}`;
+            link.href = `./styles.css?v=${encodeURIComponent(runtimeBootId)}`;
             document.head.appendChild(link);
         })();
     </script>
@@ -279,16 +281,23 @@
     </div>
     <script>
         (function() {
-            const t = Math.floor(Date.now() / 1000);
+            const runtimeBootId = (
+                new URLSearchParams(window.location.search).get('rt') || 'stable'
+            );
             const script = document.createElement('script');
             script.type = 'module';
-            script.src = `./app.js?t=${t}`;
+            script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
             document.body.appendChild(script);
         })();
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js')
+                const runtimeBootId = (
+                    new URLSearchParams(window.location.search).get('rt') || 'stable'
+                );
+                navigator.serviceWorker.register(
+                    `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
+                )
                     .then(registration => {
                         console.log('ServiceWorker registration successful with scope: ', registration.scope);
                     })

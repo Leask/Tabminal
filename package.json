@@ -52,5 +52,8 @@
   "bugs": {
     "url": "https://github.com/leask/tabminal/issues"
   },
-  "homepage": "https://github.com/leask/tabminal#readme"
+  "homepage": "https://github.com/leask/tabminal#readme",
+  "devDependencies": {
+    "eslint": "^9.39.2"
+  }
 }

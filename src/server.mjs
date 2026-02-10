@@ -37,7 +37,7 @@ app.use(async (ctx, next) => {
     } else {
         ctx.set('Access-Control-Allow-Origin', '*');
     }
-    ctx.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    ctx.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     ctx.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
 
     if (ctx.method === 'OPTIONS') {
@@ -99,6 +99,9 @@ if (!config.acceptTerms) {
 Please confirm you are running this service in a trusted environment.
 You should use a secure tunnel like Cloudflare Zero Trust or Tailscale for remote access.
 Do NOT expose this service's port directly to the public internet.
+If you enable AI features, prompts may include terminal history, environment variables,
+and file context that are sent to your chosen model provider. You assume this risk.
+Choose a trusted model/provider and use least-privilege credentials.
 
 You acknowledge and understand these risks.
 To start the service, use the '-y' flag or set 'acceptTerms: true' in your config.
@@ -341,6 +344,11 @@ function findAvailablePort(startPort, host) {
         const port = await findAvailablePort(config.port, config.host);
         httpServer.listen(port, config.host, () => {
             const urlHost = config.host === '0.0.0.0' ? 'localhost' : config.host;
+            if (port !== config.port) {
+                console.warn(
+                    `[Server] Port ${config.port} is unavailable; using ${port} instead.`
+                );
+            }
             console.log(`Tabminal listening on http://${urlHost}:${port}`);
         });
     } catch (err) {

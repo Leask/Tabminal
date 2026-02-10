@@ -44,6 +44,7 @@ Powered by **modern AI models** (via OpenRouter or OpenAI), Tabminal understands
 *   **Context-Aware Chat**: Type `# how do I...` to ask questions. The AI knows your **CWD**, **Environment**, and **Recent History**.
 *   **Auto-Fix**: Command failed? Tabminal automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
 *   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
+*   **Provider Risk Notice**: AI features may send terminal context to your selected model provider. You are responsible for choosing trusted providers/models and acceptable data boundaries.
 
 ### 📱 Ultimate Mobile Experience
 Built from the ground up for **iPadOS**, **iOS** and **Android**.
@@ -56,7 +57,7 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **Built-in Editor**: Integrated **Monaco Editor** (VS Code core) allows you to edit files directly on the server.
 *   **Visual File Manager**: Sidebar file tree for easy navigation.
 *   **Network Heartbeat**: Real-time latency visualization.
-*   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash).
+*   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash). Entries that resolve to the current node are ignored at runtime to avoid self-loop duplicates. Non-main host tokens are restored from this server-side registry; main-host auth stays in browser local storage.
 
 ## 🚀 Getting Started
 
@@ -68,6 +69,7 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 ### ⚠️ Security Warning
 Tabminal provides **full read/write access** to the underlying file system.
 *   **Do NOT expose this to the public internet** without proper protection (VPN, etc).
+*   If AI features are enabled, terminal history/environment/context may be sent to your configured model provider. You are responsible for this risk and provider selection.
 *   The `--accept-terms` flag is required to acknowledge that you understand these risks.
 
 

@@ -8,7 +8,7 @@ const DEFAULT_CONFIG = {
     host: '127.0.0.1',
     port: 9846,
     heartbeatInterval: 10000,
-    historyLimit: 524288,
+    historyLimit: 1024 * 1024,
     acceptTerms: false,
     password: null,
     model: null,
@@ -46,6 +46,14 @@ function parseBool(value) {
     if (value === undefined || value === null) return false;
     const normalized = String(value).trim().toLowerCase();
     return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function parsePositiveInt(value, fallback) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+    return parsed;
 }
 
 function loadConfig() {
@@ -232,13 +240,17 @@ Options:
     if (parseBool(process.env.TABMINAL_ACCEPT) || parseBool(process.env.TABMINAL_ACCEPT_TERMS)) {
         finalConfig.acceptTerms = true;
     }
+    finalConfig.historyLimit = parsePositiveInt(
+        finalConfig.historyLimit,
+        DEFAULT_CONFIG.historyLimit
+    );
 
     // Password Logic
     if (!finalConfig.password) {
         finalConfig.password = generateRandomPassword();
         console.log('\n[SECURITY] No password provided. Generated temporary password:');
         console.log(`\x1b[36m${finalConfig.password}\x1b[0m`);
-        console.log('Please save this password or set a custom one using -a/--passwd.\n');
+        console.log('Please save this password or set a custom one using -a/--password.\n');
     }
 
     // Validate API Keys (Mutually Exclusive)

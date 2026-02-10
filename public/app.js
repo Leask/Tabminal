@@ -207,9 +207,15 @@ function handlePrimaryRuntimeVersion(data) {
     if (!bootIdRaw) return;
     const bootId = String(bootIdRaw);
     if (!bootId) return;
+    const currentRt = new URL(window.location.href).searchParams.get('rt') || '';
 
     if (!primaryServerBootId) {
         primaryServerBootId = bootId;
+        if (currentRt !== bootId && !runtimeReloadScheduled) {
+            runtimeReloadScheduled = true;
+            console.info('[Runtime] Syncing app shell cache key with server boot id.');
+            window.location.replace(buildReloadUrlWithRuntimeBootId(bootId));
+        }
         return;
     }
     if (primaryServerBootId === bootId) return;
@@ -365,9 +371,14 @@ class ServerClient {
         this.modelStore = new Map();
         const key = buildTokenStorageKey(this.id);
         const persistedToken = typeof data.token === 'string' ? data.token : '';
-        this.token = persistedToken || localStorage.getItem(key) || '';
-        if (this.token) {
-            localStorage.setItem(key, this.token);
+        if (this.isPrimary) {
+            this.token = persistedToken || localStorage.getItem(key) || '';
+            if (this.token) {
+                localStorage.setItem(key, this.token);
+            }
+        } else {
+            this.token = persistedToken;
+            localStorage.removeItem(key);
         }
         this.isAuthenticated = !!this.token;
         this.needsLogin = !this.isAuthenticated;
@@ -381,8 +392,12 @@ class ServerClient {
         this.nextSyncAt = 0;
 
         const key = buildTokenStorageKey(this.id);
-        if (this.token) {
-            localStorage.setItem(key, this.token);
+        if (this.isPrimary) {
+            if (this.token) {
+                localStorage.setItem(key, this.token);
+            } else {
+                localStorage.removeItem(key);
+            }
         } else {
             localStorage.removeItem(key);
         }
@@ -1436,7 +1451,6 @@ function findServerByEndpointKey(endpointKey, excludeServerId = '') {
 
 function getPersistedServers() {
     return Array.from(state.servers.values())
-        .filter(server => !server.isPrimary)
         .map(server => server.toJSON());
 }
 
@@ -1532,14 +1546,7 @@ function createServerClient(data, { isPrimary = false } = {}) {
             existing.host = host;
         }
         if (typeof data.token === 'string') {
-            existing.token = data.token;
-            existing.isAuthenticated = !!existing.token;
-            existing.needsLogin = !existing.isAuthenticated;
-            if (existing.token) {
-                localStorage.setItem(buildTokenStorageKey(existing.id), existing.token);
-            } else {
-                localStorage.removeItem(buildTokenStorageKey(existing.id));
-            }
+            existing.setToken(data.token);
         }
         resetServerEndpoint(existing, normalized);
         if (isPrimary) {
@@ -2731,11 +2738,6 @@ function renderServerControls() {
         updateServerControlMetric(server);
     }
 }
-
-document.addEventListener('click', () => {
-    notificationManager.requestPermission();
-}, { once: true });
-// #endregion
 
 // #region Notification Manager
 class NotificationManager {

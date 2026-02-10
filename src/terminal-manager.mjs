@@ -23,10 +23,7 @@ function resolveShell() {
     return '/bin/bash';
 }
 
-const historyLimit = Number.parseInt(
-    process.env.TABMINAL_HISTORY ?? '',
-    10
-) || 1024 * 1024;
+const historyLimit = config.historyLimit;
 const initialCols = Number.parseInt(
     process.env.TABMINAL_COLS ?? '',
     10

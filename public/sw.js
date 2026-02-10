@@ -1,4 +1,5 @@
-const CACHE_NAME = 'tabminal-cache-v2';
+const WORKER_VERSION = new URL(self.location.href).searchParams.get('rt') || 'stable';
+const CACHE_NAME = `tabminal-cache-${WORKER_VERSION}`;
 const STATIC_ASSETS = [
     '/favicon.svg',
     '/manifest.json',

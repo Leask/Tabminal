@@ -850,17 +850,6 @@ export class TerminalSession {
         return -1;
     }
 
-    _trimLineToCommand(line, command) {
-        if (!command) return line;
-        const target = command.trim();
-        if (!target) return line;
-        const idx = line.indexOf(target);
-        if (idx >= 0) {
-            return line.slice(idx);
-        }
-        return line;
-    }
-
     _logCommandExecution(entry) {
         // Filter out internal shell integration commands
         if (entry.command && IGNORED_COMMANDS.some(ignored => entry.command.includes(ignored))) {
