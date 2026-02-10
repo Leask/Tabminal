@@ -6,9 +6,9 @@
 
 ![Tabminal Banner](public/favicon.svg)
 
-## 🌟 Why Tabminal?
+## 🌟 Why `t> Tabminal`?
 
-Tabminal bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on desktop and mobile devices.
+`t> Tabminal` bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on desktop and mobile devices.
 
 ![IMG_0918](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
 
@@ -39,10 +39,10 @@ As a long-time terminal user who frequently needs to step away from my computer 
 </details>
 
 ### 🧠 AI-Native Intelligence
-Powered by **modern AI models** (via OpenRouter or OpenAI), Tabminal understands your context.
+Powered by **modern AI models** (via OpenRouter or OpenAI), `t> Tabminal` understands your context.
 *(Defaults to **Gemini 3 Flash** for OpenRouter or **GPT-5.2** for OpenAI if not configured)*
 *   **Context-Aware Chat**: Type `# how do I...` to ask questions. The AI knows your **CWD**, **Environment**, and **Recent History**.
-*   **Auto-Fix**: Command failed? Tabminal automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
+*   **Auto-Fix**: Command failed? `t> Tabminal` automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
 *   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
 *   **Provider Risk Notice**: AI features may send terminal context to your selected model provider. You are responsible for choosing trusted providers/models and acceptable data boundaries.
 
@@ -60,7 +60,7 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash). Entries that resolve to the current node are ignored at runtime to avoid self-loop duplicates. Non-main host tokens are restored from this server-side registry; main-host auth stays in browser local storage.
 
 ### 🌐 Multi-Server Support
-Tabminal can manage multiple backend nodes from one UI.
+`t> Tabminal` can manage multiple backend nodes from one UI.
 *   Register hosts from the sidebar using `+ Add Host`.
 *   Open sessions on a specific host with `New Tab @ Host`.
 *   Each host maintains its own heartbeat, session list, and file/editor state.
@@ -75,7 +75,7 @@ Tabminal can manage multiple backend nodes from one UI.
 *   (Optional) A pair of Google API Key and Search Engine ID (CX) for web search capabilities.
 
 ### ⚠️ Security Warning
-Tabminal provides **full read/write access** to the underlying file system.
+`t> Tabminal` provides **full read/write access** to the underlying file system.
 *   **Do NOT expose this to the public internet** without proper protection (VPN, etc).
 *   If AI features are enabled, terminal history/environment/context may be sent to your configured model provider. You are responsible for this risk and provider selection.
 *   The `--accept-terms` flag is required to acknowledge that you understand these risks.
@@ -114,7 +114,7 @@ npm start -- --openrouter-key "YOUR_API_KEY" --accept-terms
 
 ### Configuration
 
-You can configure Tabminal via command-line arguments, environment variables, or a `config.json` file.
+You can configure `t> Tabminal` via command-line arguments, environment variables, or a `config.json` file.
 
 | Argument | Env Variable | Description | Default |
 | :--- | :--- | :--- | :--- |
@@ -129,9 +129,13 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
-| `(env only)` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval (ms, minimum `1000`) | `10000` |
-| `(env only)` | `TABMINAL_HISTORY` | Terminal history limit (characters) | `1048576` |
+| `--heartbeat` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval (ms, minimum `1000`) | `10000` |
+| `--history` | `TABMINAL_HISTORY` | Terminal history limit (characters) | `1048576` |
 | `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
+
+`config.json` also supports:
+- `heartbeatInterval` or `heartbeat-interval`
+- `historyLimit` or `history-limit`
 
 ## ⌨️ Shortcuts & Gestures
 
