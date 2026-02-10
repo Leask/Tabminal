@@ -3190,12 +3190,12 @@ let searchOptions = {
     regex: false
 };
 const searchDecorations = {
-    matchBackground: '#ffd54acc',
-    matchBorder: '#ffb300',
-    matchOverviewRuler: '#ffb300',
-    activeMatchBackground: '#00e5ff',
+    matchBackground: '#ffffff',
+    matchBorder: '#ffffff',
+    matchOverviewRuler: '#ffffff',
+    activeMatchBackground: '#ffffff',
     activeMatchBorder: '#ffffff',
-    activeMatchColorOverviewRuler: '#00e5ff'
+    activeMatchColorOverviewRuler: '#ffffff'
 };
 
 function buildSearchRunOptions(extra = {}) {
