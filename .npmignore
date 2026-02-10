@@ -10,6 +10,7 @@ tests/
 # Configuration & Secrets
 .env*
 config.json
+reploy.sh
 
 # Logs & Temp
 *.log

@@ -59,6 +59,14 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **Network Heartbeat**: Real-time latency visualization.
 *   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash). Entries that resolve to the current node are ignored at runtime to avoid self-loop duplicates. Non-main host tokens are restored from this server-side registry; main-host auth stays in browser local storage.
 
+### 🌐 Multi-Server Support
+Tabminal can manage multiple backend nodes from one UI.
+*   Register hosts from the sidebar using `+ Add Host`.
+*   Open sessions on a specific host with `New Tab @ Host`.
+*   Each host maintains its own heartbeat, session list, and file/editor state.
+*   Authentication is host-scoped: the main host controls page login, while sub-host login state is shown per-host in the sidebar.
+*   Host registry is saved on the main host at `~/.tabminal/cluster.json`, so added hosts can be restored after refresh and across browsers/devices.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -121,6 +129,8 @@ You can configure Tabminal via command-line arguments, environment variables, or
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
+| `(env only)` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval (ms, minimum `1000`) | `10000` |
+| `(env only)` | `TABMINAL_HISTORY` | Terminal history limit (characters) | `1048576` |
 | `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
 
 ## ⌨️ Shortcuts & Gestures

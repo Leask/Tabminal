@@ -56,6 +56,28 @@ function parsePositiveInt(value, fallback) {
     return parsed;
 }
 
+function parsePort(value, fallback) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+        console.warn(
+            `[Config] Invalid port "${value}". Using ${fallback}.`
+        );
+        return fallback;
+    }
+    return parsed;
+}
+
+function parsePositiveIntWithMin(value, fallback, min, label) {
+    const parsed = parsePositiveInt(value, fallback);
+    if (parsed < min) {
+        console.warn(
+            `[Config] ${label} ${parsed} is too small. Using ${min}.`
+        );
+        return min;
+    }
+    return parsed;
+}
+
 function loadConfig() {
     // 1. Load from ~/.tabminal/config.json
     const configDir = path.join(os.homedir(), '.tabminal');
@@ -114,6 +136,12 @@ function loadConfig() {
                 type: 'string',
                 short: 'm'
             },
+            heartbeat: {
+                type: 'string'
+            },
+            history: {
+                type: 'string'
+            },
             debug: {
                 type: 'boolean',
                 short: 'd'
@@ -154,6 +182,8 @@ Options:
   --cloudflare-key, -f  Set Cloudflare Tunnel Token
   --shell, -s           Set Default Shell
   --model, -m           Set AI Model
+  --heartbeat           Set heartbeat interval (ms, min: 1000)
+  --history             Set terminal history limit (chars)
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
   --debug, -d           Enable debug mode
@@ -178,6 +208,12 @@ Options:
     if (finalConfig['cloudflare-key']) finalConfig.cloudflareKey = finalConfig['cloudflare-key'];
     if (finalConfig['google-key']) finalConfig.googleKey = finalConfig['google-key'];
     if (finalConfig['google-cx']) finalConfig.googleCx = finalConfig['google-cx'];
+    if (finalConfig['heartbeat-interval']) {
+        finalConfig.heartbeatInterval = finalConfig['heartbeat-interval'];
+    }
+    if (finalConfig['history-limit']) {
+        finalConfig.historyLimit = finalConfig['history-limit'];
+    }
 
     if (args.host) {
         finalConfig.host = args.host;
@@ -212,6 +248,12 @@ Options:
     if (args.model) {
         finalConfig.model = args.model;
     }
+    if (args.heartbeat) {
+        finalConfig.heartbeatInterval = args.heartbeat;
+    }
+    if (args.history) {
+        finalConfig.historyLimit = args.history;
+    }
     if (args.debug) {
         finalConfig.debug = true;
     }
@@ -240,6 +282,16 @@ Options:
     if (parseBool(process.env.TABMINAL_ACCEPT) || parseBool(process.env.TABMINAL_ACCEPT_TERMS)) {
         finalConfig.acceptTerms = true;
     }
+    finalConfig.port = parsePort(
+        finalConfig.port,
+        DEFAULT_CONFIG.port
+    );
+    finalConfig.heartbeatInterval = parsePositiveIntWithMin(
+        finalConfig.heartbeatInterval,
+        DEFAULT_CONFIG.heartbeatInterval,
+        1000,
+        'Heartbeat interval'
+    );
     finalConfig.historyLimit = parsePositiveInt(
         finalConfig.historyLimit,
         DEFAULT_CONFIG.historyLimit
