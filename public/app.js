@@ -3239,8 +3239,36 @@ if (searchBar) {
     });
 }
 
+const shortcutsModal = document.getElementById('shortcuts-modal');
+
+function closeShortcutsModal() {
+    if (!shortcutsModal) return;
+    shortcutsModal.style.display = 'none';
+    if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+        state.sessions.get(state.activeSessionKey).mainTerm.focus();
+    }
+}
+
+if (shortcutsModal) {
+    shortcutsModal.addEventListener('click', (event) => {
+        if (event.target === shortcutsModal) {
+            closeShortcutsModal();
+        }
+    });
+}
+
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
+    if (
+        e.key === 'Escape'
+        && shortcutsModal
+        && shortcutsModal.style.display === 'flex'
+    ) {
+        e.preventDefault();
+        closeShortcutsModal();
+        return;
+    }
+
     // Ctrl+F or Cmd+F for Search
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         // If editor has focus, let Monaco handle it
@@ -3292,20 +3320,10 @@ document.addEventListener('keydown', (e) => {
         // Ctrl + Shift + ?: Help
         if (key === '?' || (code === 'Slash' && e.shiftKey)) {
             e.preventDefault();
-            const modal = document.getElementById('shortcuts-modal');
-            if (modal) {
-                modal.style.display = 'flex';
-                const closeBtn = modal.querySelector('button');
+            if (shortcutsModal) {
+                shortcutsModal.style.display = 'flex';
+                const closeBtn = shortcutsModal.querySelector('button');
                 if (closeBtn) closeBtn.focus();
-                
-                modal.onclick = (ev) => {
-                    if (ev.target === modal) {
-                        modal.style.display = 'none';
-                        if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
-                            state.sessions.get(state.activeSessionKey).mainTerm.focus();
-                        }
-                    }
-                };
             }
             return;
         }
