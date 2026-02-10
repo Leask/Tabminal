@@ -10,7 +10,7 @@
 
 `t> Tabminal` bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on desktop and mobile devices.
 
-<img width="1689" height="1386" alt="Screenshot 2026-02-10 at 1 10 01 AM" src="https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5" />
+![IMG_0918](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
 
 As a long-time terminal user who frequently needs to step away from my computer while maintaining my workflow, and considering the various scalability issues of traditional terminals alongside the irreversible trend of vibe-coding, I reconsidered a solution that would first serve my own needs. Then, it would serve others whose workflows happen to be similar to mine. So, while waiting for AI to write code for the company, I tried to vibe a terminal from scratch that could meet my daily work needs and that I would enjoy using. As a result, I intermittently wrote this project. I believe this project is not for everyone. However, it is especially suitable for CLI and AI enthusiasts, which is the core motivation behind this project's creation.
 
@@ -22,7 +22,7 @@ As a long-time terminal user who frequently needs to step away from my computer 
 - `Proactive AI integration` means your terminal becomes your work context. You can ask questions about your current session at any time, and the AI will automatically retrieve the context to accurately solve problems, even proactively offering assistance when commands fail.
 - `Cloud-native design` enables access via Zero Trust or VPN, providing unprecedented convenience for managing cloud servers.
 
-<img width="1632" height="1317" alt="Screenshot 2025-11-24 at 10 15 28 PM" src="https://github.com/user-attachments/assets/ad864233-7b22-4b29-8b90-dc81993dd623" />
+<img width="1689" height="1386" alt="Screenshot 2026-02-10 at 1 10 01 AM" src="https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5" />
 
 <details>
 
