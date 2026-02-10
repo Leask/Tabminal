@@ -3189,6 +3189,22 @@ let searchOptions = {
     wholeWord: false,
     regex: false
 };
+const searchDecorations = {
+    matchBackground: '#ffd54acc',
+    matchBorder: '#ffb300',
+    matchOverviewRuler: '#ffb300',
+    activeMatchBackground: '#00e5ff',
+    activeMatchBorder: '#ffffff',
+    activeMatchColorOverviewRuler: '#00e5ff'
+};
+
+function buildSearchRunOptions(extra = {}) {
+    return {
+        ...searchOptions,
+        ...extra,
+        decorations: searchDecorations
+    };
+}
 
 if (searchBar) {
     const updateUI = (found) => {
@@ -3209,8 +3225,8 @@ if (searchBar) {
         const term = searchInput.value;
         
         let found = false;
-        if (forward) found = addon.findNext(term, searchOptions);
-        else found = addon.findPrevious(term, searchOptions);
+        if (forward) found = addon.findNext(term, buildSearchRunOptions());
+        else found = addon.findPrevious(term, buildSearchRunOptions());
         
         updateUI(found);
     };
@@ -3243,7 +3259,7 @@ if (searchBar) {
         // Incremental search
         const found = state.sessions.get(state.activeSessionKey).searchAddon.findNext(term, {
             incremental: true, 
-            ...searchOptions 
+            ...buildSearchRunOptions()
         });
         
         updateUI(found);
