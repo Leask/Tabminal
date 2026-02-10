@@ -178,7 +178,9 @@ export class TerminalSession {
                         const cmdAndArgs = (await execAsync(`ps -o args= -p ${currentPid}`)).stdout.trim();
                         const envBlock = rawLine.substring(rawLine.indexOf(cmdAndArgs) + cmdAndArgs.length).trim();
 
-                        const regex = /([A-Z_][A-Z0-9_]*=)/g;
+                        // Keep lowercase env keys (e.g. npm_config_*) as
+                        // standalone entries instead of appending to USER.
+                        const regex = /([A-Za-z_][A-Za-z0-9_]*=)/g;
                         const indices = [];
                         let match;
                         while ((match = regex.exec(envBlock)) !== null) {

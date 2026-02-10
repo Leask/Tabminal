@@ -1561,7 +1561,8 @@ function createServerClient(data, { isPrimary = false } = {}) {
     const server = new ServerClient({
         id: finalId,
         baseUrl: normalized,
-        host: host
+        host: host,
+        token: typeof data.token === 'string' ? data.token : ''
     }, { isPrimary });
     state.servers.set(server.id, server);
     return server;
