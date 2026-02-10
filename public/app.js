@@ -347,12 +347,17 @@ class ServerClient {
     handleUnauthorized(message = '') {
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
-        this.clearAuth();
-        setStatus(this, 'reconnecting');
-        renderServerControls();
         if (this.isPrimary) {
+            this.clearAuth();
+            setStatus(this, 'reconnecting');
+            renderServerControls();
             auth.showLoginModal(message || 'Authentication required.');
         } else {
+            // Keep sub-host token untouched; only stop sync and require manual reconnect.
+            this.stopHeartbeat();
+            this.nextSyncAt = 0;
+            setStatus(this, 'reconnecting');
+            renderServerControls();
             alert(`${getDisplayHost(this)} needs login.`, {
                 type: 'warning',
                 title: 'Host'
