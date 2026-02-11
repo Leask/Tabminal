@@ -9,6 +9,7 @@ const DEFAULT_CONFIG = {
     port: 9846,
     heartbeatInterval: 10000,
     historyLimit: 1024 * 1024,
+    terminalEngine: 'xterm',
     acceptTerms: false,
     password: null,
     model: null,
@@ -78,6 +79,21 @@ function parsePositiveIntWithMin(value, fallback, min, label) {
     return parsed;
 }
 
+function parseTerminalEngine(value, fallback = 'xterm') {
+    const normalized = String(value ?? '')
+        .trim()
+        .toLowerCase();
+    if (normalized === 'xterm' || normalized === 'ghostty') {
+        return normalized;
+    }
+    if (normalized) {
+        console.warn(
+            `[Config] Invalid terminal engine "${value}". Using ${fallback}.`
+        );
+    }
+    return fallback;
+}
+
 function loadConfig() {
     // 1. Load from ~/.tabminal/config.json
     const configDir = path.join(os.homedir(), '.tabminal');
@@ -142,6 +158,9 @@ function loadConfig() {
             history: {
                 type: 'string'
             },
+            'terminal-engine': {
+                type: 'string'
+            },
             debug: {
                 type: 'boolean',
                 short: 'd'
@@ -184,6 +203,7 @@ Options:
   --model, -m           Set AI Model
   --heartbeat           Set heartbeat interval (ms, min: 1000)
   --history             Set terminal history limit (chars)
+  --terminal-engine     Terminal renderer engine: xterm | ghostty
   --google-key, -g      Set Google Search API Key
   --google-cx, -c       Set Google Search Engine ID
   --debug, -d           Enable debug mode
@@ -213,6 +233,9 @@ Options:
     }
     if (finalConfig['history-limit']) {
         finalConfig.historyLimit = finalConfig['history-limit'];
+    }
+    if (finalConfig['terminal-engine']) {
+        finalConfig.terminalEngine = finalConfig['terminal-engine'];
     }
 
     if (args.host) {
@@ -254,6 +277,9 @@ Options:
     if (args.history) {
         finalConfig.historyLimit = args.history;
     }
+    if (args['terminal-engine']) {
+        finalConfig.terminalEngine = args['terminal-engine'];
+    }
     if (args.debug) {
         finalConfig.debug = true;
     }
@@ -269,6 +295,9 @@ Options:
     if (process.env.TABMINAL_PORT) finalConfig.port = parseInt(process.env.TABMINAL_PORT, 10);
     if (process.env.TABMINAL_HEARTBEAT) finalConfig.heartbeatInterval = parseInt(process.env.TABMINAL_HEARTBEAT, 10);
     if (process.env.TABMINAL_HISTORY) finalConfig.historyLimit = parseInt(process.env.TABMINAL_HISTORY, 10);
+    if (process.env.TABMINAL_TERMINAL_ENGINE) {
+        finalConfig.terminalEngine = process.env.TABMINAL_TERMINAL_ENGINE;
+    }
     if (process.env.TABMINAL_PASSWORD) finalConfig.password = process.env.TABMINAL_PASSWORD;
     if (process.env.TABMINAL_OPENROUTER_KEY) finalConfig.openrouterKey = process.env.TABMINAL_OPENROUTER_KEY;
     if (process.env.TABMINAL_OPENAI_KEY) finalConfig.openaiKey = process.env.TABMINAL_OPENAI_KEY;
@@ -295,6 +324,10 @@ Options:
     finalConfig.historyLimit = parsePositiveInt(
         finalConfig.historyLimit,
         DEFAULT_CONFIG.historyLimit
+    );
+    finalConfig.terminalEngine = parseTerminalEngine(
+        finalConfig.terminalEngine,
+        DEFAULT_CONFIG.terminalEngine
     );
 
     // Password Logic

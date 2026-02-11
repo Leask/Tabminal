@@ -131,11 +131,13 @@ You can configure `t> Tabminal` via command-line arguments, environment variable
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
 | `--heartbeat` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval (ms, minimum `1000`) | `10000` |
 | `--history` | `TABMINAL_HISTORY` | Terminal history limit (characters) | `1048576` |
+| `--terminal-engine` | `TABMINAL_TERMINAL_ENGINE` | Frontend terminal renderer (`xterm` / `ghostty`) | `xterm` |
 | `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
 
 `config.json` also supports:
 - `heartbeatInterval` or `heartbeat-interval`
 - `historyLimit` or `history-limit`
+- `terminalEngine` or `terminal-engine`
 
 ## ⌨️ Shortcuts & Gestures
 
@@ -153,7 +155,7 @@ You can configure `t> Tabminal` via command-line arguments, environment variable
 
 ## 🛠 Tech Stack
 *   **Backend**: [Node.js](https://nodejs.org), [Koa](https://github.com/koajs/koa), [node-pty](https://github.com/microsoft/node-pty), [WebSocket](https://github.com/websockets/ws).
-*   **Frontend**: [Vanilla JS](http://vanilla-js.com/) 😝, [xterm.js](https://github.com/xtermjs/xterm.js), [Monaco Editor](https://github.com/microsoft/monaco-editor).
+*   **Frontend**: [Vanilla JS](http://vanilla-js.com/) 😝, [xterm.js](https://github.com/xtermjs/xterm.js), [ghostty-web](https://github.com/coder/ghostty-web), [Monaco Editor](https://github.com/microsoft/monaco-editor).
 *   **AI**: Integration via [utilitas](https://github.com/leask/utilitas).
 
 ## 🐛 Troubleshooting

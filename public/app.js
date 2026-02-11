@@ -1,7 +1,7 @@
-import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm';
-import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm';
+import { Terminal as XtermTerminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm';
+import { FitAddon as XtermFitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm';
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
-import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
+import { CanvasAddon as XtermCanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/+esm';
 import {
     normalizeBaseUrl,
@@ -59,6 +59,9 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
+const TERMINAL_ENGINE_XTERM = 'xterm';
+const TERMINAL_ENGINE_GHOSTTY = 'ghostty';
+const GHOSTTY_MAIN_MODULE_URL = 'https://cdn.jsdelivr.net/npm/ghostty-web@next/dist/ghostty-web.js';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const serverModalState = {
     mode: 'add',
@@ -66,7 +69,169 @@ const serverModalState = {
 };
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
+let runtimeTerminalEngine = TERMINAL_ENGINE_XTERM;
+let runtimeTerminalEngineInitialized = false;
+let ghosttyEnginePromise = null;
+let ghosttyEngineApi = null;
 // #endregion
+
+function normalizeTerminalEngine(value) {
+    const normalized = String(value || '')
+        .trim()
+        .toLowerCase();
+    if (normalized === TERMINAL_ENGINE_GHOSTTY) {
+        return TERMINAL_ENGINE_GHOSTTY;
+    }
+    return TERMINAL_ENGINE_XTERM;
+}
+
+function getRuntimeTerminalEngine() {
+    return runtimeTerminalEngine;
+}
+
+async function ensureGhosttyEngineReady() {
+    if (ghosttyEngineApi) return ghosttyEngineApi;
+    if (ghosttyEnginePromise) return ghosttyEnginePromise;
+
+    ghosttyEnginePromise = (async () => {
+        const mod = await import(GHOSTTY_MAIN_MODULE_URL);
+        if (
+            !mod
+            || typeof mod.init !== 'function'
+            || typeof mod.Terminal !== 'function'
+            || typeof mod.FitAddon !== 'function'
+        ) {
+            throw new Error('Invalid ghostty-web module export');
+        }
+        await mod.init();
+        ghosttyEngineApi = mod;
+        return mod;
+    })().catch((error) => {
+        ghosttyEnginePromise = null;
+        throw error;
+    });
+
+    return ghosttyEnginePromise;
+}
+
+function createMainTerminal(engine, options) {
+    if (engine === TERMINAL_ENGINE_GHOSTTY && ghosttyEngineApi?.Terminal) {
+        return new ghosttyEngineApi.Terminal(options);
+    }
+    return new XtermTerminal(options);
+}
+
+function createMainFitAddon(engine) {
+    if (engine === TERMINAL_ENGINE_GHOSTTY && ghosttyEngineApi?.FitAddon) {
+        return new ghosttyEngineApi.FitAddon();
+    }
+    return new XtermFitAddon();
+}
+
+function shouldStripGhosttyOsc(payload) {
+    if (payload.startsWith('1337;')) {
+        return true;
+    }
+    if (payload.startsWith('11;?')) {
+        return true;
+    }
+    return false;
+}
+
+function stripUnsupportedGhosttyOscChunk(chunk, carry = '') {
+    const input = `${carry}${chunk || ''}`;
+    if (!input) {
+        return { text: '', carry: '' };
+    }
+
+    let output = '';
+    let index = 0;
+
+    while (index < input.length) {
+        const oscStart = input.indexOf('\u001b]', index);
+        if (oscStart === -1) {
+            output += input.slice(index);
+            return { text: output, carry: '' };
+        }
+
+        output += input.slice(index, oscStart);
+
+        const payloadStart = oscStart + 2;
+        const bellEnd = input.indexOf('\u0007', payloadStart);
+        const stEnd = input.indexOf('\u001b\\', payloadStart);
+
+        let oscEnd = -1;
+        let terminatorLength = 0;
+        if (bellEnd !== -1 && (stEnd === -1 || bellEnd < stEnd)) {
+            oscEnd = bellEnd;
+            terminatorLength = 1;
+        } else if (stEnd !== -1) {
+            oscEnd = stEnd;
+            terminatorLength = 2;
+        }
+
+        if (oscEnd === -1) {
+            return {
+                text: output,
+                carry: input.slice(oscStart)
+            };
+        }
+
+        const payload = input.slice(payloadStart, oscEnd);
+        if (!shouldStripGhosttyOsc(payload)) {
+            output += input.slice(oscStart, oscEnd + terminatorLength);
+        }
+
+        index = oscEnd + terminatorLength;
+    }
+
+    return { text: output, carry: '' };
+}
+
+async function applyPrimaryRuntimeEngine(data) {
+    const requestedEngine = normalizeTerminalEngine(
+        data?.runtime?.terminalEngine
+    );
+
+    if (!runtimeTerminalEngineInitialized) {
+        runtimeTerminalEngineInitialized = true;
+        if (requestedEngine === TERMINAL_ENGINE_GHOSTTY) {
+            try {
+                await ensureGhosttyEngineReady();
+                runtimeTerminalEngine = TERMINAL_ENGINE_GHOSTTY;
+            } catch (error) {
+                runtimeTerminalEngine = TERMINAL_ENGINE_XTERM;
+                console.warn(
+                    '[Runtime] Ghostty engine unavailable, fallback to xterm.',
+                    error
+                );
+            }
+            return;
+        }
+        runtimeTerminalEngine = TERMINAL_ENGINE_XTERM;
+        return;
+    }
+
+    if (requestedEngine === runtimeTerminalEngine) return;
+
+    if (requestedEngine === TERMINAL_ENGINE_GHOSTTY) {
+        try {
+            await ensureGhosttyEngineReady();
+        } catch (error) {
+            console.warn(
+                '[Runtime] Failed to switch to ghostty engine, keep xterm.',
+                error
+            );
+            return;
+        }
+    }
+
+    runtimeTerminalEngine = requestedEngine;
+    if (runtimeReloadScheduled) return;
+    runtimeReloadScheduled = true;
+    console.info('[Runtime] Terminal engine changed. Reloading app shell.');
+    window.location.reload();
+}
 
 // #region Sidebar Toggle (Mobile)
 const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -977,9 +1142,10 @@ class Session {
         this.layoutState = {
             editorFlex: '2 1 0%'
         };
+        this.ghosttyOscCarry = '';
 
         // Preview Terminal (Always create instance to maintain logic consistency)
-        this.previewTerm = new Terminal({
+        this.previewTerm = new XtermTerminal({
             disableStdin: true,
             cursorBlink: false,
             allowTransparency: true,
@@ -991,13 +1157,14 @@ class Session {
         
         // Only load CanvasAddon on Desktop to save GPU memory
         if (window.innerWidth >= 768) {
-            this.previewTerm.loadAddon(new CanvasAddon());
+            this.previewTerm.loadAddon(new XtermCanvasAddon());
         }
         
         this.wrapperElement = null;
 
-        // Main Terminal
-        this.mainTerm = new Terminal({
+        // Main Terminal (engine selected by main server runtime)
+        this.mainEngine = getRuntimeTerminalEngine();
+        this.mainTerm = createMainTerminal(this.mainEngine, {
             allowTransparency: true,
             convertEol: true,
             cursorBlink: true,
@@ -1007,13 +1174,17 @@ class Session {
             cols: this.cols,
             theme: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642' }
         });
-        this.mainFitAddon = new FitAddon();
-        this.mainLinksAddon = new WebLinksAddon();
-        this.searchAddon = new SearchAddon();
+        this.mainFitAddon = createMainFitAddon(this.mainEngine);
+        this.mainLinksAddon = null;
+        this.searchAddon = null;
         this.mainTerm.loadAddon(this.mainFitAddon);
-        this.mainTerm.loadAddon(this.mainLinksAddon);
-        this.mainTerm.loadAddon(this.searchAddon);
-        this.mainTerm.loadAddon(new CanvasAddon());
+        if (this.mainEngine === TERMINAL_ENGINE_XTERM) {
+            this.mainLinksAddon = new WebLinksAddon();
+            this.searchAddon = new SearchAddon();
+            this.mainTerm.loadAddon(this.mainLinksAddon);
+            this.mainTerm.loadAddon(this.searchAddon);
+            this.mainTerm.loadAddon(new XtermCanvasAddon());
+        }
 
         // Event Listeners
         this.mainTerm.onData(data => {
@@ -1189,10 +1360,12 @@ class Session {
             case 'snapshot':
                 if (this.previewTerm) this.previewTerm.reset();
                 this.mainTerm.reset();
+                this.ghosttyOscCarry = '';
                 this.history = message.data || '';
                 this.isRestoring = true;
                 if (this.previewTerm) this.previewTerm.write(this.history);
-                this.mainTerm.write(this.history, () => { this.isRestoring = false; });
+                const mainSnapshot = this.getMainRenderableChunk(this.history);
+                this.mainTerm.write(mainSnapshot, () => { this.isRestoring = false; });
                 break;
             case 'output':
                 this.history += message.data;
@@ -1209,7 +1382,22 @@ class Session {
 
     writeToTerminals(data) {
         if (this.previewTerm) this.previewTerm.write(data);
-        this.mainTerm.write(data);
+        const mainData = this.getMainRenderableChunk(data);
+        if (!mainData) return;
+        this.mainTerm.write(mainData);
+    }
+
+    getMainRenderableChunk(data) {
+        if (!data) return '';
+        if (this.mainEngine !== TERMINAL_ENGINE_GHOSTTY) {
+            return data;
+        }
+        const parsed = stripUnsupportedGhosttyOscChunk(
+            data,
+            this.ghosttyOscCarry
+        );
+        this.ghosttyOscCarry = parsed.carry;
+        return parsed.text;
     }
 
     send(payload) {
@@ -1588,6 +1776,7 @@ async function syncServer(server) {
         const data = await response.json();
         server.nextSyncAt = 0;
         if (server.isPrimary) {
+            await applyPrimaryRuntimeEngine(data);
             handlePrimaryRuntimeVersion(data);
         }
         server.needsAccessLogin = false;
@@ -3210,6 +3399,24 @@ let searchOptions = {
 };
 
 if (searchBar) {
+    const getActiveSearchAddon = () => {
+        if (!state.activeSessionKey || !state.sessions.has(state.activeSessionKey)) {
+            return null;
+        }
+        const session = state.sessions.get(state.activeSessionKey);
+        const addon = session?.searchAddon;
+        if (!addon || typeof addon.findNext !== 'function') {
+            return null;
+        }
+        return addon;
+    };
+
+    const setSearchUnavailable = () => {
+        searchResults.textContent = 'Search unavailable';
+        searchNext.disabled = true;
+        searchPrev.disabled = true;
+    };
+
     const updateUI = (found) => {
         if (!found) {
             searchResults.textContent = 'No results';
@@ -3223,8 +3430,11 @@ if (searchBar) {
     };
 
     const doSearch = (forward = true) => {
-        if (!state.activeSessionKey || !state.sessions.has(state.activeSessionKey)) return;
-        const addon = state.sessions.get(state.activeSessionKey).searchAddon;
+        const addon = getActiveSearchAddon();
+        if (!addon) {
+            setSearchUnavailable();
+            return;
+        }
         const term = searchInput.value;
         
         let found = false;
@@ -3258,9 +3468,15 @@ if (searchBar) {
             // My updateUI sets 'No results'.
             return;
         }
-        
+
+        const addon = getActiveSearchAddon();
+        if (!addon) {
+            setSearchUnavailable();
+            return;
+        }
+
         // Incremental search
-        const found = state.sessions.get(state.activeSessionKey).searchAddon.findNext(term, {
+        const found = addon.findNext(term, {
             incremental: true, 
             ...searchOptions 
         });

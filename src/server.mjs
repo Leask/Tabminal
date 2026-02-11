@@ -178,7 +178,8 @@ router.all('/api/heartbeat', async (ctx) => {
         sessions: terminalManager.listSessions(),
         system: systemMonitor.getStats(),
         runtime: {
-            bootId: SERVER_BOOT_ID
+            bootId: SERVER_BOOT_ID,
+            terminalEngine: config.terminalEngine
         }
     };
 });

@@ -6,6 +6,7 @@
   "model": "gemini-2.5-flash-preview-09-2025",
   "heartbeat-interval": 10000,
   "history-limit": 1048576,
+  "terminal-engine": "xterm",
   "google-key": "YOUR_GOOGLE_SEARCH_API_KEY",
   "google-cx": "YOUR_GOOGLE_SEARCH_ENGINE_ID",
   "accept-terms": true,
