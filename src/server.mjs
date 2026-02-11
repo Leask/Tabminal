@@ -116,7 +116,13 @@ To start the service, use the '-y' flag or set 'acceptTerms: true' in your confi
 
 // Health check
 router.get('/healthz', (ctx) => {
-    ctx.body = { status: 'ok' };
+    ctx.set('Cache-Control', 'no-store');
+    ctx.body = {
+        status: 'ok',
+        runtime: {
+            bootId: SERVER_BOOT_ID
+        }
+    };
 });
 
 // Serve static files (public) BEFORE auth middleware

@@ -128,18 +128,78 @@
             }
 
             const runtimeStorageKey = 'tabminal_runtime_boot_id';
-            let runtimeBootId = '';
-            try {
-                runtimeBootId = localStorage.getItem(runtimeStorageKey) || '';
-            } catch {
-                runtimeBootId = '';
+            function readStoredBootId() {
+                try {
+                    return localStorage.getItem(runtimeStorageKey) || '';
+                } catch {
+                    return '';
+                }
             }
-            const runtimeAssetKey = runtimeBootId || `cold-${Date.now()}`;
-            window.__tabminalRuntimeAssetKey = runtimeAssetKey;
+
+            function writeStoredBootId(bootId) {
+                if (!bootId) return false;
+                try {
+                    localStorage.setItem(runtimeStorageKey, bootId);
+                    return localStorage.getItem(runtimeStorageKey) === bootId;
+                } catch {
+                    return false;
+                }
+            }
+
+            function normalizeBootId(value) {
+                const bootId = String(value || '').trim();
+                return bootId || '';
+            }
+
+            async function resolveRuntimeAssetKey() {
+                const storedBootId = readStoredBootId();
+                try {
+                    const response = await fetch('/healthz', {
+                        cache: 'no-store',
+                        credentials: 'same-origin'
+                    });
+                    if (response.ok) {
+                        const payload = await response.json();
+                        const runtimeBootId = normalizeBootId(
+                            payload?.runtime?.bootId
+                        );
+                        if (runtimeBootId) {
+                            writeStoredBootId(runtimeBootId);
+                            return runtimeBootId;
+                        }
+                    }
+                } catch {
+                    // Fall back to local key.
+                }
+                return storedBootId || `cold-${Date.now()}`;
+            }
+
+            const provisionalKey = readStoredBootId() || `cold-${Date.now()}`;
+            window.__tabminalRuntimeAssetKey = provisionalKey;
             const link = document.createElement('link');
             link.rel = 'stylesheet';
-            link.href = `./styles.css?v=${encodeURIComponent(runtimeAssetKey)}`;
+            link.href = `./styles.css?v=${encodeURIComponent(provisionalKey)}`;
+            window.__tabminalStyleLinkEl = link;
             document.head.appendChild(link);
+
+            window.__tabminalRuntimeAssetKeyPromise = resolveRuntimeAssetKey()
+                .then((runtimeAssetKey) => {
+                    const resolvedKey = normalizeBootId(runtimeAssetKey);
+                    if (!resolvedKey) {
+                        return provisionalKey;
+                    }
+                    window.__tabminalRuntimeAssetKey = resolvedKey;
+                    if (resolvedKey !== provisionalKey) {
+                        const styleLink = window.__tabminalStyleLinkEl;
+                        if (styleLink) {
+                            styleLink.href = `./styles.css?v=${
+                                encodeURIComponent(resolvedKey)
+                            }`;
+                        }
+                    }
+                    return resolvedKey;
+                })
+                .catch(() => provisionalKey);
         })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
@@ -292,46 +352,41 @@
         </div>
     </div>
     <script>
-        function getRuntimeAssetKey() {
-            const runtimeStorageKey = 'tabminal_runtime_boot_id';
+        (async function() {
+            let runtimeBootId = '';
             try {
-                const bootId = localStorage.getItem(runtimeStorageKey) || '';
-                if (bootId) {
-                    return bootId;
+                const keyPromise = window.__tabminalRuntimeAssetKeyPromise;
+                if (keyPromise && typeof keyPromise.then === 'function') {
+                    runtimeBootId = await keyPromise;
                 }
             } catch {
-                // Fall through to cold key.
+                runtimeBootId = '';
             }
-            if (window.__tabminalRuntimeAssetKey) {
-                return window.__tabminalRuntimeAssetKey;
-            }
-            const coldKey = `cold-${Date.now()}`;
-            window.__tabminalRuntimeAssetKey = coldKey;
-            return coldKey;
-        }
 
-        (function() {
-            const runtimeBootId = getRuntimeAssetKey();
+            if (!runtimeBootId) {
+                runtimeBootId = window.__tabminalRuntimeAssetKey || `cold-${Date.now()}`;
+                window.__tabminalRuntimeAssetKey = runtimeBootId;
+            }
+
             const script = document.createElement('script');
             script.type = 'module';
             script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
             document.body.appendChild(script);
-        })();
 
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                const runtimeBootId = getRuntimeAssetKey();
-                navigator.serviceWorker.register(
-                    `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
-                )
-                    .then(registration => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('ServiceWorker registration failed: ', err);
-                    });
-            });
-        }
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register(
+                        `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
+                    )
+                        .then(registration => {
+                            console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        })
+                        .catch(err => {
+                            console.log('ServiceWorker registration failed: ', err);
+                        });
+                });
+            }
+        })();
     </script>
 </body>
 
