@@ -552,7 +552,7 @@ export class TerminalSession {
             // Don't trigger on simple interruptions (SIGINT=130) or common non-errors?
             // 130 = Ctrl+C. Usually user intention.
             if (exitCode !== 130) {
-                this._handleAiCommand(PROMPT_PREFIX + 'The previous command failed. Help me fix it.', { isAutoFix: true });
+                this._handleAiCommand(PROMPT_PREFIX + 'The previous command failed. Help me fix it. Focus on the recent commands and provide concise, clear answers. Avoid long explanations unless explicitly requested by the user.', { isAutoFix: true });
             }
         }
     }
