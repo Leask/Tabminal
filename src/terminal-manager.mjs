@@ -103,7 +103,8 @@ if [[ -n "$PROMPT_COMMAND" ]]; then
 else
   PROMPT_COMMAND="_tabminal_bash_postexec; _tabminal_apply_prompt_marker"
 fi
-export PROMPT_COMMAND
+# Keep PROMPT_COMMAND shell-local. Exporting it leaks Tabminal-only hook names
+# into child shells started by tmux, which do not have these functions defined.
 `;
                 fs.writeFileSync(initFilePath, bashScript);
                 args = ['--rcfile', initFilePath, '-i'];
