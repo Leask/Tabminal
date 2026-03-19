@@ -533,7 +533,7 @@ class EditorManager {
                 const filePath = this.currentSession.editorState.activeFilePath;
                 if (!filePath) return;
                 
-                const pending = getPendingSession(this.currentSession.id);
+                const pending = getPendingSession(this.currentSession.key);
                 pending.fileWrites.set(filePath, this.editor.getValue());
             });
             
