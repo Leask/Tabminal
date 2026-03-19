@@ -1,6 +1,6 @@
 {
   "name": "tabminal",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "A modern, persistent web terminal with multi-tab support and real-time system monitoring.",
   "type": "module",
   "bin": {
