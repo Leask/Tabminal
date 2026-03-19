@@ -33,16 +33,16 @@
   },
   "dependencies": {
     "@fontsource/monaspace-neon": "^5.2.5",
-    "@koa/router": "^15.3.1",
+    "@koa/router": "^15.4.0",
     "@mozilla/readability": "^0.6.0",
-    "jsdom": "^28.1.0",
+    "jsdom": "^29.0.0",
     "koa": "^3.1.2",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.1.0",
-    "openai": "^6.27.0",
-    "utilitas": "^2001.1.132",
+    "openai": "^6.32.0",
+    "utilitas": "^2001.1.135",
     "ws": "^8.19.0"
   },
   "repository": {
