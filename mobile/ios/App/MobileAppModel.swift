@@ -428,6 +428,15 @@ final class MobileAppModel {
                 _ = ensureWorkspace(for: session, on: host.endpoint)
                 activeHostID = hostID
                 activeSessionKey = session.key
+            } catch let TabminalClientError.accessLoginRequired(_) {
+                updateHost(hostID) { current in
+                    if current.isPrimary {
+                        current.connectionState = .error
+                    } else {
+                        current.connectionState = .needsAuth
+                    }
+                    current.lastError = "Cloudflare Login required."
+                }
             } catch {
                 updateHost(hostID) { current in
                     current.connectionState = .error
@@ -878,6 +887,15 @@ final class MobileAppModel {
             if activeHostID == hostID || activeSessionKey == nil {
                 resolveSelection(for: hostID)
             }
+        } catch let TabminalClientError.accessLoginRequired(_) {
+            updateHost(hostID) { current in
+                if current.isPrimary {
+                    current.connectionState = .error
+                } else {
+                    current.connectionState = .needsAuth
+                }
+                current.lastError = "Cloudflare Login required."
+            }
         } catch let TabminalClientError.invalidStatus(code, _) {
             if code == 401 || code == 403 {
                 if host.isPrimary {
@@ -1085,6 +1103,10 @@ final class MobileAppModel {
     static func displayMessage(for error: Error) -> String {
         if let error = error as? ConnectionError {
             return error.localizedDescription
+        }
+
+        if case .accessLoginRequired = error as? TabminalClientError {
+            return "Cloudflare Login required."
         }
 
         if case let TabminalClientError.invalidStatus(code, body) = error {

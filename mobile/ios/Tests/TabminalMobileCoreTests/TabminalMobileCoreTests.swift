@@ -116,3 +116,71 @@ func heartbeatDecodesEmptyEditorStateFromBackend() throws {
     #expect(response.sessions[0].editorState?.root == "")
     #expect(response.sessions[0].editorState?.openFiles == [])
 }
+
+@Test
+func accessLoginResponseDetectionMatchesSubHostHtmlRedirects() throws {
+    let endpoint = TabminalServerEndpoint(
+        id: "elm",
+        baseURL: try #require(
+            URL(string: "https://tabminal-elm.example.com")
+        )
+    )
+    let requestURL = try #require(
+        URL(string: "https://tabminal-elm.example.com/api/heartbeat")
+    )
+    let responseURL = try #require(
+        URL(string: "https://tabminal-elm.example.com/cdn-cgi/access/login")
+    )
+    let request = URLRequest(url: requestURL)
+    let response = try #require(
+        HTTPURLResponse(
+            url: responseURL,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "text/html"]
+        )
+    )
+    let body = Data("<html>Cloudflare Access sign in</html>".utf8)
+
+    #expect(
+        TabminalAPIClient.isLikelyAccessLoginResponse(
+            request: request,
+            response: response,
+            body: body,
+            server: endpoint
+        )
+    )
+}
+
+@Test
+func accessLoginResponseDetectionSkipsPrimaryHost() throws {
+    let endpoint = TabminalServerEndpoint(
+        id: "main",
+        baseURL: try #require(
+            URL(string: "https://tabminal.example.com")
+        ),
+        isPrimary: true
+    )
+    let requestURL = try #require(
+        URL(string: "https://tabminal.example.com/api/heartbeat")
+    )
+    let request = URLRequest(url: requestURL)
+    let response = try #require(
+        HTTPURLResponse(
+            url: requestURL,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "text/html"]
+        )
+    )
+    let body = Data("<html>Cloudflare Access sign in</html>".utf8)
+
+    #expect(
+        !TabminalAPIClient.isLikelyAccessLoginResponse(
+            request: request,
+            response: response,
+            body: body,
+            server: endpoint
+        )
+    )
+}

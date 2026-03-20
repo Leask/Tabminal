@@ -3,6 +3,7 @@ import Foundation
 public enum TabminalClientError: Error, Equatable, Sendable {
     case invalidResponse
     case invalidStatus(Int, String)
+    case accessLoginRequired(String?)
     case encodingFailure
 }
 
@@ -33,7 +34,11 @@ public actor TabminalAPIClient {
             method: "POST",
             body: TabminalHeartbeatRequest(sessions: updates)
         )
-        return try await send(request, decodeAs: TabminalHeartbeatResponse.self)
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalHeartbeatResponse.self
+        )
     }
 
     public func createSession(
@@ -47,6 +52,7 @@ public actor TabminalAPIClient {
         )
         return try await send(
             request,
+            server: server,
             decodeAs: TabminalCreateSessionResponse.self
         )
     }
@@ -61,7 +67,7 @@ public actor TabminalAPIClient {
             method: "DELETE",
             body: Optional<String>.none
         )
-        _ = try await send(request)
+        _ = try await send(request, server: server)
     }
 
     public func listDirectory(
@@ -76,7 +82,11 @@ public actor TabminalAPIClient {
         )
         request.url = request.url?
             .appending(queryItems: [URLQueryItem(name: "path", value: path)])
-        return try await send(request, decodeAs: [TabminalFileEntry].self)
+        return try await send(
+            request,
+            server: server,
+            decodeAs: [TabminalFileEntry].self
+        )
     }
 
     public func readFile(
@@ -91,7 +101,11 @@ public actor TabminalAPIClient {
         )
         request.url = request.url?
             .appending(queryItems: [URLQueryItem(name: "path", value: path)])
-        return try await send(request, decodeAs: TabminalReadFileResponse.self)
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalReadFileResponse.self
+        )
     }
 
     public func writeFile(
@@ -110,7 +124,7 @@ public actor TabminalAPIClient {
             method: "POST",
             body: RequestBody(path: path, content: content)
         )
-        _ = try await send(request)
+        _ = try await send(request, server: server)
     }
 
     public func loadCluster(
@@ -122,7 +136,11 @@ public actor TabminalAPIClient {
             method: "GET",
             body: Optional<String>.none
         )
-        return try await send(request, decodeAs: TabminalClusterPayload.self)
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalClusterPayload.self
+        )
     }
 
     public func saveCluster(
@@ -135,7 +153,11 @@ public actor TabminalAPIClient {
             method: "PUT",
             body: payload
         )
-        return try await send(request, decodeAs: TabminalClusterPayload.self)
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalClusterPayload.self
+        )
     }
 
     nonisolated public func makeWebSocketRequest(
@@ -157,6 +179,7 @@ public actor TabminalAPIClient {
     ) throws -> URLRequest {
         var request = URLRequest(url: server.resolve(path))
         request.httpMethod = method
+        request.httpShouldHandleCookies = true
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if !server.token.isEmpty {
             request.setValue(server.token, forHTTPHeaderField: "Authorization")
@@ -178,10 +201,24 @@ public actor TabminalAPIClient {
     }
 
     @discardableResult
-    private func send(_ request: URLRequest) async throws -> HTTPURLResponse {
+    private func send(
+        _ request: URLRequest,
+        server: TabminalServerEndpoint
+    ) async throws -> HTTPURLResponse {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TabminalClientError.invalidResponse
+        }
+
+        if Self.isLikelyAccessLoginResponse(
+            request: request,
+            response: httpResponse,
+            body: data,
+            server: server
+        ) {
+            throw TabminalClientError.accessLoginRequired(
+                httpResponse.url?.absoluteString
+            )
         }
 
         guard (200 ... 299).contains(httpResponse.statusCode) else {
@@ -197,11 +234,23 @@ public actor TabminalAPIClient {
 
     private func send<T: Decodable>(
         _ request: URLRequest,
+        server: TabminalServerEndpoint,
         decodeAs type: T.Type
     ) async throws -> T {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TabminalClientError.invalidResponse
+        }
+
+        if Self.isLikelyAccessLoginResponse(
+            request: request,
+            response: httpResponse,
+            body: data,
+            server: server
+        ) {
+            throw TabminalClientError.accessLoginRequired(
+                httpResponse.url?.absoluteString
+            )
         }
 
         guard (200 ... 299).contains(httpResponse.statusCode) else {
@@ -213,6 +262,53 @@ public actor TabminalAPIClient {
         }
 
         return try decoder.decode(T.self, from: data)
+    }
+}
+
+extension TabminalAPIClient {
+    static func isLikelyAccessLoginResponse(
+        request: URLRequest,
+        response: HTTPURLResponse,
+        body: Data,
+        server: TabminalServerEndpoint
+    ) -> Bool {
+        guard !server.isPrimary else {
+            return false
+        }
+
+        if (300 ... 399).contains(response.statusCode) {
+            return true
+        }
+
+        let contentType = response.value(
+            forHTTPHeaderField: "Content-Type"
+        )?.lowercased() ?? ""
+        let bodyPrefix = String(data: body.prefix(512), encoding: .utf8)?
+            .lowercased() ?? ""
+
+        let looksHTML = contentType.contains("text/html")
+            || bodyPrefix.contains("<html")
+            || bodyPrefix.contains("<!doctype html")
+        guard looksHTML else {
+            return false
+        }
+
+        guard let requestURL = request.url,
+              let finalURL = response.url else {
+            return true
+        }
+
+        if requestURL.host != finalURL.host {
+            return true
+        }
+
+        if !finalURL.path.hasPrefix(requestURL.path) {
+            return true
+        }
+
+        return bodyPrefix.contains("cloudflare")
+            || bodyPrefix.contains("access")
+            || bodyPrefix.contains("sign in")
     }
 }
 
