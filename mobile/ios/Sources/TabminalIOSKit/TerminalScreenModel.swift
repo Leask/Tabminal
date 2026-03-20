@@ -16,7 +16,7 @@ public final class TerminalScreenModel {
     public private(set) var connectionState: ConnectionState = .idle
     public private(set) var terminalTitle: String = "Terminal"
     public private(set) var workingDirectory: String = ""
-    public private(set) var latestOutputChunk: String = ""
+    public private(set) var terminalTranscript: String = ""
 
     public let server: TabminalServerEndpoint
     public let sessionID: String
@@ -24,6 +24,7 @@ public final class TerminalScreenModel {
     private let apiClient: TabminalAPIClient
     private let socketChannel: TabminalWebSocketChannel
     private var receiveTask: Task<Void, Never>?
+    private var terminalBuffer = TerminalPlainTextBuffer()
 
     public init(
         server: TabminalServerEndpoint,
@@ -79,6 +80,15 @@ public final class TerminalScreenModel {
         }
     }
 
+    public func sendLine(_ line: String) {
+        sendInput(line)
+        sendInput("\r")
+    }
+
+    public func sendControl(_ data: String) {
+        sendInput(data)
+    }
+
     public func resize(cols: Int, rows: Int) {
         let payload = TabminalResizePayload(cols: cols, rows: rows)
         Task {
@@ -108,10 +118,12 @@ public final class TerminalScreenModel {
     private func apply(_ message: TabminalInboundMessage) {
         switch message {
         case .snapshot(let text):
-            latestOutputChunk = text
+            terminalBuffer.replace(with: text)
+            terminalTranscript = terminalBuffer.text
             connectionState = .connected
         case .output(let text):
-            latestOutputChunk = text
+            terminalBuffer.append(text)
+            terminalTranscript = terminalBuffer.text
             connectionState = .connected
         case .meta(let delta):
             if let title = delta.title, !title.isEmpty {
@@ -124,6 +136,8 @@ public final class TerminalScreenModel {
             switch delta.status {
             case "terminated":
                 connectionState = .terminated
+            case "ready":
+                connectionState = .connected
             default:
                 connectionState = .connected
             }

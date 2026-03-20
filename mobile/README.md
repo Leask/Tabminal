@@ -122,8 +122,10 @@ This branch starts Phase 1 and the first iOS slice:
 - A native iOS-facing shell module is scaffolded.
 - A minimal iOS app host exists and builds against the local Swift package.
 - A CLI launch path exists via `mobile/ios/run-sim.sh`.
-- `libghostty` is represented as a dedicated bridge surface, ready for the
-  real renderer integration step.
+- The terminal area now has a working plain-text fallback:
+  session creation, websocket connect, snapshot/output display, and input send.
+- `libghostty` is still represented as a dedicated bridge surface boundary and
+  is the next renderer integration step.
 
 ## Current iOS CLI Flow
 

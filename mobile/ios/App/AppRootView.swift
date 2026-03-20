@@ -12,7 +12,10 @@ struct AppRootView: View {
                 if let route = connectionModel.activeRoute {
                     TerminalScreenView(
                         server: route.server,
-                        sessionID: route.sessionID
+                        sessionID: route.sessionID,
+                        onDisconnect: {
+                            connectionModel.disconnect()
+                        }
                     )
                 } else {
                     ServerConnectionView(model: connectionModel)

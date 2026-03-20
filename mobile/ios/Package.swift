@@ -29,6 +29,10 @@ let package = Package(
         .testTarget(
             name: "TabminalMobileCoreTests",
             dependencies: ["TabminalMobileCore"]
+        ),
+        .testTarget(
+            name: "TabminalIOSKitTests",
+            dependencies: ["TabminalIOSKit"]
         )
     ]
 )

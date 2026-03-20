@@ -64,6 +64,22 @@ The script will:
 4. Build the app into `mobile/ios/build`
 5. Install and launch `com.leask.tabminal.mobile`
 
+## Current Runtime Behavior
+
+What works now:
+
+- Connect to an existing Tabminal server
+- Create a session
+- Open the websocket for that session
+- Render snapshot and output into a plain-text terminal fallback
+- Send input, return, tab, escape, and Ctrl-C
+
+What is still pending:
+
+- Replace the plain-text fallback with a real `libghostty` renderer host
+- Mobile-first session list, file flows, and cluster restore UX
+- Rich terminal behaviors such as proper native selection and full VT rendering
+
 ## Near-Term Next Steps
 
 1. Vendor or wrap `libghostty` for Apple platforms.
