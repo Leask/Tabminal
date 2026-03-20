@@ -25,8 +25,9 @@ public struct TerminalScreenView: View {
     public var body: some View {
         GeometryReader { proxy in
             VStack(spacing: 12) {
-                GhosttyTerminalSurface(
-                    transcript: model.terminalTranscript
+                TerminalSurfaceHost(
+                    transcript: model.terminalTranscript,
+                    renderer: .current
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {

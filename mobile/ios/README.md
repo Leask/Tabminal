@@ -68,25 +68,29 @@ The script will:
 
 What works now:
 
-- Connect to an existing Tabminal server
-- Create a session
-- Open the websocket for that session
+- Connect to an existing Tabminal main host
+- Restore the saved main-host login from Keychain on app launch
+- Restore the backend cluster registry and saved sub-hosts
+- Create, close, and switch sessions across multiple hosts
+- Open the websocket for the active session with reconnect behavior
 - Render snapshot and output into a plain-text terminal fallback
-- Send input, return, tab, escape, and Ctrl-C
+- Send input, return, tab, escape, Ctrl-C, and arrow keys
+- Browse files, open files, edit them, and save them back to the server
+- Open sub-host browser login flows for Access-style auth
 
 What is still pending:
 
 - Replace the plain-text fallback with a real `libghostty` renderer host
-- Mobile-first session list, file flows, and cluster restore UX
 - Rich terminal behaviors such as proper native selection and full VT rendering
+- iPad-focused split-pane workspace and more polished mobile shell ergonomics
 
 ## Near-Term Next Steps
 
-1. Vendor or wrap `libghostty` for Apple platforms.
-2. Replace the placeholder terminal surface with a real native renderer host.
-3. Connect websocket output directly into the renderer bridge.
-4. Add mobile-first server list and session navigation.
-5. Add cluster restore, reconnect, and file flows.
+1. Vendor or wrap a Ghostty fork for Apple platforms.
+2. Expose a remote-output bridge into Ghostty term state.
+3. Replace the placeholder terminal surface with a real native renderer host.
+4. Add richer terminal UX such as selection, search, and better copy/paste.
+5. Polish iPad and large-screen workspace layouts.
 
 ## libghostty Integration Boundary
 

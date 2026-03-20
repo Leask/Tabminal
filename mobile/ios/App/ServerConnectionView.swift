@@ -132,7 +132,9 @@ struct ServerConnectionView: View {
 
                 ConnectionField(
                     label: "Password",
-                    hint: "The app sends the same SHA-256 hash used by the web client."
+                    hint: model.hasStoredMainLogin
+                        ? "Optional. Leave empty to reuse the saved main-host login."
+                        : "The app sends the same SHA-256 hash used by the web client."
                 ) {
                     SecureField("Password", text: $model.mainPassword)
                         .textContentType(.password)
@@ -174,7 +176,9 @@ struct ServerConnectionView: View {
                     Text(
                         model.isAuthenticating
                             ? "Connecting..."
-                            : "Open Workspace"
+                            : model.hasStoredMainLogin
+                                ? "Open Workspace"
+                                : "Login and Open Workspace"
                     )
                     .font(.headline.weight(.semibold))
                 }
@@ -186,10 +190,8 @@ struct ServerConnectionView: View {
                         .fill(Color(red: 0.83, green: 0.90, blue: 0.98))
                 )
             }
-            .disabled(model.isAuthenticating || model.mainPassword.isEmpty)
-            .opacity(
-                model.isAuthenticating || model.mainPassword.isEmpty ? 0.55 : 1
-            )
+            .disabled(!model.canAttemptLogin)
+            .opacity(model.canAttemptLogin ? 1 : 0.55)
         }
         .padding(22)
         .background(cardBackground)
@@ -206,6 +208,7 @@ struct ServerConnectionView: View {
                 featureRow("Backend cluster registry restore")
                 featureRow("Host switching and session tabs")
                 featureRow("Live terminal stream with text fallback renderer")
+                featureRow("Main-host login restore via Keychain")
             }
         }
         .padding(20)

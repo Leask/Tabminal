@@ -112,11 +112,15 @@ final class MobileAppModel {
     @ObservationIgnored
     private let defaults = UserDefaults.standard
     @ObservationIgnored
+    private let credentialStore = MainHostCredentialStore()
+    @ObservationIgnored
     private var heartbeatTask: Task<Void, Never>?
     @ObservationIgnored
     private var mainToken: String = ""
     @ObservationIgnored
     private var workspaces: [String: SessionWorkspaceModel] = [:]
+    @ObservationIgnored
+    private var didAttemptRestore: Bool = false
 
     init() {
         mainServerURL = defaults.string(forKey: Self.defaultsMainURLKey)
@@ -149,6 +153,23 @@ final class MobileAppModel {
         return workspaces[session.key]
     }
 
+    var hasStoredMainLogin: Bool {
+        let token = credentialStore.loadToken() ?? ""
+        return !token.isEmpty
+    }
+
+    var canAttemptLogin: Bool {
+        if isAuthenticating {
+            return false
+        }
+
+        if !mainPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+
+        return hasStoredMainLogin
+    }
+
     func login() {
         guard !isAuthenticating else {
             return
@@ -159,15 +180,20 @@ final class MobileAppModel {
             return
         }
 
-        guard !mainPassword.isEmpty else {
+        let trimmedPassword = mainPassword.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let token = !trimmedPassword.isEmpty
+            ? TabminalPasswordHasher.sha256Hex(trimmedPassword)
+            : credentialStore.loadToken() ?? ""
+
+        guard !token.isEmpty else {
             loginErrorMessage = "Password is required."
             return
         }
 
         loginErrorMessage = ""
         isAuthenticating = true
-
-        let token = TabminalPasswordHasher.sha256Hex(mainPassword)
         let mainEndpoint = TabminalServerEndpoint(
             id: "main",
             baseURL: parsedURL,
@@ -193,6 +219,7 @@ final class MobileAppModel {
                     mainEndpoint.host,
                     forKey: Self.defaultsMainHostKey
                 )
+                credentialStore.saveToken(token)
                 phase = .ready
             } catch {
                 phase = .login
@@ -201,8 +228,11 @@ final class MobileAppModel {
         }
     }
 
-    func logout() {
+    func logout(clearCredentials: Bool = true) {
         stopHeartbeat()
+        if clearCredentials {
+            credentialStore.clearToken()
+        }
         isPresentingWorkspace = false
         isPresentingHostEditor = false
         hosts = []
@@ -219,6 +249,54 @@ final class MobileAppModel {
             workspace.setPresented(false)
         }
         workspaces.removeAll()
+    }
+
+    func restoreMainHostSessionIfNeeded() {
+        guard !didAttemptRestore else {
+            return
+        }
+        didAttemptRestore = true
+
+        guard let parsedURL = URL(string: mainServerURL),
+              let token = credentialStore.loadToken(),
+              !token.isEmpty
+        else {
+            return
+        }
+
+        let mainEndpoint = TabminalServerEndpoint(
+            id: "main",
+            baseURL: parsedURL,
+            host: mainHostName,
+            token: token,
+            isPrimary: true
+        )
+
+        phase = .loading
+        loginErrorMessage = ""
+        isAuthenticating = true
+
+        Task {
+            defer {
+                isAuthenticating = false
+            }
+
+            do {
+                mainToken = token
+                try await bootstrap(mainEndpoint: mainEndpoint)
+                phase = .ready
+            } catch let TabminalClientError.invalidStatus(code, _)
+                where code == 401 || code == 403 {
+                credentialStore.clearToken()
+                mainToken = ""
+                phase = .login
+                loginErrorMessage = "Saved login expired."
+            } catch {
+                mainToken = token
+                phase = .login
+                loginErrorMessage = Self.displayMessage(for: error)
+            }
+        }
     }
 
     func selectHost(_ hostID: String) {
@@ -502,7 +580,7 @@ final class MobileAppModel {
 
         sortHosts()
         activeHostID = "main"
-        try await syncAllHosts(ensurePrimarySession: true)
+        await syncAllHosts(ensurePrimarySession: true)
         startHeartbeat()
     }
 
@@ -696,8 +774,9 @@ final class MobileAppModel {
         } catch let TabminalClientError.invalidStatus(code, _) {
             if code == 401 || code == 403 {
                 if host.isPrimary {
+                    credentialStore.clearToken()
+                    logout(clearCredentials: false)
                     loginErrorMessage = "Main host authentication expired."
-                    logout()
                     return
                 }
 
