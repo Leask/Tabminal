@@ -126,3 +126,12 @@ dist
 
 # local helper scripts
 reploy.sh
+
+# mobile
+mobile/ios/.build/
+mobile/ios/.swiftpm/
+mobile/ios/DerivedData/
+mobile/ios/build/
+mobile/ios/TabminalMobileApp.xcodeproj/
+*.xcuserstate
+mobile/ios/.DS_Store
