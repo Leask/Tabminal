@@ -29,6 +29,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleDarkContent
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         SWIFT_VERSION: "6.0"
         SUPPORTS_MACCATALYST: NO
         CODE_SIGNING_ALLOWED: NO
@@ -36,4 +37,21 @@ targets:
         DEVELOPMENT_ASSET_PATHS: "\"\""
         TARGETED_DEVICE_FAMILY: "1,2"
     scheme:
-      testTargets: []
+      testTargets:
+        - TabminalMobileAppUITests
+  TabminalMobileAppUITests:
+    type: bundle.ui-testing
+    supportedDestinations:
+      - iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TabminalMobileApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.leask.tabminal.mobile.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TEST_TARGET_NAME: TabminalMobileApp

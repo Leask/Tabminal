@@ -94,6 +94,7 @@ public struct GhosttyTerminalSurface: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.001))
+        .accessibilityIdentifier("terminal.surface")
     }
 
     private var displayTranscript: String {

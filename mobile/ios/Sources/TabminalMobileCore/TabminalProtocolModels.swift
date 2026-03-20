@@ -206,10 +206,24 @@ public struct TabminalRuntime: Codable, Hashable, Sendable {
 }
 
 public struct TabminalSystemSnapshot: Codable, Hashable, Sendable {
-    public let cpu: Double?
-    public let memory: Double?
-    public let totalMemory: Double?
-    public let freeMemory: Double?
+    public struct CPU: Codable, Hashable, Sendable {
+        public let model: String?
+        public let count: Int?
+        public let speed: String?
+        public let usagePercent: String?
+    }
+
+    public struct Memory: Codable, Hashable, Sendable {
+        public let total: Double?
+        public let free: Double?
+        public let used: Double?
+    }
+
+    public let hostname: String?
+    public let osName: String?
+    public let ip: String?
+    public let cpu: CPU?
+    public let memory: Memory?
     public let uptime: Double?
     public let processUptime: Double?
 }

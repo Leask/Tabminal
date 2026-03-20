@@ -98,6 +98,7 @@ struct HostListSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .accessibilityIdentifier("hosts.sheet")
     }
 
     private func color(

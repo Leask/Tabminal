@@ -39,6 +39,7 @@ public struct TerminalScreenView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .accessibilityIdentifier("terminal.view")
         .safeAreaInset(edge: .bottom) {
             composerDock
         }
@@ -92,6 +93,7 @@ public struct TerminalScreenView: View {
             .autocorrectionDisabled(true)
             .textInputAutocapitalization(.never)
 #endif
+            .accessibilityIdentifier("terminal.input")
 
             Button(action: submitInput) {
                 Image(systemName: "arrow.up")
@@ -113,6 +115,7 @@ public struct TerminalScreenView: View {
                 model.connectionState == .connecting
                     || model.connectionState == .reconnecting ? 0.45 : 1
             )
+            .accessibilityIdentifier("terminal.send")
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
@@ -169,6 +172,9 @@ public struct TerminalScreenView: View {
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(.regularMaterial)
+            )
+            .accessibilityIdentifier(
+                "terminal.key.\(title.lowercased())"
             )
     }
 

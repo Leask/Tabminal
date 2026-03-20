@@ -30,6 +30,7 @@ struct MobileShellView: View {
             .padding(.top, 8)
             .padding(.bottom, 0)
         }
+        .accessibilityIdentifier("shell.view")
         .sheet(isPresented: $isPresentingHostList) {
             HostListSheetView(model: model)
                 .presentationDetents([.medium, .large])
@@ -102,14 +103,17 @@ struct MobileShellView: View {
             iconButton("arrow.clockwise") {
                 model.triggerManualSync()
             }
+            .accessibilityIdentifier("shell.refresh")
 
             iconButton("server.rack") {
                 isPresentingHostList = true
             }
+            .accessibilityIdentifier("shell.hosts")
 
             iconButton("rectangle.portrait.and.arrow.right") {
                 model.logout()
             }
+            .accessibilityIdentifier("shell.logout")
         }
         .padding(.horizontal, 2)
     }
@@ -162,12 +166,14 @@ struct MobileShellView: View {
             actionPill("Tabs", icon: "square.on.square") {
                 isPresentingSessionList = true
             }
+            .accessibilityIdentifier("shell.tabs")
 
             actionPill("Files", icon: "folder") {
                 model.openWorkspace()
             }
             .disabled(model.activeSession == nil)
             .opacity(model.activeSession == nil ? 0.48 : 1)
+            .accessibilityIdentifier("shell.files")
 
             Spacer(minLength: 0)
 
@@ -176,13 +182,16 @@ struct MobileShellView: View {
                 actionPill("Browser Login", icon: "safari") {
                     openURL(host.endpoint.browserLoginURL)
                 }
+                .accessibilityIdentifier("shell.browserLogin")
                 actionPill("Reconnect", icon: "key") {
                     model.beginReconnectHost(host.id)
                 }
+                .accessibilityIdentifier("shell.reconnect")
             } else if let host = model.activeHost {
                 actionPill("New Tab", icon: "plus") {
                     model.createSession(on: host.id)
                 }
+                .accessibilityIdentifier("shell.newTab")
             }
         }
     }
@@ -207,18 +216,22 @@ struct MobileShellView: View {
             }
             .disabled(model.activeSession == nil)
             .opacity(model.activeSession == nil ? 0.48 : 1)
+            .accessibilityIdentifier("shell.files")
 
             iconButton("arrow.clockwise") {
                 model.triggerManualSync()
             }
+            .accessibilityIdentifier("shell.refresh")
 
             iconButton("plus") {
                 model.beginAddHost()
             }
+            .accessibilityIdentifier("shell.addHost")
 
             iconButton("rectangle.portrait.and.arrow.right") {
                 model.logout()
             }
+            .accessibilityIdentifier("shell.logout")
         }
         .padding(.horizontal, 4)
     }
@@ -393,6 +406,7 @@ struct MobileShellView: View {
         .padding(14)
         .frame(width: 180, alignment: .leading)
         .background(panelBackground(selected: isSelected))
+        .accessibilityIdentifier("host.card.\(host.id)")
         .onTapGesture {
             model.selectHost(host.id)
         }
@@ -417,6 +431,7 @@ struct MobileShellView: View {
         .padding(.vertical, 10)
         .frame(width: 150, alignment: .leading)
         .background(panelBackground(selected: isSelected))
+        .accessibilityIdentifier("session.card.\(session.key)")
         .onTapGesture {
             model.selectSession(session)
         }

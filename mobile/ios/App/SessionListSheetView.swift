@@ -111,6 +111,7 @@ struct SessionListSheetView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .accessibilityIdentifier("sessions.sheet")
     }
 
     private func hostSummary(

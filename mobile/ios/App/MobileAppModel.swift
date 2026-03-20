@@ -114,6 +114,8 @@ final class MobileAppModel {
     @ObservationIgnored
     private let credentialStore = MainHostCredentialStore()
     @ObservationIgnored
+    private let debugLaunchOptions = MobileDebugLaunchOptions.current
+    @ObservationIgnored
     private var heartbeatTask: Task<Void, Never>?
     @ObservationIgnored
     private var mainToken: String = ""
@@ -121,11 +123,23 @@ final class MobileAppModel {
     private var workspaces: [String: SessionWorkspaceModel] = [:]
     @ObservationIgnored
     private var didAttemptRestore: Bool = false
+    @ObservationIgnored
+    private var didRunStartupFlow: Bool = false
 
     init() {
         mainServerURL = defaults.string(forKey: Self.defaultsMainURLKey)
             ?? "http://127.0.0.1:9846"
         mainHostName = defaults.string(forKey: Self.defaultsMainHostKey) ?? ""
+
+        if let debugURL = debugLaunchOptions.mainURL {
+            mainServerURL = debugURL
+        }
+        if let debugHost = debugLaunchOptions.hostAlias {
+            mainHostName = debugHost
+        }
+        if let debugPassword = debugLaunchOptions.password {
+            mainPassword = debugPassword
+        }
     }
 
     var activeHost: HostRecord? {
@@ -297,6 +311,20 @@ final class MobileAppModel {
                 loginErrorMessage = Self.displayMessage(for: error)
             }
         }
+    }
+
+    func runStartupFlowIfNeeded() {
+        guard !didRunStartupFlow else {
+            return
+        }
+        didRunStartupFlow = true
+
+        if debugLaunchOptions.autoLogin {
+            login()
+            return
+        }
+
+        restoreMainHostSessionIfNeeded()
     }
 
     func selectHost(_ hostID: String) {

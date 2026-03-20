@@ -19,7 +19,7 @@ struct AppRootView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.phase)
         .task {
-            model.restoreMainHostSessionIfNeeded()
+            model.runStartupFlowIfNeeded()
         }
         .sheet(isPresented: $model.isPresentingHostEditor) {
             HostEditorView(model: model)

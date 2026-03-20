@@ -21,6 +21,7 @@ struct ServerConnectionView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
         }
+        .accessibilityIdentifier("login.view")
     }
 
     private var connectionBackground: some View {
@@ -119,6 +120,7 @@ struct ServerConnectionView: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .textContentType(.URL)
+                        .accessibilityIdentifier("login.serverURL")
                 }
 
                 ConnectionField(
@@ -128,6 +130,7 @@ struct ServerConnectionView: View {
                     TextField("Flora", text: $model.mainHostName)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("login.hostAlias")
                 }
 
                 ConnectionField(
@@ -138,6 +141,7 @@ struct ServerConnectionView: View {
                 ) {
                     SecureField("Password", text: $model.mainPassword)
                         .textContentType(.password)
+                        .accessibilityIdentifier("login.password")
                 }
             }
 
@@ -159,6 +163,7 @@ struct ServerConnectionView: View {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .strokeBorder(Color.orange.opacity(0.16), lineWidth: 1)
                 }
+                .accessibilityIdentifier("login.error")
             }
 
             Button {
@@ -192,6 +197,7 @@ struct ServerConnectionView: View {
             }
             .disabled(!model.canAttemptLogin)
             .opacity(model.canAttemptLogin ? 1 : 0.55)
+            .accessibilityIdentifier("login.submit")
         }
         .padding(22)
         .background(cardBackground)

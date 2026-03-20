@@ -50,6 +50,7 @@ struct WorkspaceBrowserView: View {
             .navigationBarHidden(true)
         }
         .preferredColorScheme(.dark)
+        .accessibilityIdentifier("workspace.view")
         .task {
             if workspace.entries.isEmpty {
                 await workspace.refreshDirectory()
@@ -84,6 +85,7 @@ struct WorkspaceBrowserView: View {
                     onClose()
                 }
                 .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("workspace.done")
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -102,16 +104,19 @@ struct WorkspaceBrowserView: View {
                         await workspace.loadDirectory(path: workspace.rootPath)
                     }
                 }
+                .accessibilityIdentifier("workspace.root")
                 toolbarButton("Up", icon: "arrow.up") {
                     Task {
                         await workspace.navigateUp()
                     }
                 }
+                .accessibilityIdentifier("workspace.up")
                 toolbarButton("Refresh", icon: "arrow.clockwise") {
                     Task {
                         await workspace.refreshDirectory()
                     }
                 }
+                .accessibilityIdentifier("workspace.refresh")
 
                 Spacer(minLength: 0)
 
@@ -124,6 +129,7 @@ struct WorkspaceBrowserView: View {
                             await workspace.saveActiveFile()
                         }
                     }
+                    .accessibilityIdentifier("workspace.save")
                 }
             }
         }
@@ -138,6 +144,7 @@ struct WorkspaceBrowserView: View {
             }
         }
         .pickerStyle(.segmented)
+        .accessibilityIdentifier("workspace.panePicker")
         .onChange(of: workspace.activeDocument?.path) { _, activePath in
             if activePath != nil {
                 pane = .editor
