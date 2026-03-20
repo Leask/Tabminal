@@ -24,6 +24,7 @@ public final class TerminalScreenModel {
     private let apiClient: TabminalAPIClient
     private let socketChannel: TabminalWebSocketChannel
     private var receiveTask: Task<Void, Never>?
+    private var wantsConnection: Bool = false
     private var terminalBuffer = TerminalPlainTextBuffer()
 
     public init(
@@ -39,27 +40,23 @@ public final class TerminalScreenModel {
     }
 
     public func connect() {
-        guard connectionState == .idle || connectionState == .reconnecting else {
+        guard !wantsConnection else {
             return
         }
 
-        connectionState = .connecting
-        let request = apiClient.makeWebSocketRequest(
-            server: server,
-            sessionID: sessionID
-        )
+        wantsConnection = true
         receiveTask?.cancel()
         receiveTask = Task { [weak self] in
             guard let self else {
                 return
             }
 
-            await socketChannel.connect(with: request)
-            await receiveLoop()
+            await connectionLoop()
         }
     }
 
     public func disconnect() {
+        wantsConnection = false
         receiveTask?.cancel()
         receiveTask = nil
         connectionState = .idle
@@ -76,6 +73,7 @@ public final class TerminalScreenModel {
                 await MainActor.run {
                     connectionState = .reconnecting
                 }
+                await socketChannel.disconnect()
             }
         }
     }
@@ -98,20 +96,48 @@ public final class TerminalScreenModel {
                 await MainActor.run {
                     connectionState = .reconnecting
                 }
+                await socketChannel.disconnect()
             }
         }
     }
 
-    private func receiveLoop() async {
-        do {
-            while !Task.isCancelled {
-                let message = try await socketChannel.receive()
-                apply(message)
+    private func connectionLoop() async {
+        while wantsConnection && !Task.isCancelled {
+            let request = apiClient.makeWebSocketRequest(
+                server: server,
+                sessionID: sessionID
+            )
+
+            if connectionState != .connected {
+                connectionState = connectionState == .idle
+                    ? .connecting
+                    : .reconnecting
             }
-        } catch {
-            if !Task.isCancelled {
+
+            await socketChannel.connect(with: request)
+
+            do {
+                try await receiveLoop()
+            } catch {
+                if !wantsConnection || Task.isCancelled {
+                    break
+                }
+
                 connectionState = .reconnecting
+                await socketChannel.disconnect()
+                try? await Task.sleep(for: .seconds(2))
             }
+        }
+
+        if Task.isCancelled {
+            await socketChannel.disconnect()
+        }
+    }
+
+    private func receiveLoop() async throws {
+        while !Task.isCancelled && wantsConnection {
+            let message = try await socketChannel.receive()
+            apply(message)
         }
     }
 

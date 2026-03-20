@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HostListSheetView: View {
     @Bindable var model: MobileAppModel
+    @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -48,6 +49,9 @@ struct HostListSheetView: View {
                                         Button("Reconnect") {
                                             dismiss()
                                             model.beginReconnectHost(host.id)
+                                        }
+                                        Button("Open in Browser") {
+                                            openURL(host.endpoint.browserLoginURL)
                                         }
                                         Button(
                                             "Delete",

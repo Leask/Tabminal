@@ -4,6 +4,7 @@ import TabminalIOSKit
 
 struct MobileShellView: View {
     @Bindable var model: MobileAppModel
+    @Environment(\.openURL) private var openURL
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -172,6 +173,9 @@ struct MobileShellView: View {
 
             if model.activeHost?.connectionState == .needsAuth,
                let host = model.activeHost {
+                actionPill("Browser Login", icon: "safari") {
+                    openURL(host.endpoint.browserLoginURL)
+                }
                 actionPill("Reconnect", icon: "key") {
                     model.beginReconnectHost(host.id)
                 }
@@ -239,11 +243,19 @@ struct MobileShellView: View {
                         .foregroundStyle(.white.opacity(0.52))
                     Spacer()
                     if host.connectionState == .needsAuth {
-                        Button("Reconnect") {
-                            model.beginReconnectHost(host.id)
+                        HStack(spacing: 12) {
+                            Button("Browser Login") {
+                                openURL(host.endpoint.browserLoginURL)
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+
+                            Button("Reconnect") {
+                                model.beginReconnectHost(host.id)
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
                         }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
                     } else {
                         Button {
                             model.openWorkspace()

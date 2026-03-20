@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SessionListSheetView: View {
     @Bindable var model: MobileAppModel
+    @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -85,6 +86,9 @@ struct SessionListSheetView: View {
                         }
                         ToolbarItemGroup(placement: .topBarTrailing) {
                             if host.connectionState == .needsAuth {
+                                Button("Browser Login") {
+                                    openURL(host.endpoint.browserLoginURL)
+                                }
                                 Button("Reconnect") {
                                     dismiss()
                                     model.beginReconnectHost(host.id)
