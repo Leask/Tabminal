@@ -4,20 +4,43 @@ import TabminalIOSKit
 
 struct MobileShellView: View {
     @Bindable var model: MobileAppModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    @State private var isPresentingHostList: Bool = false
+    @State private var isPresentingSessionList: Bool = false
+
+    private var isCompactLayout: Bool {
+        horizontalSizeClass == .compact || verticalSizeClass == .compact
+    }
 
     var body: some View {
         ZStack {
             shellBackground
 
-            VStack(spacing: 12) {
-                topBar
-                hostRail
-                sessionRail
-                terminalSection
+            Group {
+                if isCompactLayout {
+                    compactShell
+                } else {
+                    regularShell
+                }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, isCompactLayout ? 12 : 14)
             .padding(.top, 8)
             .padding(.bottom, 0)
+        }
+        .sheet(isPresented: $isPresentingHostList) {
+            HostListSheetView(model: model)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isPresentingSessionList) {
+            SessionListSheetView(model: model)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $model.isPresentingWorkspace) {
+            workspaceCover
         }
     }
 
@@ -39,6 +62,127 @@ struct MobileShellView: View {
         }
     }
 
+    private var compactShell: some View {
+        VStack(spacing: 10) {
+            compactTopBar
+            activeContextCard
+            compactActionRow
+            terminalSection
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var regularShell: some View {
+        VStack(spacing: 12) {
+            topBar
+            hostRail
+            sessionRail
+            terminalSection
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var compactTopBar: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tabminal")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                if let host = model.activeHost {
+                    Text(host.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.56))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            iconButton("arrow.clockwise") {
+                model.triggerManualSync()
+            }
+
+            iconButton("server.rack") {
+                isPresentingHostList = true
+            }
+
+            iconButton("rectangle.portrait.and.arrow.right") {
+                model.logout()
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private var activeContextCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(
+                        hostStateColor(
+                            model.activeHost?.connectionState ?? .idle
+                        )
+                    )
+                    .frame(width: 8, height: 8)
+
+                Text(model.activeHost?.displayName ?? "No Host")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+
+                if let latency = model.activeHost?.lastLatencyMs {
+                    Text("\(latency) ms")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model.activeSession?.title ?? "No active tab")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Text(
+                    model.activeSession?.cwd.isEmpty == false
+                        ? model.activeSession?.cwd ?? ""
+                        : "Open or create a tab to start working."
+                )
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.52))
+                .lineLimit(2)
+            }
+        }
+        .padding(14)
+        .background(panelBackground(selected: true))
+    }
+
+    private var compactActionRow: some View {
+        HStack(spacing: 10) {
+            actionPill("Tabs", icon: "square.on.square") {
+                isPresentingSessionList = true
+            }
+
+            actionPill("Files", icon: "folder") {
+                model.openWorkspace()
+            }
+            .disabled(model.activeSession == nil)
+            .opacity(model.activeSession == nil ? 0.48 : 1)
+
+            Spacer(minLength: 0)
+
+            if model.activeHost?.connectionState == .needsAuth,
+               let host = model.activeHost {
+                actionPill("Reconnect", icon: "key") {
+                    model.beginReconnectHost(host.id)
+                }
+            } else if let host = model.activeHost {
+                actionPill("New Tab", icon: "plus") {
+                    model.createSession(on: host.id)
+                }
+            }
+        }
+    }
+
     private var topBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -54,31 +198,22 @@ struct MobileShellView: View {
 
             Spacer()
 
-            Button {
+            iconButton("folder") {
+                model.openWorkspace()
+            }
+            .disabled(model.activeSession == nil)
+            .opacity(model.activeSession == nil ? 0.48 : 1)
+
+            iconButton("arrow.clockwise") {
                 model.triggerManualSync()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .foregroundStyle(.white.opacity(0.88))
-                    .frame(width: 36, height: 36)
-                    .background(.white.opacity(0.08), in: Circle())
             }
 
-            Button {
+            iconButton("plus") {
                 model.beginAddHost()
-            } label: {
-                Image(systemName: "plus")
-                    .foregroundStyle(.white.opacity(0.88))
-                    .frame(width: 36, height: 36)
-                    .background(.white.opacity(0.08), in: Circle())
             }
 
-            Button {
+            iconButton("rectangle.portrait.and.arrow.right") {
                 model.logout()
-            } label: {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .foregroundStyle(.white.opacity(0.88))
-                    .frame(width: 36, height: 36)
-                    .background(.white.opacity(0.08), in: Circle())
             }
         }
         .padding(.horizontal, 4)
@@ -110,6 +245,14 @@ struct MobileShellView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                     } else {
+                        Button {
+                            model.openWorkspace()
+                        } label: {
+                            Label("Files", systemImage: "folder")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+
                         if model.activeSession != nil {
                             Button {
                                 model.closeActiveSession()
@@ -118,9 +261,13 @@ struct MobileShellView: View {
                                     .font(.caption.bold())
                                     .foregroundStyle(.white.opacity(0.86))
                                     .frame(width: 24, height: 24)
-                                    .background(.white.opacity(0.08), in: Circle())
+                                    .background(
+                                        .white.opacity(0.08),
+                                        in: Circle()
+                                    )
                             }
                         }
+
                         Button {
                             model.createSession(on: host.id)
                         } label: {
@@ -168,6 +315,27 @@ struct MobileShellView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
+    private var workspaceCover: some View {
+        if let workspace = model.activeWorkspace,
+           let host = model.activeHost,
+           let session = model.activeSession {
+            WorkspaceBrowserView(
+                workspace: workspace,
+                hostName: host.displayName,
+                sessionTitle: session.title,
+                onClose: {
+                    model.closeWorkspace()
+                }
+            )
+        } else {
+            Color.clear
+                .onAppear {
+                    model.closeWorkspace()
+                }
+        }
+    }
+
     private func hostCard(_ host: MobileAppModel.HostRecord) -> some View {
         let isSelected = model.activeHostID == host.id
 
@@ -212,29 +380,15 @@ struct MobileShellView: View {
         }
         .padding(14)
         .frame(width: 180, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color.white.opacity(0.12)
-                        : Color.white.opacity(0.06)
-                )
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(
-                    isSelected
-                        ? Color.white.opacity(0.18)
-                        : Color.white.opacity(0.07),
-                    lineWidth: 1
-                )
-        }
+        .background(panelBackground(selected: isSelected))
         .onTapGesture {
             model.selectHost(host.id)
         }
     }
 
-    private func sessionChip(_ session: MobileAppModel.SessionRecord) -> some View {
+    private func sessionChip(
+        _ session: MobileAppModel.SessionRecord
+    ) -> some View {
         let isSelected = model.activeSessionKey == session.key
 
         return VStack(alignment: .leading, spacing: 5) {
@@ -250,23 +404,7 @@ struct MobileShellView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(width: 150, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color(red: 0.17, green: 0.24, blue: 0.34)
-                        : Color.white.opacity(0.05)
-                )
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    isSelected
-                        ? Color(red: 0.49, green: 0.67, blue: 0.88)
-                        : Color.white.opacity(0.06),
-                    lineWidth: 1
-                )
-        }
+        .background(panelBackground(selected: isSelected))
         .onTapGesture {
             model.selectSession(session)
         }
@@ -316,22 +454,67 @@ struct MobileShellView: View {
             }
     }
 
+    private func iconButton(
+        _ icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .foregroundStyle(.white.opacity(0.88))
+                .frame(width: 36, height: 36)
+                .background(.white.opacity(0.08), in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func actionPill(
+        _ title: String,
+        icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(.white.opacity(0.08), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func panelBackground(selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .fill(
+                selected
+                    ? Color.white.opacity(0.12)
+                    : Color.white.opacity(0.06)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        selected
+                            ? Color.white.opacity(0.18)
+                            : Color.white.opacity(0.07),
+                        lineWidth: 1
+                    )
+            }
+    }
+
     private func hostStateColor(
         _ state: MobileAppModel.HostConnectionState
     ) -> Color {
         switch state {
-        case .idle:
-            return .gray
-        case .connecting:
-            return Color(red: 0.99, green: 0.75, blue: 0.29)
         case .connected:
-            return Color(red: 0.23, green: 0.82, blue: 0.46)
+            return Color(red: 0.30, green: 0.84, blue: 0.46)
+        case .connecting:
+            return Color(red: 0.98, green: 0.77, blue: 0.29)
         case .reconnecting:
-            return Color(red: 1.0, green: 0.61, blue: 0.24)
-        case .needsAuth:
-            return Color(red: 1.0, green: 0.40, blue: 0.36)
-        case .error:
-            return Color(red: 0.85, green: 0.32, blue: 0.30)
+            return Color(red: 0.96, green: 0.58, blue: 0.29)
+        case .needsAuth, .error:
+            return Color(red: 0.99, green: 0.39, blue: 0.37)
+        case .idle:
+            return .white.opacity(0.42)
         }
     }
 

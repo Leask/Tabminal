@@ -51,9 +51,6 @@ public struct TerminalScreenView: View {
         .task {
             model.connect()
         }
-        .onAppear {
-            inputFocused = true
-        }
         .onDisappear {
             model.disconnect()
         }

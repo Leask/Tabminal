@@ -8,22 +8,17 @@ struct ServerConnectionView: View {
         ZStack {
             connectionBackground
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 22) {
-                        heroCard
-                        connectionCard
-                        capabilityCard
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 28)
-                    .padding(.bottom, 40)
-                    .frame(maxWidth: 640)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+                    heroCard
+                    connectionCard
+                    capabilityCard
                 }
-
-                Spacer(minLength: 0)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 40)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
