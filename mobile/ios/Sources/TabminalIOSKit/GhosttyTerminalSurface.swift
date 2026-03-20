@@ -1,88 +1,84 @@
 import SwiftUI
 
 public struct GhosttyTerminalSurface: View {
-    private let host: String
-    private let connectionState: String
     private let transcript: String
 
-    public init(
-        host: String,
-        connectionState: String,
-        transcript: String
-    ) {
-        self.host = host
-        self.connectionState = connectionState
+    public init(transcript: String) {
         self.transcript = transcript
     }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.10, green: 0.13, blue: 0.16),
-                            Color(red: 0.05, green: 0.06, blue: 0.08)
+                            Color(red: 0.07, green: 0.08, blue: 0.10),
+                            Color(red: 0.03, green: 0.04, blue: 0.05)
                         ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                        startPoint: .top,
+                        endPoint: .bottom
                     )
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(.white.opacity(0.14), lineWidth: 1)
-                )
-
-            VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 12) {
-                    Label(host, systemImage: "terminal")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Text(connectionState)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.white.opacity(0.08), in: Capsule())
+                .overlay {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 14)
 
-                Divider()
-                    .overlay(.white.opacity(0.08))
+            LinearGradient(
+                colors: [
+                    .white.opacity(0.04),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 84)
+            .clipShape(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+            )
+            .allowsHitTesting(false)
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(displayTranscript)
-                                .font(
-                                    .system(
-                                        size: 13,
-                                        weight: .regular,
-                                        design: .monospaced
-                                    )
+            HStack(spacing: 8) {
+                terminalDot(Color(red: 1.0, green: 0.37, blue: 0.33))
+                terminalDot(Color(red: 1.0, green: 0.74, blue: 0.28))
+                terminalDot(Color(red: 0.18, green: 0.84, blue: 0.44))
+            }
+            .padding(.top, 18)
+            .padding(.leading, 18)
+            .allowsHitTesting(false)
+
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(displayTranscript)
+                            .font(
+                                .system(
+                                    size: 13,
+                                    weight: .regular,
+                                    design: .monospaced
                                 )
-                                .foregroundStyle(.white.opacity(0.94))
-                                .textSelection(.enabled)
-                                .frame(
-                                    maxWidth: .infinity,
-                                    alignment: .leading
-                                )
-                                .padding(20)
+                            )
+                            .foregroundStyle(.white.opacity(0.94))
+                            .textSelection(.enabled)
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                            .padding(.top, 48)
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 18)
 
-                            Color.clear
-                                .frame(height: 1)
-                                .id("terminal-bottom")
-                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id("terminal-bottom")
                     }
-                    .onAppear {
-                        scrollToBottom(proxy)
-                    }
-                    .onChange(of: transcript) { _, _ in
-                        scrollToBottom(proxy)
-                    }
+                }
+                .onAppear {
+                    scrollToBottom(proxy)
+                }
+                .onChange(of: transcript) { _, _ in
+                    scrollToBottom(proxy)
                 }
             }
         }
@@ -93,12 +89,20 @@ public struct GhosttyTerminalSurface: View {
     private var displayTranscript: String {
         if transcript.isEmpty {
 #if canImport(libghostty)
-            return "libghostty renderer host ready.\nWaiting for session output..."
+            return "libghostty host ready.\nWaiting for shell output..."
 #else
-            return "Waiting for session output...\nPlain-text fallback is active until libghostty is linked."
+            return "Waiting for shell output...\nText-mode renderer is active until libghostty is linked."
 #endif
         }
+
         return transcript
+    }
+
+    private func terminalDot(_ color: Color) -> some View {
+        Circle()
+            .fill(color.opacity(0.92))
+            .frame(width: 10, height: 10)
+            .shadow(color: color.opacity(0.18), radius: 6, y: 1)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
