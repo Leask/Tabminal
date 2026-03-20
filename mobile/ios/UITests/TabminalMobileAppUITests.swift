@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class TabminalMobileAppUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -16,30 +17,33 @@ final class TabminalMobileAppUITests: XCTestCase {
         app.launch()
     }
 
+    @MainActor
     func testAutoLoginLandsInTerminalShell() {
+        waitForShellReady()
         XCTAssertTrue(
-            app.buttons["shell.sidebarToggle"].waitForExistence(timeout: 15)
-        )
-        XCTAssertTrue(
-            app.buttons["terminal.keyboard"].waitForExistence(timeout: 15)
+            element("terminal.keyboard").waitForExistence(timeout: 10)
         )
 
         attachScreenshot(named: "terminal-shell")
     }
 
+    @MainActor
     func testSidebarShowsSessionsAndHostControls() {
-        let toggle = app.buttons["shell.sidebarToggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        waitForShellReady()
+        let toggle = element("shell.sidebarToggle")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         toggle.tap()
 
-        XCTAssertTrue(app.buttons["host.add"].waitForExistence(timeout: 10))
+        XCTAssertTrue(element("host.add").waitForExistence(timeout: 10))
 
         attachScreenshot(named: "sidebar")
     }
 
+    @MainActor
     func testInlineWorkspaceOpensFromSidebarEditorAction() {
-        let toggle = app.buttons["shell.sidebarToggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        waitForShellReady()
+        let toggle = element("shell.sidebarToggle")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         toggle.tap()
 
         let editorButton = app.buttons.matching(
@@ -49,12 +53,35 @@ final class TabminalMobileAppUITests: XCTestCase {
         editorButton.tap()
 
         XCTAssertTrue(
-            app.buttons["workspace.inline.save"].waitForExistence(timeout: 10)
+            element("workspace.inline.save").waitForExistence(timeout: 10)
         )
 
         attachScreenshot(named: "workspace-inline")
     }
 
+    @MainActor
+    private func waitForShellReady() {
+        let shell = element("shell.view")
+        if shell.waitForExistence(timeout: 30) {
+            return
+        }
+
+        let loginError = element("login.error")
+        print("=== UI TREE BEGIN ===")
+        print(app.debugDescription)
+        print("=== UI TREE END ===")
+        attachScreenshot(named: "shell-launch-failure")
+        XCTFail("Shell did not appear. Login error: \(loginError.label)")
+    }
+
+    @MainActor
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: identifier)
+            .firstMatch
+    }
+
+    @MainActor
     private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name

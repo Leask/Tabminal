@@ -9,6 +9,10 @@ struct MobileShellView: View {
 
     @State private var sidebarPresented: Bool = false
     @State private var hostPendingDeletion: MobileAppModel.HostRecord?
+    @State private var didApplyDebugSidebar = false
+    @State private var didApplyDebugWorkspace = false
+
+    private let debugLaunchOptions = MobileDebugLaunchOptions.current
 
     private var isCompact: Bool {
         horizontalSizeClass == .compact
@@ -34,6 +38,15 @@ struct MobileShellView: View {
                 value: model.isActiveWorkspaceVisible
             )
             .accessibilityIdentifier("shell.view")
+            .onAppear {
+                applyDebugPresentationIfNeeded()
+            }
+            .onChange(of: model.phase) { _, _ in
+                applyDebugPresentationIfNeeded()
+            }
+            .onChange(of: model.activeSessionKey) { _, _ in
+                applyDebugPresentationIfNeeded()
+            }
         }
         .confirmationDialog(
             "Delete Host?",
@@ -83,16 +96,13 @@ struct MobileShellView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             if isCompact {
-                Button {
+                topBarIconButton(
+                    systemImage: "line.3.horizontal",
+                    label: "Open Sidebar",
+                    accessibilityID: "shell.sidebarToggle"
+                ) {
                     sidebarPresented.toggle()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("shell.sidebarToggle")
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -124,6 +134,28 @@ struct MobileShellView: View {
                     .background(.white.opacity(0.07), in: Capsule())
             }
 
+            if model.activeHost != nil {
+                topBarIconButton(
+                    systemImage: "plus",
+                    label: "New Tab",
+                    accessibilityID: "shell.newTab"
+                ) {
+                    model.createSessionOnActiveHost()
+                }
+            }
+
+            if let activeSession = model.activeSession {
+                topBarIconButton(
+                    systemImage: model.isWorkspaceVisible(for: activeSession)
+                        ? "folder.fill"
+                        : "folder",
+                    label: "Toggle Editor",
+                    accessibilityID: "shell.toggleWorkspace"
+                ) {
+                    model.toggleWorkspace(for: activeSession)
+                }
+            }
+
             Menu {
                 Button("Refresh") {
                     model.triggerManualSync()
@@ -146,6 +178,8 @@ struct MobileShellView: View {
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("More Actions")
             .accessibilityIdentifier("shell.menu")
         }
         .padding(.horizontal, 14)
@@ -164,7 +198,7 @@ struct MobileShellView: View {
             mainWorkspace(in: size)
         } else {
             HStack(spacing: 0) {
-                sidebar(width: 314)
+                sidebar(width: 240)
                 Rectangle()
                     .fill(.white.opacity(0.06))
                     .frame(width: 1)
@@ -178,7 +212,7 @@ struct MobileShellView: View {
         if let session = model.activeSession,
            let host = model.host(for: session) {
             if isCompact {
-                ZStack(alignment: .leading) {
+                ZStack(alignment: .trailing) {
                     terminalPane(for: session, host: host)
 
                     if let workspace = model.workspaceForSession(session),
@@ -190,10 +224,15 @@ struct MobileShellView: View {
                             compact: true,
                             width: min(size.width * 0.84, 420)
                         )
-                        .padding(.leading, 12)
+                        .padding(.trailing, 12)
                         .padding(.vertical, 12)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .trailing
+                        )
                         .transition(
-                            .move(edge: .leading).combined(with: .opacity)
+                            .move(edge: .trailing).combined(with: .opacity)
                         )
                     }
                 }
@@ -258,7 +297,7 @@ struct MobileShellView: View {
                         sidebarPresented = false
                     }
 
-                sidebar(width: min(size.width * 0.82, 320))
+                sidebar(width: min(size.width - 40, 248))
                     .transition(.move(edge: .leading))
                     .shadow(color: .black.opacity(0.36), radius: 24, x: 10)
             }
@@ -288,7 +327,7 @@ struct MobileShellView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(
             Color(red: 0.07, green: 0.08, blue: 0.10)
-                .opacity(0.98)
+                .opacity(1.0)
         )
         .accessibilityIdentifier("shell.sidebar")
     }
@@ -300,7 +339,7 @@ struct MobileShellView: View {
         let hostName = model.hostDisplayName(for: session)
         let hostColor = Color(red: 0.75, green: 0.88, blue: 0.96)
 
-        return ZStack(alignment: .topTrailing) {
+        return ZStack {
             Button {
                 model.selectSession(session)
                 if isCompact {
@@ -309,10 +348,10 @@ struct MobileShellView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(session.title)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 15, weight: .regular))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                        .padding(.top, 6)
+                        .padding(.top, isActive ? 6 : 0)
 
                     metadataLine(
                         label: "ID",
@@ -321,13 +360,13 @@ struct MobileShellView: View {
                     )
                     metadataLine(
                         label: "HOST",
-                        value: "\(sessionUserName(session))@\(hostName)",
+                        value: sessionHostValue(session, hostName: hostName),
                         emphasized: true,
                         emphasisColor: hostColor
                     )
                     metadataLine(
                         label: "PWD",
-                        value: shortenPathFishStyle(session.cwd),
+                        value: shortenPathFishStyle(session.cwd, env: session.env),
                         emphasized: false
                     )
                     metadataLine(
@@ -354,28 +393,52 @@ struct MobileShellView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
+                .frame(minHeight: 78, alignment: .topLeading)
+                .padding(.leading, isActive ? 22 : 0)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .background(sessionCardBackground(selected: isActive))
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("session.card.\(session.key)")
-
-            HStack(spacing: 8) {
-                overlayActionButton(
-                    systemImage: "folder",
-                    accessibilityID: "session.editor.\(session.key)"
-                ) {
+            .contextMenu {
+                Button("Open Editor", systemImage: "folder") {
                     model.toggleWorkspace(for: session)
                 }
-
-                overlayActionButton(
-                    systemImage: "xmark",
-                    accessibilityID: "session.close.\(session.key)"
-                ) {
+                Button("Close Tab", systemImage: "xmark", role: .destructive) {
                     model.closeSession(session)
                 }
             }
-            .padding(10)
+            .accessibilityIdentifier("session.card.\(session.key)")
+
+            if isActive {
+                overlayActionButton(
+                    systemImage: "xmark",
+                    accessibilityID: "session.close.\(session.key)",
+                    accessibilityLabel: "Close Tab"
+                ) {
+                    model.closeSession(session)
+                }
+                .padding(10)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+
+                overlayActionButton(
+                    systemImage: "folder",
+                    accessibilityID: "session.editor.\(session.key)",
+                    accessibilityLabel: "Toggle Editor"
+                ) {
+                    model.toggleWorkspace(for: session)
+                }
+                .padding(10)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topTrailing
+                )
+            }
         }
     }
 
@@ -417,8 +480,9 @@ struct MobileShellView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Text(requiresReconnect ? reconnectLabel(for: host) : "New Tab @")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.subheadline.weight(.regular))
                             .foregroundStyle(.white)
+                            .lineLimit(1)
                         Text(host.displayName)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(
@@ -434,6 +498,7 @@ struct MobileShellView: View {
                         Text(hostSecondaryMetric(host))
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.white.opacity(0.56))
+                            .lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -441,12 +506,26 @@ struct MobileShellView: View {
                 .background(hostButtonBackground)
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                if !host.isPrimary {
+                    Button("Edit Host", systemImage: "pencil") {
+                        model.beginEditHost(host.id)
+                    }
+                    Button("Reconnect", systemImage: "arrow.clockwise") {
+                        model.beginReconnectHost(host.id)
+                    }
+                    Button("Delete Host", systemImage: "xmark", role: .destructive) {
+                        hostPendingDeletion = host
+                    }
+                }
+            }
             .accessibilityIdentifier("host.primary.\(host.id)")
 
-            if !host.isPrimary {
+            if !host.isPrimary && model.activeHostID == host.id {
                 overlayActionButton(
                     systemImage: "xmark",
-                    accessibilityID: "host.delete.\(host.id)"
+                    accessibilityID: "host.delete.\(host.id)",
+                    accessibilityLabel: "Delete Host"
                 ) {
                     hostPendingDeletion = host
                 }
@@ -475,23 +554,23 @@ struct MobileShellView: View {
     }
 
     private var hostButtonBackground: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(.white.opacity(0.06))
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(red: 0.15, green: 0.16, blue: 0.19))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(.white.opacity(0.08), lineWidth: 1)
             }
     }
 
     private func sessionCardBackground(selected: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(
                 selected
-                    ? Color.white.opacity(0.12)
-                    : Color.white.opacity(0.05)
+                    ? Color(red: 0.20, green: 0.22, blue: 0.27)
+                    : Color(red: 0.16, green: 0.17, blue: 0.20)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(
                         selected
                             ? Color.white.opacity(0.16)
@@ -504,6 +583,7 @@ struct MobileShellView: View {
     private func overlayActionButton(
         systemImage: String,
         accessibilityID: String,
+        accessibilityLabel: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -511,9 +591,32 @@ struct MobileShellView: View {
                 .font(.caption.bold())
                 .foregroundStyle(.white.opacity(0.82))
                 .frame(width: 24, height: 24)
-                .background(.black.opacity(0.24), in: Circle())
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(.black.opacity(0.44))
+                )
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel ?? accessibilityID)
+        .accessibilityIdentifier(accessibilityID)
+    }
+
+    private func topBarIconButton(
+        systemImage: String,
+        label: String,
+        accessibilityID: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+                .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
         .accessibilityIdentifier(accessibilityID)
     }
 
@@ -527,6 +630,7 @@ struct MobileShellView: View {
             Text("\(label):")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.42))
+                .frame(width: 34, alignment: .leading)
 
             Text(value)
                 .font(.system(size: 11, design: .monospaced))
@@ -534,6 +638,7 @@ struct MobileShellView: View {
                     emphasized ? emphasisColor : .white.opacity(0.78)
                 )
                 .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 
@@ -545,11 +650,6 @@ struct MobileShellView: View {
         guard let host = model.activeHost else {
             return "No host selected"
         }
-
-        if let latency = host.lastLatencyMs {
-            return "\(host.displayName) · \(latency) ms"
-        }
-
         return host.displayName
     }
 
@@ -606,6 +706,28 @@ struct MobileShellView: View {
         return "Reconnect"
     }
 
+    private func applyDebugPresentationIfNeeded() {
+        guard model.phase == .ready else {
+            return
+        }
+
+        if debugLaunchOptions.presentSidebar,
+           isCompact,
+           !didApplyDebugSidebar {
+            sidebarPresented = true
+            didApplyDebugSidebar = true
+        }
+
+        if debugLaunchOptions.presentWorkspace,
+           !didApplyDebugWorkspace,
+           let session = model.activeSession {
+            if !model.isWorkspaceVisible(for: session) {
+                model.toggleWorkspace(for: session)
+            }
+            didApplyDebugWorkspace = true
+        }
+    }
+
     private func hostSecondaryMetric(
         _ host: MobileAppModel.HostRecord
     ) -> String {
@@ -637,23 +759,24 @@ struct MobileShellView: View {
         return id
     }
 
+    private func sessionHostValue(
+        _ session: MobileAppModel.SessionRecord,
+        hostName: String
+    ) -> String {
+        let user = sessionUserName(session)
+        if user.isEmpty {
+            return hostName
+        }
+        return "\(user)@\(hostName)"
+    }
+
     private func sessionUserName(
         _ session: MobileAppModel.SessionRecord
     ) -> String {
-        guard let env = session.env else {
-            return "user"
-        }
-
-        for line in env.split(separator: "\n") {
-            if line.hasPrefix("USER=") {
-                return String(line.dropFirst(5))
-            }
-            if line.hasPrefix("LOGNAME=") {
-                return String(line.dropFirst(8))
-            }
-        }
-
-        return "user"
+        environmentValue(session.env, key: "USER")
+            ?? environmentValue(session.env, key: "LOGNAME")
+            ?? environmentValue(session.env, key: "USERNAME")
+            ?? ""
     }
 
     private func sinceString(_ date: Date?) -> String {
@@ -666,19 +789,47 @@ struct MobileShellView: View {
         return formatter.string(from: date)
     }
 
-    private func shortenPathFishStyle(_ path: String) -> String {
+    private func shortenPathFishStyle(
+        _ path: String,
+        env: String? = nil
+    ) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return "/"
         }
 
-        if trimmed == "/" {
-            return "/"
+        let normalized = trimmed.replacingOccurrences(of: "\\", with: "/")
+        let home = environmentValue(env, key: "HOME")
+        let displayPath: String
+
+        if let home,
+           (normalized == home || normalized.hasPrefix("\(home)/")) {
+            displayPath = "~" + normalized.dropFirst(home.count)
+        } else {
+            displayPath = normalized
         }
 
-        let components = trimmed.split(separator: "/", omittingEmptySubsequences: true)
+        if displayPath == "/" || displayPath == "~" {
+            return displayPath
+        }
+
+        let hasRoot = displayPath.hasPrefix("/")
+        let hasHome = displayPath.hasPrefix("~")
+        let prefix = hasHome ? "~" : (hasRoot ? "/" : "")
+        let remainder = String(displayPath.dropFirst(prefix.count))
+        let components = remainder.split(
+            separator: "/",
+            omittingEmptySubsequences: true
+        )
+
         guard components.count > 1 else {
-            return trimmed
+            if prefix == "~" {
+                return "~/" + (components.first.map(String.init) ?? "")
+            }
+            if prefix == "/" {
+                return "/" + (components.first.map(String.init) ?? "")
+            }
+            return displayPath
         }
 
         let abbreviated = components.enumerated().map { index, component in
@@ -689,7 +840,47 @@ struct MobileShellView: View {
             return String(component.prefix(1))
         }
 
-        return "/" + abbreviated.joined(separator: "/")
+        let joined = abbreviated.joined(separator: "/")
+        if prefix == "~" {
+            return "~/" + joined
+        }
+        if prefix == "/" {
+            return "/" + joined
+        }
+        return joined
+    }
+
+    private func environmentValue(
+        _ env: String?,
+        key: String
+    ) -> String? {
+        guard let env,
+              !env.isEmpty,
+              !key.isEmpty else {
+            return nil
+        }
+
+        let prefix = "\(key)="
+        for line in env.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard line.hasPrefix(prefix) else {
+                continue
+            }
+
+            let rawValue = String(line.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rawValue.isEmpty else {
+                return nil
+            }
+
+            if let token = rawValue.split(whereSeparator: \.isWhitespace).first {
+                let value = String(token)
+                return value.isEmpty ? nil : value
+            }
+
+            return rawValue
+        }
+
+        return nil
     }
 }
 

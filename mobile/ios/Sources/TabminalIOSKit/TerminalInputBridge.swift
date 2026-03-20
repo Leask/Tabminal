@@ -27,7 +27,7 @@ struct TerminalInputBridge: UIViewRepresentable {
 
         if isFocused {
             if !uiView.isFirstResponder {
-                uiView.becomeFirstResponder()
+                _ = uiView.becomeFirstResponder()
             }
         } else if uiView.isFirstResponder {
             uiView.resignFirstResponder()
@@ -164,6 +164,8 @@ final class TerminalInputTextView: UITextView {
         isEditable = true
         isSelectable = true
         textDragInteraction?.isEnabled = false
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
         accessibilityTraits = []
         accessibilityLabel = nil
     }

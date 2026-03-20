@@ -109,6 +109,10 @@ public struct TerminalScreenView: View {
                 .background(.black.opacity(0.28), in: Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            inputFocused ? "Hide Keyboard" : "Show Keyboard"
+        )
         .accessibilityIdentifier("terminal.keyboard")
     }
 

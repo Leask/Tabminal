@@ -8,12 +8,15 @@ struct AppRootView: View {
             switch model.phase {
             case .login:
                 ServerConnectionView(model: model)
+                    .accessibilityIdentifier("root.login")
                     .transition(.opacity)
             case .loading:
                 loadingView
+                    .accessibilityIdentifier("root.loading")
                     .transition(.opacity)
             case .ready:
                 MobileShellView(model: model)
+                    .accessibilityIdentifier("root.ready")
                     .transition(.opacity)
             }
         }

@@ -73,6 +73,7 @@ final class MobileAppModel {
         var connectionState: HostConnectionState = .idle
         var sessions: [SessionRecord] = []
         var lastLatencyMs: Int?
+        var runtimeHostname: String?
         var lastError: String = ""
 
         var id: String {
@@ -80,7 +81,18 @@ final class MobileAppModel {
         }
 
         var displayName: String {
-            endpoint.displayName
+            if !endpoint.host.isEmpty {
+                return endpoint.host
+            }
+
+            if let runtimeHostname,
+               !runtimeHostname.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+               ).isEmpty {
+                return runtimeHostname
+            }
+
+            return endpoint.baseURL.host?.lowercased() ?? "unknown"
         }
 
         var isPrimary: Bool {
@@ -628,8 +640,14 @@ final class MobileAppModel {
 
         let cluster = try await apiClient.loadCluster(server: mainEndpoint)
         hosts = [HostRecord(endpoint: mainEndpoint)]
+        var seenEndpointKeys = Set([Self.endpointKey(for: mainEndpoint.baseURL)])
+        var seenHostIDs = Set(["main"])
 
         for server in cluster.servers {
+            if server.id == "main" {
+                continue
+            }
+
             let candidate = TabminalServerEndpoint(
                 id: server.id,
                 baseURL: server.baseURL,
@@ -642,6 +660,12 @@ final class MobileAppModel {
                 candidate,
                 comparedTo: mainEndpoint
             ) {
+                continue
+            }
+
+            let endpointKey = Self.endpointKey(for: candidate.baseURL)
+            guard seenEndpointKeys.insert(endpointKey).inserted,
+                  seenHostIDs.insert(candidate.id).inserted else {
                 continue
             }
 
@@ -842,6 +866,7 @@ final class MobileAppModel {
                 current.sessions = mappedSessions
                 current.connectionState = .connected
                 current.lastLatencyMs = latencyMs
+                current.runtimeHostname = response.system?.hostname
                 current.lastError = ""
             }
 
