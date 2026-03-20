@@ -4,65 +4,35 @@ import SwiftUI
 struct HostEditorView: View {
     @Bindable var model: MobileAppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(red: 0.05, green: 0.06, blue: 0.08)
-                    .ignoresSafeArea()
+        ZStack {
+            Color(red: 0.05, green: 0.06, blue: 0.08)
+                .ignoresSafeArea()
 
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text(model.hostEditorMode.title)
-                            .font(.title2.weight(.semibold))
-                            .foregroundStyle(.white)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(model.hostEditorMode.title)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
 
-                        formCard
+                    formCard
 
-                        if !model.hostDraftErrorMessage.isEmpty {
-                            Text(model.hostDraftErrorMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
-
-                        Button {
-                            model.submitHostEditor()
-                        } label: {
-                            HStack {
-                                if model.isSubmittingHostDraft {
-                                    ProgressView()
-                                        .tint(.black)
-                                }
-                                Text(model.hostEditorMode.actionTitle)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.black)
-                            .padding(.vertical, 16)
-                            .background(
-                                RoundedRectangle(
-                                    cornerRadius: 18,
-                                    style: .continuous
-                                )
-                                .fill(Color(red: 0.83, green: 0.90, blue: 0.98))
-                            )
-                        }
+                    if !model.hostDraftErrorMessage.isEmpty {
+                        Text(model.hostDraftErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
                     }
-                    .padding(20)
+
+                    actionButtons
                 }
+                .padding(20)
             }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        model.cancelHostEditor()
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: model.isPresentingHostEditor) { _, presented in
-                if !presented {
-                    dismiss()
-                }
+        }
+        .onChange(of: model.isPresentingHostEditor) { _, presented in
+            if !presented {
+                dismiss()
             }
         }
     }
@@ -71,7 +41,7 @@ struct HostEditorView: View {
         VStack(spacing: 16) {
             ConnectionField(
                 label: "Host URL",
-                hint: "Use the full host URL, including scheme and port."
+                hint: "Use the root host URL, including scheme and port."
             ) {
                 TextField("https://host:9846", text: $model.hostDraft.url)
                     .textInputAutocapitalization(.never)
@@ -80,10 +50,10 @@ struct HostEditorView: View {
             }
 
             ConnectionField(
-                label: "Host Alias",
-                hint: "Optional. If empty, the hostname is used."
+                label: "Host",
+                hint: "Optional. Leave empty to auto-detect the display name."
             ) {
-                TextField("Enlightenment", text: $model.hostDraft.host)
+                TextField("Host (optional, auto-detect)", text: $model.hostDraft.host)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
@@ -92,7 +62,7 @@ struct HostEditorView: View {
                 label: "Password",
                 hint: passwordHint
             ) {
-                SecureField("Password", text: $model.hostDraft.password)
+                SecureField(passwordPlaceholder, text: $model.hostDraft.password)
             }
         }
         .padding(20)
@@ -109,11 +79,115 @@ struct HostEditorView: View {
     private var passwordHint: String {
         switch model.hostEditorMode {
         case .add:
-            return "Optional. If empty, the current main host password is reused."
+            return "Optional. Leave empty to reuse the current host password."
         case .edit:
             return "Optional. Leave empty to keep the existing token."
         case .reconnect:
-            return "Optional. Leave empty to retry with the existing token."
+            return "Optional. Leave empty to reconnect with the existing token."
         }
+    }
+
+    private var passwordPlaceholder: String {
+        switch model.hostEditorMode {
+        case .add:
+            return "Password (optional, use current password)"
+        case .edit:
+            return "Password (optional, keep existing token)"
+        case .reconnect:
+            return "Password (optional, use existing token)"
+        }
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        VStack(spacing: 14) {
+            if case .reconnect(let hostID) = model.hostEditorMode,
+               let host = model.hosts.first(where: { $0.id == hostID }) {
+                Button {
+                    openURL(host.endpoint.browserLoginURL)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "safari")
+                            .font(.headline.weight(.semibold))
+                        Text("Cloudflare Login")
+                            .font(.headline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .foregroundStyle(.white)
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: 18,
+                            style: .continuous
+                        )
+                        .fill(.white.opacity(0.08))
+                    )
+                }
+
+                Text(
+                    "If this host is protected by Cloudflare Access, open the browser and sign in first."
+                )
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.56))
+            }
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    model.cancelHostEditor()
+                    dismiss()
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+
+                Button {
+                    model.submitHostEditor()
+                } label: {
+                    HStack {
+                        if model.isSubmittingHostDraft {
+                            ProgressView()
+                                .tint(.black)
+                        }
+                        Text(model.hostEditorMode.actionTitle)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(model.isSubmittingHostDraft)
+                .opacity(model.isSubmittingHostDraft ? 0.75 : 1)
+            }
+        }
+    }
+}
+
+private struct PrimaryActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(.black)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(red: 0.83, green: 0.90, blue: 0.98))
+            )
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
+    }
+}
+
+private struct SecondaryActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.white.opacity(0.08))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
     }
 }

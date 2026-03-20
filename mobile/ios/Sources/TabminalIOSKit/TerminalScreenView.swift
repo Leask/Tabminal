@@ -29,6 +29,7 @@ public struct TerminalScreenView: View {
             ZStack(alignment: .bottomTrailing) {
                 TerminalSurfaceHost(
                     transcript: model.terminalTranscript,
+                    renderFeed: model.terminalRenderFeed,
                     renderer: .current
                 )
                 .contentShape(Rectangle())

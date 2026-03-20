@@ -17,6 +17,7 @@ public final class TerminalScreenModel {
     public private(set) var terminalTitle: String = "Terminal"
     public private(set) var workingDirectory: String = ""
     public private(set) var terminalTranscript: String = ""
+    public private(set) var terminalRenderFeed = TerminalRenderFeed()
 
     public let server: TabminalServerEndpoint
     public let sessionID: String
@@ -146,10 +147,12 @@ public final class TerminalScreenModel {
         case .snapshot(let text):
             terminalBuffer.replace(with: text)
             terminalTranscript = terminalBuffer.text
+            terminalRenderFeed.replaceSnapshot(with: text)
             connectionState = .connected
         case .output(let text):
             terminalBuffer.append(text)
             terminalTranscript = terminalBuffer.text
+            terminalRenderFeed.appendOutput(text)
             connectionState = .connected
         case .meta(let delta):
             if let title = delta.title, !title.isEmpty {

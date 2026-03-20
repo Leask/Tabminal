@@ -2,6 +2,20 @@
 
 Last updated: 2026-03-20
 
+## Current status
+
+Tabminal iOS now includes a concrete native Ghostty integration path:
+
+1. raw VT output is preserved alongside the plain-text transcript
+2. renderer selection can switch to `ghostty`
+3. a native Ghostty runtime loader probes for `GhosttyKit.framework`
+4. the package now includes a thin C shim target (`CGhosttyShim`) to
+   stabilize the expected runtime artifact and symbol names
+5. a native host scaffold (`GhosttyNativeTerminalSurface`) is now the
+   render entrypoint when `ghostty` is selected
+
+This all compiles today without changing the Tabminal backend protocol.
+
 ## Current conclusion
 
 Tabminal iOS cannot switch to the public `libghostty` C API directly yet
@@ -82,24 +96,33 @@ replace only the iOS renderer host.
 
 ## What has already been prepared in this repo
 
-The iOS client now has a renderer abstraction layer so the future Ghostty
-host can be swapped in without rewriting session, shell, or workspace UI.
+The iOS client now has a renderer abstraction layer and a native runtime
+probe so the future Ghostty host can be swapped in without rewriting
+session, shell, or workspace UI.
 
 - `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalRenderer.swift`
 - `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalSurfaceHost.swift`
+- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalRenderFeed.swift`
+- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/GhosttyRuntime.swift`
+- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/GhosttyNativeTerminalSurface.swift`
+- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/CGhosttyShim/include/ghostty_loader.h`
+- `/Users/leask/Documents/Tabminal/mobile/ios/Vendor/Ghostty/README.md`
 
-Current renderer mode is still the text fallback.
+Current renderer behavior:
+
+- default: text renderer, because public Ghostty does not yet expose a
+  remote-output symbol
+- forced `ghostty` mode: native runtime loader + host scaffold + status
+  banner + fallback transcript view
+- auto-upgrade to true Ghostty renderer is ready to happen once the
+  runtime exports the missing remote-output symbol
 
 ## Recommendation
 
-Do not attempt to fake a full `libghostty` integration through the public
-C API as-is. It would either:
-
-- break Tabminal's remote-session architecture, or
-- create an unmaintainable side channel around Ghostty internals.
-
-The correct engineering move is:
+Do not attempt to fake remote rendering by abusing Ghostty's local PTY
+execution path. The correct move remains:
 
 1. add a tiny, explicit embedded/manual output API on top of Ghostty
 2. keep the Tabminal server protocol unchanged
-3. swap the iOS renderer host once the bridge compiles end-to-end
+3. swap the iOS renderer host from scaffolded to live once that symbol is
+   available end-to-end

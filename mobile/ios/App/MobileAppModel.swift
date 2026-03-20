@@ -39,11 +39,11 @@ final class MobileAppModel {
         var actionTitle: String {
             switch self {
             case .add:
-                return "Save Host"
+                return "Register"
             case .edit:
                 return "Update Host"
             case .reconnect:
-                return "Reconnect"
+                return "Save and Reconnect"
             }
         }
     }

@@ -1,20 +1,18 @@
 import SwiftUI
 
-public struct GhosttyTerminalSurface: View {
-    public enum Mode: Sendable {
-        case textFallback
-        case ghosttyPending
-    }
-
+public struct TextTerminalSurface: View {
     private let transcript: String
-    private let mode: Mode
+    private let emptyState: String
 
     public init(
         transcript: String,
-        mode: Mode = .textFallback
+        emptyState: String = """
+        Waiting for shell output...
+        Text-mode renderer is active.
+        """
     ) {
         self.transcript = transcript
-        self.mode = mode
+        self.emptyState = emptyState
     }
 
     public var body: some View {
@@ -65,23 +63,7 @@ public struct GhosttyTerminalSurface: View {
     }
 
     private var displayTranscript: String {
-        if transcript.isEmpty {
-            switch mode {
-            case .textFallback:
-                return """
-                Waiting for shell output...
-                Text-mode renderer is active.
-                """
-            case .ghosttyPending:
-                return """
-                Ghostty renderer selected.
-                The public libghostty C API does not yet expose a remote PTY input path for Tabminal.
-                Text fallback remains active until the bridge layer is extended.
-                """
-            }
-        }
-
-        return transcript
+        transcript.isEmpty ? emptyState : transcript
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {

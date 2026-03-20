@@ -24,7 +24,14 @@ let package = Package(
         ),
         .target(
             name: "TabminalIOSKit",
-            dependencies: ["TabminalMobileCore"]
+            dependencies: [
+                "CGhosttyShim",
+                "TabminalMobileCore"
+            ]
+        ),
+        .target(
+            name: "CGhosttyShim",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "TabminalMobileCoreTests",

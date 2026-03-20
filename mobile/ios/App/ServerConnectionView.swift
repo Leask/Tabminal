@@ -124,13 +124,13 @@ struct ServerConnectionView: View {
                 }
 
                 ConnectionField(
-                    label: "Host Alias",
-                    hint: "Optional. Used as the display name for the main host."
+                    label: "Host",
+                    hint: "Optional. Leave empty to auto-detect the display name."
                 ) {
-                    TextField("Flora", text: $model.mainHostName)
+                    TextField("Host (optional, auto-detect)", text: $model.mainHostName)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .accessibilityIdentifier("login.hostAlias")
+                        .accessibilityIdentifier("login.host")
                 }
 
                 ConnectionField(
@@ -139,7 +139,10 @@ struct ServerConnectionView: View {
                         ? "Optional. Leave empty to reuse the saved main-host login."
                         : "The app sends the same SHA-256 hash used by the web client."
                 ) {
-                    SecureField("Password", text: $model.mainPassword)
+                    SecureField(
+                        "Password (optional, use saved login)",
+                        text: $model.mainPassword
+                    )
                         .textContentType(.password)
                         .accessibilityIdentifier("login.password")
                 }
