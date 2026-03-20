@@ -111,7 +111,7 @@ struct ServerConnectionView: View {
 
             VStack(spacing: 14) {
                 ConnectionField(
-                    label: "Server URL",
+                    label: "Host URL",
                     hint: "Include scheme and port, for example https://host:9846"
                 ) {
                     TextField("https://host:9846",

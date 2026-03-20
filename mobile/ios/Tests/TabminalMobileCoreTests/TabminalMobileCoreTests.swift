@@ -49,3 +49,70 @@ func passwordHasherMatchesServerSha256Format() {
             == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
 }
+
+@Test
+func clusterPayloadDecodesBackendBaseUrlKey() throws {
+    let json = """
+    {
+        "servers": [
+            {
+                "id": "elm",
+                "baseUrl": "https://tabminal-elm.example.com",
+                "host": "Elm",
+                "token": "abc"
+            }
+        ]
+    }
+    """
+
+    let payload = try JSONDecoder().decode(
+        TabminalClusterPayload.self,
+        from: Data(json.utf8)
+    )
+
+    #expect(payload.servers.count == 1)
+    #expect(
+        payload.servers[0].baseURL.absoluteString
+            == "https://tabminal-elm.example.com/"
+    )
+}
+
+@Test
+func heartbeatDecodesEmptyEditorStateFromBackend() throws {
+    let json = """
+    {
+        "sessions": [
+            {
+                "id": "session-1",
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "shell": "/bin/bash",
+                "initialCwd": "/Users/test",
+                "title": "bash",
+                "cwd": "/Users/test",
+                "env": "USER=test",
+                "cols": 80,
+                "rows": 24,
+                "editorState": {}
+            }
+        ],
+        "system": {
+            "hostname": "flora"
+        },
+        "runtime": {
+            "bootId": "123"
+        }
+    }
+    """
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let response = try decoder.decode(
+        TabminalHeartbeatResponse.self,
+        from: Data(json.utf8)
+    )
+
+    #expect(response.sessions.count == 1)
+    #expect(response.sessions[0].editorState?.isVisible == false)
+    #expect(response.sessions[0].editorState?.root == "")
+    #expect(response.sessions[0].editorState?.openFiles == [])
+}

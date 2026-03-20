@@ -1,6 +1,5 @@
 import XCTest
 
-@MainActor
 final class TabminalMobileAppUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -18,19 +17,48 @@ final class TabminalMobileAppUITests: XCTestCase {
     }
 
     func testAutoLoginLandsInTerminalShell() {
-        XCTAssertTrue(app.buttons["Files"].waitForExistence(timeout: 15))
         XCTAssertTrue(
-            app.textFields["Type a command or paste shell input"]
-                .waitForExistence(timeout: 10)
+            app.buttons["shell.sidebarToggle"].waitForExistence(timeout: 15)
         )
+        XCTAssertTrue(
+            app.buttons["terminal.keyboard"].waitForExistence(timeout: 15)
+        )
+
+        attachScreenshot(named: "terminal-shell")
     }
 
-    func testWorkspaceOpensFromShell() {
-        let filesButton = app.buttons["Files"]
-        XCTAssertTrue(filesButton.waitForExistence(timeout: 15))
-        filesButton.tap()
+    func testSidebarShowsSessionsAndHostControls() {
+        let toggle = app.buttons["shell.sidebarToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        toggle.tap()
 
-        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Refresh"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["host.add"].waitForExistence(timeout: 10))
+
+        attachScreenshot(named: "sidebar")
+    }
+
+    func testInlineWorkspaceOpensFromSidebarEditorAction() {
+        let toggle = app.buttons["shell.sidebarToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        toggle.tap()
+
+        let editorButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "session.editor.")
+        ).firstMatch
+        XCTAssertTrue(editorButton.waitForExistence(timeout: 10))
+        editorButton.tap()
+
+        XCTAssertTrue(
+            app.buttons["workspace.inline.save"].waitForExistence(timeout: 10)
+        )
+
+        attachScreenshot(named: "workspace-inline")
+    }
+
+    private func attachScreenshot(named name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }

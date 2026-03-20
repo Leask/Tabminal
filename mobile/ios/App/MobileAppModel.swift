@@ -60,6 +60,7 @@ final class MobileAppModel {
         var title: String
         var cwd: String
         var createdAt: Date?
+        var env: String?
         var editorState: TabminalSessionEditorState?
 
         var key: String {
@@ -150,6 +151,20 @@ final class MobileAppModel {
         activeHost?.sessions ?? []
     }
 
+    var allSessions: [SessionRecord] {
+        hosts
+            .flatMap(\.sessions)
+            .sorted { lhs, rhs in
+                let leftDate = lhs.createdAt ?? .distantPast
+                let rightDate = rhs.createdAt ?? .distantPast
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
+
+                return lhs.key < rhs.key
+            }
+    }
+
     var activeSession: SessionRecord? {
         guard let activeSessionKey else {
             return activeSessions.first
@@ -165,6 +180,10 @@ final class MobileAppModel {
         }
 
         return workspaces[session.key]
+    }
+
+    var isActiveWorkspaceVisible: Bool {
+        activeWorkspace?.isPresented == true
     }
 
     var hasStoredMainLogin: Bool {
@@ -337,6 +356,32 @@ final class MobileAppModel {
         activeSessionKey = session.key
     }
 
+    func host(for session: SessionRecord) -> HostRecord? {
+        hostRecord(for: session.hostID)
+    }
+
+    func hostDisplayName(for session: SessionRecord) -> String {
+        host(for: session)?.displayName ?? "unknown"
+    }
+
+    func isWorkspaceVisible(for session: SessionRecord) -> Bool {
+        workspaces[session.key]?.isPresented == true
+    }
+
+    func toggleWorkspace(for session: SessionRecord) {
+        activeHostID = session.hostID
+        activeSessionKey = session.key
+        guard let workspace = ensureWorkspaceForSelection(session) else {
+            return
+        }
+        let next = !workspace.isPresented
+        workspace.setPresented(next)
+        if !next {
+            workspace.editorErrorMessage = ""
+        }
+        isPresentingWorkspace = next
+    }
+
     func createSessionOnActiveHost() {
         createSession(on: activeHostID)
     }
@@ -358,6 +403,7 @@ final class MobileAppModel {
                     ),
                     cwd: created.cwd ?? created.initialCwd ?? "",
                     createdAt: created.createdAt,
+                    env: nil,
                     editorState: nil
                 )
 
@@ -567,11 +613,7 @@ final class MobileAppModel {
     }
 
     func workspaceForSession(_ session: SessionRecord) -> SessionWorkspaceModel? {
-        guard let host = hostRecord(for: session.hostID) else {
-            return nil
-        }
-
-        return ensureWorkspace(for: session, on: host.endpoint)
+        return ensureWorkspaceForSelection(session)
     }
 
     func triggerManualSync() {
@@ -608,8 +650,18 @@ final class MobileAppModel {
 
         sortHosts()
         activeHostID = "main"
-        await syncAllHosts(ensurePrimarySession: true)
+        await syncHost("main", ensurePrimarySession: true)
         startHeartbeat()
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            for host in hosts where !host.isPrimary {
+                await syncHost(host.id, ensurePrimarySession: false)
+            }
+        }
     }
 
     private func addHost(
@@ -756,6 +808,7 @@ final class MobileAppModel {
                     ),
                     cwd: summary.cwd ?? summary.initialCwd ?? "",
                     createdAt: summary.createdAt,
+                    env: summary.env,
                     editorState: summary.editorState
                 )
             }
@@ -778,6 +831,7 @@ final class MobileAppModel {
                         ),
                         cwd: created.cwd ?? created.initialCwd ?? "",
                         createdAt: created.createdAt,
+                        env: nil,
                         editorState: nil
                     )
                 ]
@@ -884,6 +938,16 @@ final class MobileAppModel {
         )
         workspaces[session.key] = workspace
         return workspace
+    }
+
+    private func ensureWorkspaceForSelection(
+        _ session: SessionRecord
+    ) -> SessionWorkspaceModel? {
+        guard let host = hostRecord(for: session.hostID) else {
+            return nil
+        }
+
+        return ensureWorkspace(for: session, on: host.endpoint)
     }
 
     private func resolveSelection(for hostID: String) {

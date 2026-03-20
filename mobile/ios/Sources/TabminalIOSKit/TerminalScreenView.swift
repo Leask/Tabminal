@@ -1,11 +1,13 @@
 import SwiftUI
 import TabminalMobileCore
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public struct TerminalScreenView: View {
     @State private var model: TerminalScreenModel
-    @State private var pendingInput: String = ""
     @State private var lastViewportSize: CGSize = .zero
-    @FocusState private var inputFocused: Bool
+    @State private var inputFocused: Bool = false
     private let onClose: (() -> Void)?
 
     public init(
@@ -24,25 +26,47 @@ public struct TerminalScreenView: View {
 
     public var body: some View {
         GeometryReader { proxy in
-            VStack(spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
                 TerminalSurfaceHost(
                     transcript: model.terminalTranscript,
                     renderer: .current
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onAppear {
-                    updateViewportIfNeeded(proxy.size)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    inputFocused = true
                 }
-                .onChange(of: proxy.size) { _, newSize in
-                    updateViewportIfNeeded(newSize)
+                .overlay(alignment: .bottomLeading) {
+                    if !inputFocused && model.terminalTranscript.isEmpty {
+                        focusHint
+                            .padding(16)
+                    }
+                }
+
+                TerminalInputBridge(
+                    isFocused: $inputFocused,
+                    onInput: { input in
+                        model.sendInput(input)
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(0.015)
+                .accessibilityIdentifier("terminal.input.capture")
+
+                keyboardButton
+                    .padding(16)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                updateViewportIfNeeded(proxy.size)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    inputFocused = true
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onChange(of: proxy.size) { _, newSize in
+                updateViewportIfNeeded(newSize)
+            }
         }
         .accessibilityIdentifier("terminal.view")
-        .safeAreaInset(edge: .bottom) {
-            composerDock
-        }
         .toolbar {
 #if os(iOS)
             ToolbarItemGroup(placement: .keyboard) {
@@ -58,83 +82,44 @@ public struct TerminalScreenView: View {
         }
     }
 
-    private var composerDock: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Button(action: { onClose?() }) {
-                Image(systemName: "xmark")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.84))
-                    .frame(width: 40, height: 40)
-                    .background(.white.opacity(0.08), in: Circle())
-            }
-
-            TextField(
-                "Type a command or paste shell input",
-                text: $pendingInput
-            )
-            .focused($inputFocused)
-            .font(.system(.body, design: .monospaced))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
+    private var focusHint: some View {
+        Text("Tap terminal to focus keyboard")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.white.opacity(0.72))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.white.opacity(0.06))
+                Capsule(style: .continuous)
+                    .fill(.black.opacity(0.28))
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-            }
-            .foregroundStyle(.white)
-            .submitLabel(.send)
-            .onSubmit {
-                submitInput()
-            }
-#if os(iOS)
-            .autocorrectionDisabled(true)
-            .textInputAutocapitalization(.never)
-#endif
-            .accessibilityIdentifier("terminal.input")
+    }
 
-            Button(action: submitInput) {
-                Image(systemName: "arrow.up")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.black)
-                    .frame(width: 46, height: 46)
-                    .background(
-                        Circle()
-                            .fill(
-                                Color(red: 0.83, green: 0.90, blue: 0.98)
-                            )
-                    )
-            }
-            .disabled(
-                model.connectionState == .connecting
-                    || model.connectionState == .reconnecting
+    private var keyboardButton: some View {
+        Button {
+            inputFocused = true
+        } label: {
+            Image(
+                systemName: inputFocused
+                    ? "keyboard.chevron.compact.down"
+                    : "keyboard"
             )
-            .opacity(
-                model.connectionState == .connecting
-                    || model.connectionState == .reconnecting ? 0.45 : 1
-            )
-            .accessibilityIdentifier("terminal.send")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 42, height: 42)
+                .background(.black.opacity(0.28), in: Circle())
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .background(
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea()
-        )
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("terminal.keyboard")
     }
 
     private var keyboardAccessoryBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                keyboardKey("Tab") {
-                    model.sendControl("\t")
-                }
                 keyboardKey("Esc") {
                     model.sendControl("\u{1B}")
+                }
+                keyboardKey("Tab") {
+                    model.sendControl("\t")
                 }
                 keyboardKey("⌃C") {
                     model.sendControl("\u{03}")
@@ -151,8 +136,15 @@ public struct TerminalScreenView: View {
                 keyboardKey("→") {
                     model.sendControl("\u{1B}[C")
                 }
-                keyboardKey("Enter") {
-                    model.sendControl("\r")
+                keyboardKey("Paste") {
+#if canImport(UIKit)
+                    if let text = UIPasteboard.general.string, !text.isEmpty {
+                        model.sendInput(text)
+                    }
+#endif
+                }
+                keyboardKey("Hide") {
+                    inputFocused = false
                 }
             }
         }
@@ -178,19 +170,6 @@ public struct TerminalScreenView: View {
             )
     }
 
-    private func submitInput() {
-        let command = pendingInput
-        pendingInput = ""
-
-        if command.isEmpty {
-            model.sendControl("\r")
-        } else {
-            model.sendLine(command)
-        }
-
-        inputFocused = true
-    }
-
     private func updateViewportIfNeeded(_ size: CGSize) {
         guard size.width > 0, size.height > 0 else {
             return
@@ -203,8 +182,8 @@ public struct TerminalScreenView: View {
         }
 
         lastViewportSize = size
-        let cols = max(Int((size.width - 32) / 8.4), 40)
-        let rows = max(Int((size.height - 32) / 18.0), 12)
+        let cols = max(Int((size.width - 28) / 8.4), 40)
+        let rows = max(Int((size.height - 28) / 18.0), 12)
         model.resize(cols: cols, rows: rows)
     }
 }

@@ -128,7 +128,7 @@ public struct TabminalClusterServer: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
-        case baseURL
+        case baseURL = "baseUrl"
         case host
         case token
     }
@@ -171,6 +171,13 @@ public struct TabminalSessionEditorState: Codable, Hashable, Sendable {
     public let openFiles: [String]
     public let activeFilePath: String?
 
+    enum CodingKeys: String, CodingKey {
+        case isVisible
+        case root
+        case openFiles
+        case activeFilePath
+    }
+
     public init(
         isVisible: Bool = false,
         root: String = "",
@@ -181,6 +188,26 @@ public struct TabminalSessionEditorState: Codable, Hashable, Sendable {
         self.root = root
         self.openFiles = openFiles
         self.activeFilePath = activeFilePath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isVisible = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .isVisible
+        ) ?? false
+        root = try container.decodeIfPresent(
+            String.self,
+            forKey: .root
+        ) ?? ""
+        openFiles = try container.decodeIfPresent(
+            [String].self,
+            forKey: .openFiles
+        ) ?? []
+        activeFilePath = try container.decodeIfPresent(
+            String.self,
+            forKey: .activeFilePath
+        )
     }
 }
 

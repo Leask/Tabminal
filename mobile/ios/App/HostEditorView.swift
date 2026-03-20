@@ -70,7 +70,7 @@ struct HostEditorView: View {
     private var formCard: some View {
         VStack(spacing: 16) {
             ConnectionField(
-                label: "Server URL",
+                label: "Host URL",
                 hint: "Use the full host URL, including scheme and port."
             ) {
                 TextField("https://host:9846", text: $model.hostDraft.url)

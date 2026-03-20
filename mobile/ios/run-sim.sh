@@ -51,6 +51,7 @@ xcodebuild \
 xcrun simctl boot "${DEVICE_ID}" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "${DEVICE_ID}" -b >/dev/null
 
+xcrun simctl terminate "${DEVICE_ID}" "${APP_ID}" >/dev/null 2>&1 || true
 xcrun simctl install "${DEVICE_ID}" "${APP_BUNDLE}"
 
 LAUNCH_ENV=()
