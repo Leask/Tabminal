@@ -80,14 +80,14 @@ struct HostListSheetView: View {
             .scrollContentBackground(.hidden)
             .background(Color(red: 0.04, green: 0.05, blue: 0.07))
             .navigationTitle("Hosts")
-            .navigationBarTitleDisplayMode(.inline)
+            .tabminalSheetTitleDisplayMode()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: tabminalLeadingToolbarPlacement) {
                     Button("Close") {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: tabminalTrailingToolbarPlacement) {
                     Button {
                         dismiss()
                         model.beginAddHost()
@@ -136,4 +136,31 @@ struct HostListSheetView: View {
             return "Error"
         }
     }
+}
+
+private extension View {
+    @ViewBuilder
+    func tabminalSheetTitleDisplayMode() -> some View {
+        #if os(macOS)
+        self
+        #else
+        self.navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+}
+
+private var tabminalLeadingToolbarPlacement: ToolbarItemPlacement {
+    #if os(macOS)
+    return .navigation
+    #else
+    return .topBarLeading
+    #endif
+}
+
+private var tabminalTrailingToolbarPlacement: ToolbarItemPlacement {
+    #if os(macOS)
+    return .primaryAction
+    #else
+    return .topBarTrailing
+    #endif
 }

@@ -3,6 +3,9 @@ import TabminalMobileCore
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public struct TerminalScreenView: View {
     @State private var model: TerminalScreenModel
@@ -54,8 +57,10 @@ public struct TerminalScreenView: View {
                 .opacity(0.015)
                 .accessibilityIdentifier("terminal.input.capture")
 
-                keyboardButton
-                    .padding(16)
+                if showsKeyboardButton {
+                    keyboardButton
+                        .padding(16)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
@@ -152,11 +157,10 @@ public struct TerminalScreenView: View {
                     model.sendControl("\u{1B}[C")
                 }
                 keyboardKey("Paste") {
-#if canImport(UIKit)
-                    if let text = UIPasteboard.general.string, !text.isEmpty {
+                    if let text = platformPasteboardString(),
+                       !text.isEmpty {
                         model.sendInput(text)
                     }
-#endif
                 }
                 keyboardKey("Hide") {
                     inputFocused = false
@@ -200,5 +204,23 @@ public struct TerminalScreenView: View {
         let cols = max(Int((size.width - 28) / 8.4), 40)
         let rows = max(Int((size.height - 28) / 18.0), 12)
         model.resize(cols: cols, rows: rows)
+    }
+
+    private var showsKeyboardButton: Bool {
+#if os(macOS)
+        false
+#else
+        true
+#endif
+    }
+
+    private func platformPasteboardString() -> String? {
+#if canImport(UIKit)
+        return UIPasteboard.general.string
+#elseif canImport(AppKit)
+        return NSPasteboard.general.string(forType: .string)
+#else
+        return nil
+#endif
     }
 }

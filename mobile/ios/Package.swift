@@ -6,7 +6,8 @@ let package = Package(
     name: "TabminalMobile",
     platforms: [
         .iOS(.v18),
-        .macOS(.v15)
+        .macOS(.v15),
+        .visionOS(.v2)
     ],
     products: [
         .library(

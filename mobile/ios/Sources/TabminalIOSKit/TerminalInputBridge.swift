@@ -246,6 +246,233 @@ final class TerminalInputTextView: UITextView {
     }
 }
 
+#elseif canImport(AppKit)
+
+import AppKit
+
+struct TerminalInputBridge: NSViewRepresentable {
+    @Binding var isFocused: Bool
+    let onInput: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            isFocused: $isFocused,
+            onInput: onInput
+        )
+    }
+
+    func makeNSView(context: Context) -> TerminalInputTextView {
+        let view = TerminalInputTextView(frame: .zero)
+        view.inputDelegateBridge = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ nsView: TerminalInputTextView, context: Context) {
+        nsView.inputDelegateBridge = context.coordinator
+
+        guard let window = nsView.window else {
+            return
+        }
+
+        if isFocused {
+            if window.firstResponder !== nsView {
+                window.makeFirstResponder(nsView)
+            }
+        } else if window.firstResponder === nsView {
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        @Binding private var isFocused: Bool
+        private let onInput: (String) -> Void
+
+        init(
+            isFocused: Binding<Bool>,
+            onInput: @escaping (String) -> Void
+        ) {
+            _isFocused = isFocused
+            self.onInput = onInput
+        }
+
+        func focusChanged(_ focused: Bool) {
+            isFocused = focused
+        }
+
+        func handleInput(_ text: String) {
+            guard !text.isEmpty else {
+                return
+            }
+            onInput(text)
+        }
+
+        func handleBackspace() {
+            onInput("\u{7F}")
+        }
+
+        func handleEscape() {
+            onInput("\u{1B}")
+        }
+
+        func handleTab() {
+            onInput("\t")
+        }
+
+        func handleArrow(_ sequence: String) {
+            onInput(sequence)
+        }
+
+        func handleCtrlC() {
+            onInput("\u{03}")
+        }
+
+        func handlePaste(_ text: String) {
+            guard !text.isEmpty else {
+                return
+            }
+            onInput(text)
+        }
+    }
+}
+
+final class TerminalInputTextView: NSTextView {
+    weak var inputDelegateBridge: TerminalInputBridge.Coordinator?
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override init(frame frameRect: NSRect) {
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        container.widthTracksTextView = false
+        container.heightTracksTextView = false
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        super.init(frame: frameRect, textContainer: container)
+
+        drawsBackground = false
+        isRichText = false
+        isEditable = true
+        isSelectable = true
+        textColor = .clear
+        insertionPointColor = .clear
+        backgroundColor = .clear
+        importsGraphics = false
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        isAutomaticTextReplacementEnabled = false
+        isAutomaticSpellingCorrectionEnabled = false
+        isContinuousSpellCheckingEnabled = false
+        isGrammarCheckingEnabled = false
+        smartInsertDeleteEnabled = false
+        allowsUndo = false
+        isHorizontallyResizable = false
+        isVerticallyResizable = false
+        textContainerInset = .zero
+        selectedTextAttributes = [:]
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        inputDelegateBridge?.focusChanged(became)
+        resetSelection()
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        inputDelegateBridge?.focusChanged(false)
+        return resigned
+    }
+
+    override func insertText(
+        _ insertString: Any,
+        replacementRange: NSRange
+    ) {
+        let text: String
+        if let attributed = insertString as? NSAttributedString {
+            text = attributed.string
+        } else if let string = insertString as? String {
+            text = string
+        } else {
+            text = ""
+        }
+
+        guard !text.isEmpty else {
+            return
+        }
+
+        if text == "\n" {
+            inputDelegateBridge?.handleInput("\r")
+        } else {
+            inputDelegateBridge?.handleInput(text)
+        }
+        resetSelection()
+    }
+
+    override func doCommand(by selector: Selector) {
+        switch selector {
+        case #selector(deleteBackward(_:)):
+            inputDelegateBridge?.handleBackspace()
+        case #selector(cancelOperation(_:)):
+            inputDelegateBridge?.handleEscape()
+        case #selector(insertTab(_:)):
+            inputDelegateBridge?.handleTab()
+        case #selector(moveUp(_:)):
+            inputDelegateBridge?.handleArrow("\u{1B}[A")
+        case #selector(moveDown(_:)):
+            inputDelegateBridge?.handleArrow("\u{1B}[B")
+        case #selector(moveLeft(_:)):
+            inputDelegateBridge?.handleArrow("\u{1B}[D")
+        case #selector(moveRight(_:)):
+            inputDelegateBridge?.handleArrow("\u{1B}[C")
+        case #selector(insertNewline(_:)):
+            inputDelegateBridge?.handleInput("\r")
+        default:
+            super.doCommand(by: selector)
+        }
+        resetSelection()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control),
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            inputDelegateBridge?.handleCtrlC()
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        if let text = NSPasteboard.general.string(forType: .string) {
+            inputDelegateBridge?.handlePaste(text)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseUp(with: event)
+    }
+
+    private func resetSelection() {
+        string = ""
+        setSelectedRange(NSRange(location: 0, length: 0))
+    }
+}
+
 #else
 
 struct TerminalInputBridge: View {

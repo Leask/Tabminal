@@ -46,9 +46,7 @@ struct HostEditorView: View {
                 hint: "Use the root host URL, including scheme and port."
             ) {
                 TextField("https://host:9846", text: $model.hostDraft.url)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
+                    .tabminalURLFieldTraits()
                     .accessibilityIdentifier("host.editor.url")
             }
 
@@ -57,8 +55,7 @@ struct HostEditorView: View {
                 hint: "Optional. Leave empty to auto-detect the display name."
             ) {
                 TextField("Host (optional, auto-detect)", text: $model.hostDraft.host)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                    .tabminalNameFieldTraits()
                     .accessibilityIdentifier("host.editor.host")
             }
 
@@ -67,6 +64,7 @@ struct HostEditorView: View {
                 hint: passwordHint
             ) {
                 SecureField(passwordPlaceholder, text: $model.hostDraft.password)
+                    .tabminalPasswordFieldTraits()
                     .accessibilityIdentifier("host.editor.password")
             }
         }

@@ -48,7 +48,7 @@ struct WorkspaceBrowserView: View {
                 Color(red: 0.04, green: 0.05, blue: 0.07)
                     .ignoresSafeArea()
             )
-            .navigationBarHidden(true)
+            .tabminalNavigationChromeHidden()
         }
         .preferredColorScheme(.dark)
         .task {
@@ -280,7 +280,7 @@ struct WorkspaceBrowserView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(tabminalWorkspaceListStyle)
         .scrollContentBackground(.hidden)
         .background(Color.clear)
     }
@@ -446,4 +446,23 @@ struct WorkspaceBrowserView: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+private extension View {
+    @ViewBuilder
+    func tabminalNavigationChromeHidden() -> some View {
+        #if os(macOS)
+        self
+        #else
+        self.navigationBarHidden(true)
+        #endif
+    }
+}
+
+private var tabminalWorkspaceListStyle: some ListStyle {
+    #if os(macOS)
+    return .sidebar
+    #else
+    return .insetGrouped
+    #endif
 }

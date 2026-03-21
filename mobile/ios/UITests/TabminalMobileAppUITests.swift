@@ -5,6 +5,7 @@ final class TabminalMobileAppUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        let debugSidebarRequested = requiresSidebarPresentation
 
         app = MainActor.assumeIsolated {
             let app = XCUIApplication()
@@ -15,17 +16,23 @@ final class TabminalMobileAppUITests: XCTestCase {
             app.launchEnvironment["TABMINAL_MOBILE_DEBUG_HOST"] =
                 "Local Debug"
             app.launchEnvironment["TABMINAL_MOBILE_DEBUG_AUTO_LOGIN"] = "1"
+            if debugSidebarRequested {
+                app.launchEnvironment[
+                    "TABMINAL_MOBILE_DEBUG_PRESENT_SIDEBAR"
+                ] = "1"
+            }
             app.launch()
             return app
         }
     }
 
+    override func tearDownWithError() throws {
+        app = nil
+    }
+
     @MainActor
     func testAutoLoginLandsInTerminalShell() {
         waitForShellReady()
-        XCTAssertTrue(
-            element("terminal.keyboard").waitForExistence(timeout: 10)
-        )
 
         attachScreenshot(named: "terminal-shell")
     }
@@ -33,9 +40,7 @@ final class TabminalMobileAppUITests: XCTestCase {
     @MainActor
     func testSidebarShowsSessionsAndHostControls() {
         waitForShellReady()
-        let toggle = element("shell.sidebarToggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        toggle.tap()
+        ensureSidebarVisible()
 
         XCTAssertTrue(element("host.add").waitForExistence(timeout: 10))
 
@@ -45,11 +50,9 @@ final class TabminalMobileAppUITests: XCTestCase {
     @MainActor
     func testAddHostSheetOpensFromSidebar() {
         waitForShellReady()
-        let toggle = element("shell.sidebarToggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        toggle.tap()
+        ensureSidebarVisible()
 
-        let addHost = element("host.add")
+        let addHost = hostAddButton()
         XCTAssertTrue(addHost.waitForExistence(timeout: 10))
         addHost.tap()
 
@@ -66,13 +69,9 @@ final class TabminalMobileAppUITests: XCTestCase {
     @MainActor
     func testInlineWorkspaceOpensFromSidebarEditorAction() {
         waitForShellReady()
-        let toggle = element("shell.sidebarToggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        toggle.tap()
+        ensureSidebarVisible()
 
-        let editorButton = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "session.editor.")
-        ).firstMatch
+        let editorButton = sessionEditorButton()
         XCTAssertTrue(editorButton.waitForExistence(timeout: 10))
         editorButton.tap()
 
@@ -103,10 +102,54 @@ final class TabminalMobileAppUITests: XCTestCase {
     }
 
     @MainActor
+    private func ensureSidebarVisible() {
+        if hostAddButton().waitForExistence(timeout: 2) {
+            return
+        }
+
+        let toggle = button("shell.sidebarToggle")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        toggle.tap()
+        XCTAssertTrue(hostAddButton().waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     private func element(_ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(identifier: identifier)
             .firstMatch
+    }
+
+    @MainActor
+    private func button(_ identifier: String) -> XCUIElement {
+        app.buttons.matching(identifier: identifier).firstMatch
+    }
+
+    @MainActor
+    private func hostAddButton() -> XCUIElement {
+        let identified = element("host.add")
+        if identified.exists {
+            return identified
+        }
+        return app.buttons["+ Add Host"]
+    }
+
+    @MainActor
+    private func sessionEditorButton() -> XCUIElement {
+        let identified = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "session.editor.")
+        ).firstMatch
+        if identified.exists {
+            return identified
+        }
+        return app.buttons["Toggle Editor"]
+    }
+
+    private var requiresSidebarPresentation: Bool {
+        let name = self.name
+        return name.contains("testSidebarShowsSessionsAndHostControls")
+            || name.contains("testAddHostSheetOpensFromSidebar")
+            || name.contains("testInlineWorkspaceOpensFromSidebarEditorAction")
     }
 
     @MainActor

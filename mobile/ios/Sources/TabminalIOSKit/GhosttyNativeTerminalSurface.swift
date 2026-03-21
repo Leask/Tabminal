@@ -132,6 +132,7 @@ private final class GhosttyHostCoordinator {
         hostView = view
     }
 
+    @MainActor
     func apply(_ feed: TerminalRenderFeed) {
         hostView?.update(
             snapshotText: feed.snapshotText,

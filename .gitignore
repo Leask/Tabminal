@@ -132,6 +132,9 @@ mobile/ios/.build/
 mobile/ios/.swiftpm/
 mobile/ios/DerivedData/
 mobile/ios/build/
+mobile/ios/build-macos/
+mobile/ios/build-visionos/
+mobile/ios/build-visionos-sdk/
 mobile/ios/TabminalMobileApp.xcodeproj/
 *.xcuserstate
 mobile/ios/.DS_Store

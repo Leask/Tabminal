@@ -13,7 +13,12 @@ targets:
     type: application
     supportedDestinations:
       - iOS
-    deploymentTarget: "18.0"
+      - macOS
+      - visionOS
+    deploymentTarget:
+      iOS: "18.0"
+      macOS: "15.0"
+      visionOS: "2.0"
     sources:
       - path: App
     dependencies:
@@ -26,7 +31,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.leask.tabminal.mobile
         PRODUCT_NAME: Tabminal Mobile
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleDarkContent
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
@@ -35,7 +40,7 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         DEVELOPMENT_ASSET_PATHS: "\"\""
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1,2,7"
     scheme:
       testTargets:
         - TabminalMobileAppUITests

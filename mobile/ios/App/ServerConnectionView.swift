@@ -78,7 +78,7 @@ struct ServerConnectionView: View {
 
                 Spacer()
 
-                statusChip("iOS preview", tint: .white.opacity(0.18))
+                statusChip("Apple preview", tint: .white.opacity(0.18))
             }
 
             Text(
@@ -116,10 +116,7 @@ struct ServerConnectionView: View {
                 ) {
                     TextField("https://host:9846",
                               text: $model.mainServerURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
+                        .tabminalURLFieldTraits()
                         .accessibilityIdentifier("login.serverURL")
                 }
 
@@ -128,8 +125,7 @@ struct ServerConnectionView: View {
                     hint: "Optional. Leave empty to auto-detect the display name."
                 ) {
                     TextField("Host (optional, auto-detect)", text: $model.mainHostName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                        .tabminalNameFieldTraits()
                         .accessibilityIdentifier("login.host")
                 }
 
@@ -143,7 +139,7 @@ struct ServerConnectionView: View {
                         "Password (optional, use saved login)",
                         text: $model.mainPassword
                     )
-                        .textContentType(.password)
+                        .tabminalPasswordFieldTraits()
                         .accessibilityIdentifier("login.password")
                 }
             }
@@ -213,7 +209,7 @@ struct ServerConnectionView: View {
                 .foregroundStyle(.white)
 
             VStack(alignment: .leading, spacing: 10) {
-                featureRow("Native iOS app shell")
+                featureRow("Native Apple app shell")
                 featureRow("Backend cluster registry restore")
                 featureRow("Host switching and session tabs")
                 featureRow("Live terminal stream with text fallback renderer")

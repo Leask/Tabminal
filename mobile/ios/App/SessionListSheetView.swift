@@ -77,14 +77,16 @@ struct SessionListSheetView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(red: 0.04, green: 0.05, blue: 0.07))
                     .navigationTitle("Sessions")
-                    .navigationBarTitleDisplayMode(.inline)
+                    .tabminalSheetTitleDisplayMode()
                     .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
+                        ToolbarItem(placement: tabminalLeadingToolbarPlacement) {
                             Button("Close") {
                                 dismiss()
                             }
                         }
-                        ToolbarItemGroup(placement: .topBarTrailing) {
+                        ToolbarItemGroup(
+                            placement: tabminalTrailingToolbarPlacement
+                        ) {
                             if host.connectionState == .needsAuth {
                                 Button("Browser Login") {
                                     openURL(host.endpoint.browserLoginURL)
@@ -133,4 +135,31 @@ struct SessionListSheetView: View {
         }
         .padding(.vertical, 6)
     }
+}
+
+private extension View {
+    @ViewBuilder
+    func tabminalSheetTitleDisplayMode() -> some View {
+        #if os(macOS)
+        self
+        #else
+        self.navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+}
+
+private var tabminalLeadingToolbarPlacement: ToolbarItemPlacement {
+    #if os(macOS)
+    return .navigation
+    #else
+    return .topBarLeading
+    #endif
+}
+
+private var tabminalTrailingToolbarPlacement: ToolbarItemPlacement {
+    #if os(macOS)
+    return .primaryAction
+    #else
+    return .topBarTrailing
+    #endif
 }
