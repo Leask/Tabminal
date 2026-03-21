@@ -27,6 +27,7 @@ public struct TerminalScreenView: View {
     public var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomTrailing) {
+                terminalAccessibilityAnchor
                 TerminalSurfaceHost(
                     transcript: model.terminalTranscript,
                     renderFeed: model.terminalRenderFeed,
@@ -67,7 +68,6 @@ public struct TerminalScreenView: View {
                 updateViewportIfNeeded(newSize)
             }
         }
-        .accessibilityIdentifier("terminal.view")
         .toolbar {
 #if os(iOS)
             ToolbarItemGroup(placement: .keyboard) {
@@ -81,6 +81,16 @@ public struct TerminalScreenView: View {
         .onDisappear {
             model.disconnect()
         }
+    }
+
+    private var terminalAccessibilityAnchor: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel("Terminal View")
+            .accessibilityIdentifier("terminal.view")
+            .allowsHitTesting(false)
     }
 
     private var focusHint: some View {

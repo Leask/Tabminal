@@ -23,6 +23,7 @@ struct HostEditorView: View {
                         Text(model.hostDraftErrorMessage)
                             .font(.footnote)
                             .foregroundStyle(.orange)
+                            .accessibilityIdentifier("host.editor.error")
                     }
 
                     actionButtons
@@ -30,6 +31,7 @@ struct HostEditorView: View {
                 .padding(20)
             }
         }
+        .accessibilityIdentifier("host.editor.view")
         .onChange(of: model.isPresentingHostEditor) { _, presented in
             if !presented {
                 dismiss()
@@ -47,6 +49,7 @@ struct HostEditorView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .accessibilityIdentifier("host.editor.url")
             }
 
             ConnectionField(
@@ -56,6 +59,7 @@ struct HostEditorView: View {
                 TextField("Host (optional, auto-detect)", text: $model.hostDraft.host)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .accessibilityIdentifier("host.editor.host")
             }
 
             ConnectionField(
@@ -63,6 +67,7 @@ struct HostEditorView: View {
                 hint: passwordHint
             ) {
                 SecureField(passwordPlaceholder, text: $model.hostDraft.password)
+                    .accessibilityIdentifier("host.editor.password")
             }
         }
         .padding(20)
@@ -123,6 +128,7 @@ struct HostEditorView: View {
                         .fill(.white.opacity(0.08))
                     )
                 }
+                .accessibilityIdentifier("host.editor.cloudflare")
 
                 Text(
                     "If this host is protected by Cloudflare Access, open the browser and sign in first."
@@ -137,6 +143,7 @@ struct HostEditorView: View {
                     dismiss()
                 }
                 .buttonStyle(SecondaryActionButtonStyle())
+                .accessibilityIdentifier("host.editor.cancel")
 
                 Button {
                     model.submitHostEditor()
@@ -154,6 +161,7 @@ struct HostEditorView: View {
                 .buttonStyle(PrimaryActionButtonStyle())
                 .disabled(model.isSubmittingHostDraft)
                 .opacity(model.isSubmittingHostDraft ? 0.75 : 1)
+                .accessibilityIdentifier("host.editor.submit")
             }
         }
     }

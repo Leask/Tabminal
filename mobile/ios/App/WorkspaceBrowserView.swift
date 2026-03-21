@@ -30,6 +30,7 @@ struct WorkspaceBrowserView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 14) {
+                accessibilityAnchor
                 headerCard
                 panePicker
 
@@ -50,7 +51,6 @@ struct WorkspaceBrowserView: View {
             .navigationBarHidden(true)
         }
         .preferredColorScheme(.dark)
-        .accessibilityIdentifier("workspace.view")
         .task {
             if workspace.entries.isEmpty {
                 await workspace.refreshDirectory()
@@ -65,6 +65,16 @@ struct WorkspaceBrowserView: View {
         .onDisappear {
             workspace.setPresented(false)
         }
+    }
+
+    private var accessibilityAnchor: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel("Workspace View")
+            .accessibilityIdentifier("workspace.view")
+            .allowsHitTesting(false)
     }
 
     private var headerCard: some View {

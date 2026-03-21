@@ -16,8 +16,7 @@ struct AppRootView: View {
                     .transition(.opacity)
             case .ready:
                 MobileShellView(model: model)
-                    .accessibilityIdentifier("root.ready")
-                    .transition(.opacity)
+                .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: model.phase)

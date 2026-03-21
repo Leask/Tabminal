@@ -21,6 +21,7 @@ struct MobileShellView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
+                shellAccessibilityAnchor
                 shellBackground
 
                 VStack(spacing: 0) {
@@ -37,7 +38,6 @@ struct MobileShellView: View {
                 .easeInOut(duration: 0.18),
                 value: model.isActiveWorkspaceVisible
             )
-            .accessibilityIdentifier("shell.view")
             .onAppear {
                 applyDebugPresentationIfNeeded()
             }
@@ -74,6 +74,16 @@ struct MobileShellView: View {
                 Text("Remove \(hostPendingDeletion.displayName) from this device?")
             }
         }
+    }
+
+    private var shellAccessibilityAnchor: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel("Shell Root")
+            .accessibilityIdentifier("shell.view")
+            .allowsHitTesting(false)
     }
 
     private var shellBackground: some View {
@@ -306,6 +316,7 @@ struct MobileShellView: View {
 
     private func sidebar(width: CGFloat) -> some View {
         VStack(spacing: 0) {
+            sidebarAccessibilityAnchor
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 12) {
                     ForEach(model.allSessions, id: \.key) { session in
@@ -329,7 +340,6 @@ struct MobileShellView: View {
             Color(red: 0.07, green: 0.08, blue: 0.10)
                 .opacity(1.0)
         )
-        .accessibilityIdentifier("shell.sidebar")
     }
 
     private func sessionSidebarCard(
@@ -340,66 +350,72 @@ struct MobileShellView: View {
         let hostColor = Color(red: 0.75, green: 0.88, blue: 0.96)
 
         return ZStack {
-            Button {
+            accessibilityAnchor(
+                id: "session.card.\(session.key)",
+                label: "Session Card"
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(session.title)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.top, isActive ? 6 : 0)
+
+                metadataLine(
+                    label: "ID",
+                    value: shortSessionID(session.id),
+                    emphasized: false
+                )
+                metadataLine(
+                    label: "HOST",
+                    value: sessionHostValue(session, hostName: hostName),
+                    emphasized: true,
+                    emphasisColor: hostColor
+                )
+                metadataLine(
+                    label: "PWD",
+                    value: shortenPathFishStyle(session.cwd, env: session.env),
+                    emphasized: false
+                )
+                metadataLine(
+                    label: "SINCE",
+                    value: sinceString(session.createdAt),
+                    emphasized: false
+                )
+
+                if let workspace = model.workspaceForSession(session),
+                   workspace.isPresented,
+                   !workspace.openDocuments.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(
+                            workspace.openDocuments.prefix(2),
+                            id: \.path
+                        ) { document in
+                            Label(document.name, systemImage: "doc.text")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 78, alignment: .topLeading)
+            .padding(.leading, isActive ? 22 : 0)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(sessionCardBackground(selected: isActive))
+            .contentShape(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .onTapGesture {
                 model.selectSession(session)
                 if isCompact {
                     sidebarPresented = false
                 }
-            } label: {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(session.title)
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .padding(.top, isActive ? 6 : 0)
-
-                    metadataLine(
-                        label: "ID",
-                        value: shortSessionID(session.id),
-                        emphasized: false
-                    )
-                    metadataLine(
-                        label: "HOST",
-                        value: sessionHostValue(session, hostName: hostName),
-                        emphasized: true,
-                        emphasisColor: hostColor
-                    )
-                    metadataLine(
-                        label: "PWD",
-                        value: shortenPathFishStyle(session.cwd, env: session.env),
-                        emphasized: false
-                    )
-                    metadataLine(
-                        label: "SINCE",
-                        value: sinceString(session.createdAt),
-                        emphasized: false
-                    )
-
-                    if let workspace = model.workspaceForSession(session),
-                       workspace.isPresented,
-                       !workspace.openDocuments.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(
-                                workspace.openDocuments.prefix(2),
-                                id: \.path
-                            ) { document in
-                                Label(document.name, systemImage: "doc.text")
-                                    .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.45))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.top, 2)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(minHeight: 78, alignment: .topLeading)
-                .padding(.leading, isActive ? 22 : 0)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(sessionCardBackground(selected: isActive))
             }
-            .buttonStyle(.plain)
             .contextMenu {
                 Button("Open Editor", systemImage: "folder") {
                     model.toggleWorkspace(for: session)
@@ -408,7 +424,10 @@ struct MobileShellView: View {
                     model.closeSession(session)
                 }
             }
-            .accessibilityIdentifier("session.card.\(session.key)")
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(session.title)
+            .accessibilityHint("Select tab")
 
             if isActive {
                 overlayActionButton(
@@ -444,6 +463,11 @@ struct MobileShellView: View {
 
     private func hostControlSection() -> some View {
         VStack(spacing: 10) {
+            accessibilityAnchor(
+                id: "hosts.controls",
+                label: "Host Controls"
+            )
+
             ForEach(model.hosts, id: \.id) { host in
                 hostActionRow(host)
             }
@@ -463,7 +487,6 @@ struct MobileShellView: View {
         }
         .padding(12)
         .background(Color.black.opacity(0.16))
-        .accessibilityIdentifier("hosts.controls")
     }
 
     private func hostActionRow(
@@ -597,9 +620,25 @@ struct MobileShellView: View {
                 )
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel ?? accessibilityID)
         .accessibilityIdentifier(accessibilityID)
+    }
+
+    private var sidebarAccessibilityAnchor: some View {
+        accessibilityAnchor(id: "shell.sidebar", label: "Sidebar")
+    }
+
+    private func accessibilityAnchor(
+        id: String,
+        label: String
+    ) -> some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityIdentifier(id)
+            .allowsHitTesting(false)
     }
 
     private func topBarIconButton(
@@ -894,6 +933,7 @@ private struct InlineWorkspacePane: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            accessibilityAnchor(id: "workspace.inline", label: "Inline Workspace")
             header
             Rectangle()
                 .fill(.white.opacity(0.06))
@@ -913,7 +953,6 @@ private struct InlineWorkspacePane: View {
         .clipShape(
             RoundedRectangle(cornerRadius: compact ? 24 : 0, style: .continuous)
         )
-        .accessibilityIdentifier("workspace.inline")
         .task {
             if workspace.entries.isEmpty {
                 await workspace.refreshDirectory()
@@ -1209,5 +1248,18 @@ private struct InlineWorkspacePane: View {
         .accessibilityIdentifier(
             "workspace.inline.\(title.lowercased())"
         )
+    }
+
+    private func accessibilityAnchor(
+        id: String,
+        label: String
+    ) -> some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityIdentifier(id)
+            .allowsHitTesting(false)
     }
 }
