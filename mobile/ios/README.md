@@ -64,6 +64,24 @@ The script will:
 4. Build the app into `mobile/ios/build`
 5. Install and launch `com.leask.tabminal.mobile`
 
+## visionOS
+
+To install the visionOS simulator runtime on this machine:
+
+```bash
+xcodebuild -downloadPlatform visionOS -exportPath /tmp/tabminal-visionos-download
+```
+
+To build and launch the app in the Apple Vision Pro simulator:
+
+```bash
+cd mobile/ios
+./run-visionos.sh
+```
+
+The visionOS path uses the same mobile package and app shell, but targets the
+`xrsimulator` SDK and the installed `Apple Vision Pro` simulator device.
+
 ## Current Runtime Behavior
 
 What works now:

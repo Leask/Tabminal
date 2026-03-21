@@ -9,6 +9,7 @@ struct MobileShellView: View {
 
     @State private var sidebarPresented: Bool = false
     @State private var hostPendingDeletion: MobileAppModel.HostRecord?
+    @State private var hoveredHostID: String?
     @State private var didApplyDebugSidebar = false
     @State private var didApplyDebugWorkspace = false
 
@@ -276,7 +277,10 @@ struct MobileShellView: View {
     ) -> some View {
         TerminalScreenView(
             server: host.endpoint,
-            sessionID: session.id
+            sessionID: session.id,
+            onClose: {
+                model.closeActiveSession()
+            }
         )
         .id(session.key)
         .padding(isCompact ? 8 : 10)
@@ -544,7 +548,7 @@ struct MobileShellView: View {
             }
             .accessibilityIdentifier("host.primary.\(host.id)")
 
-            if !host.isPrimary && model.activeHostID == host.id {
+            if !host.isPrimary && shouldShowHostDeleteButton(host) {
                 overlayActionButton(
                     systemImage: "xmark",
                     accessibilityID: "host.delete.\(host.id)",
@@ -553,6 +557,14 @@ struct MobileShellView: View {
                     hostPendingDeletion = host
                 }
                 .padding(10)
+                .transition(.opacity)
+            }
+        }
+        .onHover { hovering in
+            if hovering {
+                hoveredHostID = host.id
+            } else if hoveredHostID == host.id {
+                hoveredHostID = nil
             }
         }
     }
@@ -743,6 +755,17 @@ struct MobileShellView: View {
         }
 
         return "Reconnect"
+    }
+
+    private func shouldShowHostDeleteButton(
+        _ host: MobileAppModel.HostRecord
+    ) -> Bool {
+        if isCompact {
+            return hoveredHostID == host.id
+                || model.activeHostID == host.id
+        }
+
+        return hoveredHostID == host.id
     }
 
     private func applyDebugPresentationIfNeeded() {

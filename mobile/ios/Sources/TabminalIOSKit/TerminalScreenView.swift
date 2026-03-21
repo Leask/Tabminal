@@ -47,6 +47,27 @@ public struct TerminalScreenView: View {
                     }
                 }
 
+                if let onClose {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .frame(width: 30, height: 30)
+                            .background(.black.opacity(0.28), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(14)
+                    .accessibilityLabel("Close Tab")
+                    .accessibilityIdentifier("terminal.close")
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topTrailing
+                    )
+                }
+
                 TerminalInputBridge(
                     isFocused: $inputFocused,
                     onInput: { input in
