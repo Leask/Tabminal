@@ -8,6 +8,7 @@ SCHEME="TabminalMobileApp"
 DEVICE_NAME="${1:-Apple Vision Pro}"
 APP_BUNDLE="${ROOT_DIR}/build-visionos/Build/Products/Debug-xrsimulator/Tabminal Mobile.app"
 APP_ID="com.leask.tabminal.mobile"
+source "${ROOT_DIR}/ghostty-build-settings.sh"
 
 cd "${ROOT_DIR}"
 
@@ -40,12 +41,16 @@ xcrun simctl bootstatus "${DEVICE_ID}" -b >/dev/null
 open -a Simulator --args -CurrentDeviceUDID "${DEVICE_ID}" \
     >/dev/null 2>&1 || true
 
+XCODEBUILD_ARGS=()
+tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "xrsimulator" XCODEBUILD_ARGS
+
 xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -sdk xrsimulator \
     -destination "id=${DEVICE_ID}" \
     -derivedDataPath "${ROOT_DIR}/build-visionos" \
+    "${XCODEBUILD_ARGS[@]}" \
     build
 
 xcrun simctl boot "${DEVICE_ID}" >/dev/null 2>&1 || true
@@ -84,6 +89,16 @@ fi
 if [[ -n "${TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE:-}" ]]; then
     LAUNCH_ENV+=(
         "SIMCTL_CHILD_TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE=${TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE}"
+    )
+fi
+if [[ -n "${TABMINAL_MOBILE_TERMINAL_RENDERER:-}" ]]; then
+    LAUNCH_ENV+=(
+        "SIMCTL_CHILD_TABMINAL_MOBILE_TERMINAL_RENDERER=${TABMINAL_MOBILE_TERMINAL_RENDERER}"
+    )
+fi
+if [[ -n "${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY:-}" ]]; then
+    LAUNCH_ENV+=(
+        "SIMCTL_CHILD_TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY=${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY}"
     )
 fi
 

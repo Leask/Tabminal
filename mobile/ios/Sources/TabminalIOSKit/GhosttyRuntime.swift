@@ -24,20 +24,29 @@ public struct GhosttyRuntimeStatus: Sendable, Equatable {
         availability == .remoteIOReady
     }
 
+    static let requiredSurfaceSymbols = [
+        "ghostty_init",
+        "ghostty_config_new",
+        "ghostty_config_finalize",
+        "ghostty_config_free",
+        "ghostty_app_new",
+        "ghostty_app_free",
+        "ghostty_app_tick",
+        "ghostty_surface_config_new",
+        "ghostty_surface_new",
+        "ghostty_surface_free",
+        "ghostty_surface_draw",
+        "ghostty_surface_set_size",
+        "ghostty_surface_set_content_scale",
+        "ghostty_surface_set_focus",
+        "ghostty_surface_size",
+        "ghostty_surface_text"
+    ]
+
     static func evaluate(
         libraryPath: String?,
         loadedSymbols: Set<String>
     ) -> GhosttyRuntimeStatus {
-        let requiredSurfaceSymbols = [
-            "ghostty_init",
-            "ghostty_config_new",
-            "ghostty_app_new",
-            "ghostty_surface_config_new",
-            "ghostty_surface_new",
-            "ghostty_surface_draw",
-            "ghostty_surface_set_size",
-            "ghostty_surface_text"
-        ]
         let remoteIOSymbol = String(
             cString: tabminal_ghostty_remote_output_symbol()
         )
@@ -46,7 +55,7 @@ public struct GhosttyRuntimeStatus: Sendable, Equatable {
         guard missing.isEmpty else {
             let detail: String
             if libraryPath == nil {
-                detail = "GhosttyKit runtime not bundled with the app."
+                detail = "GhosttyKit runtime is not linked into the app."
             } else {
                 detail = "Ghostty runtime is present but missing required embedded surface symbols."
             }
@@ -71,7 +80,7 @@ public struct GhosttyRuntimeStatus: Sendable, Equatable {
             availability: .publicSurfaceAPI,
             libraryPath: libraryPath,
             missingSymbols: [remoteIOSymbol],
-            detail: "Ghostty runtime exports embedded iOS surface APIs, but remote PTY output injection is not available."
+            detail: "Ghostty runtime exports embedded surface APIs, but remote PTY output injection is not available."
         )
     }
 }
@@ -82,14 +91,17 @@ public final class GhosttyRuntimeLoader: @unchecked Sendable {
     public let status: GhosttyRuntimeStatus
 
     private let handle: UnsafeMutableRawPointer?
+    private let shouldCloseHandle: Bool
 
     private init() {
 #if canImport(Darwin)
         let loaded = Self.loadRuntime()
         handle = loaded.handle
+        shouldCloseHandle = loaded.shouldCloseHandle
         status = loaded.status
 #else
         handle = nil
+        shouldCloseHandle = false
         status = GhosttyRuntimeStatus(
             availability: .unavailable,
             libraryPath: nil,
@@ -101,14 +113,58 @@ public final class GhosttyRuntimeLoader: @unchecked Sendable {
 
     deinit {
 #if canImport(Darwin)
-        if let handle {
+        if shouldCloseHandle, let handle {
             dlclose(handle)
         }
 #endif
     }
 
     public var defaultRenderer: TerminalRenderer {
-        status.canProcessRemoteOutput ? .ghostty : .text
+        if status.canProcessRemoteOutput,
+           GhosttyPlatformPolicy.prefersGhosttyByDefault {
+            return .ghostty
+        }
+
+        return .text
+    }
+
+    public var canUseGhosttyOverride: Bool {
+        status.canProcessRemoteOutput
+            && GhosttyPlatformPolicy.allowsGhosttyOverride
+    }
+
+#if canImport(Darwin)
+    func resolveSymbol<T>(named name: String, as type: T.Type) -> T? {
+        guard let handle else {
+            return nil
+        }
+        guard let symbol = dlsym(handle, name) else {
+            return nil
+        }
+        return unsafeBitCast(symbol, to: type)
+    }
+#endif
+}
+
+private enum GhosttyPlatformPolicy {
+    static var prefersGhosttyByDefault: Bool {
+#if os(macOS)
+        true
+#else
+        false
+#endif
+    }
+
+    static var allowsGhosttyOverride: Bool {
+        if prefersGhosttyByDefault {
+            return true
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        let value = environment["TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return value == "1" || value == "true" || value == "yes"
     }
 }
 
@@ -116,8 +172,24 @@ public final class GhosttyRuntimeLoader: @unchecked Sendable {
 private extension GhosttyRuntimeLoader {
     static func loadRuntime() -> (
         handle: UnsafeMutableRawPointer?,
+        shouldCloseHandle: Bool,
         status: GhosttyRuntimeStatus
     ) {
+        if let mainHandle = dlopen(nil, RTLD_NOW) {
+            let mainPath = Bundle.main.executableURL?.path
+            let mainSymbols = exportedSymbols(
+                in: mainHandle,
+                names: requiredSymbols()
+            )
+            let mainStatus = GhosttyRuntimeStatus.evaluate(
+                libraryPath: mainPath,
+                loadedSymbols: mainSymbols
+            )
+            if mainStatus.canCreateSurface {
+                return (mainHandle, false, mainStatus)
+            }
+        }
+
         for candidate in candidateLibraryPaths() {
             guard FileManager.default.fileExists(atPath: candidate) else {
                 continue
@@ -129,30 +201,26 @@ private extension GhosttyRuntimeLoader {
 
             let symbolNames = exportedSymbols(
                 in: handle,
-                names: [
-                    "ghostty_init",
-                    "ghostty_config_new",
-                    "ghostty_app_new",
-                    "ghostty_surface_config_new",
-                    "ghostty_surface_new",
-                    "ghostty_surface_draw",
-                    "ghostty_surface_set_size",
-                    "ghostty_surface_text",
-                    "ghostty_surface_process_output"
-                ]
+                names: requiredSymbols()
             )
             let status = GhosttyRuntimeStatus.evaluate(
                 libraryPath: candidate,
                 loadedSymbols: symbolNames
             )
-            return (handle, status)
+            return (handle, true, status)
         }
 
         let status = GhosttyRuntimeStatus.evaluate(
             libraryPath: nil,
             loadedSymbols: []
         )
-        return (nil, status)
+        return (nil, false, status)
+    }
+
+    static func requiredSymbols() -> [String] {
+        GhosttyRuntimeStatus.requiredSurfaceSymbols + [
+            String(cString: tabminal_ghostty_remote_output_symbol())
+        ]
     }
 
     static func exportedSymbols(
@@ -221,23 +289,6 @@ private extension GhosttyRuntimeLoader {
         if url.pathExtension == "framework" {
             let name = url.deletingPathExtension().lastPathComponent
             candidates.insert(url.appendingPathComponent(name).path, at: 0)
-        } else if url.lastPathComponent == "GhosttyKit.xcframework" {
-            candidates.insert(
-                url
-                    .appendingPathComponent("ios-arm64")
-                    .appendingPathComponent("GhosttyKit.framework")
-                    .appendingPathComponent("GhosttyKit")
-                    .path,
-                at: 0
-            )
-            candidates.insert(
-                url
-                    .appendingPathComponent("ios-arm64_x86_64-simulator")
-                    .appendingPathComponent("GhosttyKit.framework")
-                    .appendingPathComponent("GhosttyKit")
-                    .path,
-                at: 1
-            )
         }
 
         return candidates

@@ -21,6 +21,10 @@ targets:
       visionOS: "2.0"
     sources:
       - path: App
+        excludes:
+          - LaunchScreen.storyboard
+      - path: App/LaunchScreen.storyboard
+        buildPhase: resources
     dependencies:
       - package: TabminalMobile
         product: TabminalMobileCore
@@ -31,10 +35,14 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.leask.tabminal.mobile
         PRODUCT_NAME: Tabminal Mobile
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleDarkContent
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=iphoneos*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=iphonesimulator*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=xros*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=xrsimulator*]": LaunchScreen
+        "EXCLUDED_SOURCE_FILE_NAMES[sdk=macosx*]": LaunchScreen.storyboard
         SWIFT_VERSION: "6.0"
         SUPPORTS_MACCATALYST: NO
         CODE_SIGNING_ALLOWED: NO

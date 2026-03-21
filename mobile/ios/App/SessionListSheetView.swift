@@ -88,7 +88,7 @@ struct SessionListSheetView: View {
                             placement: tabminalTrailingToolbarPlacement
                         ) {
                             if host.connectionState == .needsAuth {
-                                Button("Browser Login") {
+                                Button("Cloudflare Login") {
                                     openURL(host.endpoint.browserLoginURL)
                                 }
                                 Button("Reconnect") {

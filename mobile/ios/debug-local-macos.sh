@@ -11,6 +11,14 @@ PID_FILE="${TMPDIR:-/tmp}/tabminal-mobile-macos-debug.pid"
 LOG_FILE="${TMPDIR:-/tmp}/tabminal-mobile-macos-debug.log"
 SCREENSHOT_FILE="${TMPDIR:-/tmp}/tabminal-mobile-macos-debug.png"
 
+release_debug_port() {
+    local existing_pid
+    while IFS= read -r existing_pid; do
+        [[ -z "${existing_pid}" ]] && continue
+        kill "${existing_pid}" >/dev/null 2>&1 || true
+    done < <(lsof -ti "tcp:${DEBUG_PORT}" 2>/dev/null | sort -u)
+}
+
 if [[ -f "${PID_FILE}" ]]; then
     EXISTING_PID="$(cat "${PID_FILE}")"
     if [[ -n "${EXISTING_PID}" ]] && kill -0 "${EXISTING_PID}" >/dev/null 2>&1; then
@@ -18,6 +26,8 @@ if [[ -f "${PID_FILE}" ]]; then
     fi
     rm -f "${PID_FILE}"
 fi
+
+release_debug_port
 
 nohup node "${REPO_ROOT}/src/server.mjs" \
     --host 127.0.0.1 \

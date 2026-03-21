@@ -212,7 +212,7 @@ struct ServerConnectionView: View {
                 featureRow("Native Apple app shell")
                 featureRow("Backend cluster registry restore")
                 featureRow("Host switching and session tabs")
-                featureRow("Live terminal stream with text fallback renderer")
+                featureRow("Ghostty bridge on macOS, text fallback elsewhere")
                 featureRow("Main-host login restore via Keychain")
             }
         }

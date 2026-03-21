@@ -86,6 +86,9 @@ struct HostEditorView: View {
         case .edit:
             return "Optional. Leave empty to keep the existing token."
         case .reconnect:
+            if reconnectHost?.isPrimary == true {
+                return "Optional. Leave empty to reuse the saved main-host login."
+            }
             return "Optional. Leave empty to reconnect with the existing token."
         }
     }
@@ -97,6 +100,9 @@ struct HostEditorView: View {
         case .edit:
             return "Password (optional, keep existing token)"
         case .reconnect:
+            if reconnectHost?.isPrimary == true {
+                return "Password (optional, use saved main login)"
+            }
             return "Password (optional, use existing token)"
         }
     }
@@ -105,7 +111,8 @@ struct HostEditorView: View {
     private var actionButtons: some View {
         VStack(spacing: 14) {
             if case .reconnect(let hostID) = model.hostEditorMode,
-               let host = model.hosts.first(where: { $0.id == hostID }) {
+               let host = model.hosts.first(where: { $0.id == hostID }),
+               !host.isPrimary {
                 Button {
                     openURL(host.endpoint.browserLoginURL)
                 } label: {
@@ -162,6 +169,14 @@ struct HostEditorView: View {
                 .accessibilityIdentifier("host.editor.submit")
             }
         }
+    }
+
+    private var reconnectHost: MobileAppModel.HostRecord? {
+        guard case .reconnect(let hostID) = model.hostEditorMode else {
+            return nil
+        }
+
+        return model.hosts.first(where: { $0.id == hostID })
     }
 }
 

@@ -4,18 +4,10 @@ import Testing
 struct GhosttyRuntimeTests {
     @Test
     func reportsMissingRemoteOutputBridgeWhenOnlyPublicSurfaceAPIExists() {
+        let required = Set(GhosttyRuntimeStatus.requiredSurfaceSymbols)
         let status = GhosttyRuntimeStatus.evaluate(
             libraryPath: "/tmp/GhosttyKit.framework/GhosttyKit",
-            loadedSymbols: [
-                "ghostty_init",
-                "ghostty_config_new",
-                "ghostty_app_new",
-                "ghostty_surface_config_new",
-                "ghostty_surface_new",
-                "ghostty_surface_draw",
-                "ghostty_surface_set_size",
-                "ghostty_surface_text"
-            ]
+            loadedSymbols: required
         )
 
         #expect(status.availability == .publicSurfaceAPI)
@@ -30,19 +22,11 @@ struct GhosttyRuntimeTests {
 
     @Test
     func marksRuntimeReadyWhenRemoteOutputSymbolExists() {
+        let required = Set(GhosttyRuntimeStatus.requiredSurfaceSymbols)
+            .union(["ghostty_surface_process_output"])
         let status = GhosttyRuntimeStatus.evaluate(
             libraryPath: "/tmp/GhosttyKit.framework/GhosttyKit",
-            loadedSymbols: [
-                "ghostty_init",
-                "ghostty_config_new",
-                "ghostty_app_new",
-                "ghostty_surface_config_new",
-                "ghostty_surface_new",
-                "ghostty_surface_draw",
-                "ghostty_surface_set_size",
-                "ghostty_surface_text",
-                "ghostty_surface_process_output"
-            ]
+            loadedSymbols: required
         )
 
         #expect(status.availability == .remoteIOReady)

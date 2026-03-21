@@ -11,6 +11,15 @@ DEBUG_PORT="${TABMINAL_MOBILE_DEBUG_PORT:-19846}"
 DEBUG_PASSWORD="${TABMINAL_MOBILE_DEBUG_PASSWORD:-mobile-debug}"
 PID_FILE="${TMPDIR:-/tmp}/tabminal-mobile-ui.pid"
 LOG_FILE="${TMPDIR:-/tmp}/tabminal-mobile-ui.log"
+source "${ROOT_DIR}/ghostty-build-settings.sh"
+
+release_debug_port() {
+    local existing_pid
+    while IFS= read -r existing_pid; do
+        [[ -z "${existing_pid}" ]] && continue
+        kill "${existing_pid}" >/dev/null 2>&1 || true
+    done < <(lsof -ti "tcp:${DEBUG_PORT}" 2>/dev/null | sort -u)
+}
 
 if [[ -f "${PID_FILE}" ]]; then
     EXISTING_PID="$(cat "${PID_FILE}")"
@@ -19,6 +28,8 @@ if [[ -f "${PID_FILE}" ]]; then
     fi
     rm -f "${PID_FILE}"
 fi
+
+release_debug_port
 
 nohup node /Users/leask/Documents/Tabminal/src/server.mjs \
     --host 127.0.0.1 \
@@ -66,10 +77,14 @@ open -a Simulator --args -CurrentDeviceUDID "${DEVICE_ID}" \
     >/dev/null 2>&1 || true
 xcrun simctl uninstall "${DEVICE_ID}" "${APP_ID}" >/dev/null 2>&1 || true
 
+XCODEBUILD_ARGS=()
+tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "iphonesimulator" XCODEBUILD_ARGS
+
 xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -sdk iphonesimulator \
     -destination "id=${DEVICE_ID}" \
     -derivedDataPath "${ROOT_DIR}/build" \
+    "${XCODEBUILD_ARGS[@]}" \
     test

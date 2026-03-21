@@ -2,6 +2,9 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public struct GhosttyNativeTerminalSurface: View {
     private let transcript: String
@@ -23,9 +26,17 @@ public struct GhosttyNativeTerminalSurface: View {
             backgroundSurface
 
             contentSurface
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: 22,
+                        style: .continuous
+                    )
+                )
 
-            statusBanner
-                .padding(14)
+            if showsFallbackBanner {
+                fallbackBanner
+                    .padding(14)
+            }
         }
         .accessibilityIdentifier("terminal.surface.ghostty")
     }
@@ -41,41 +52,42 @@ public struct GhosttyNativeTerminalSurface: View {
 
     @ViewBuilder
     private var contentSurface: some View {
-#if canImport(UIKit)
         if runtimeStatus.canProcessRemoteOutput {
-            GhosttyHostContainer(renderFeed: renderFeed)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: 22,
-                        style: .continuous
-                    )
-                )
+            nativeSurface
         } else {
-            fallbackSurface
+            TextTerminalSurface(
+                transcript: transcript,
+                emptyState: "Waiting for shell output..."
+            )
         }
+    }
+
+    @ViewBuilder
+    private var nativeSurface: some View {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        GhosttyAppKitHostContainer(renderFeed: renderFeed)
+#elseif canImport(UIKit)
+        GhosttyUIKitHostContainer(renderFeed: renderFeed)
 #else
-        fallbackSurface
+        TextTerminalSurface(
+            transcript: transcript,
+            emptyState: "Waiting for shell output..."
+        )
 #endif
     }
 
-    private var fallbackSurface: some View {
-        TextTerminalSurface(
-            transcript: transcript,
-            emptyState: """
-            Ghostty renderer selected.
-            \(runtimeStatus.detail)
-            """
-        )
+    private var showsFallbackBanner: Bool {
+        !runtimeStatus.canProcessRemoteOutput
     }
 
-    private var statusBanner: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Ghostty")
+    private var fallbackBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Ghostty Unavailable")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
-            Text(statusTitle)
+            Text(runtimeStatus.detail)
                 .font(.caption2)
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(.white.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 10)
@@ -89,43 +101,35 @@ public struct GhosttyNativeTerminalSurface: View {
                 .strokeBorder(.white.opacity(0.08), lineWidth: 1)
         }
     }
-
-    private var statusTitle: String {
-        switch runtimeStatus.availability {
-        case .unavailable:
-            return "Native runtime not bundled. Falling back to text renderer."
-        case .publicSurfaceAPI:
-            return "Embedded iOS surface API found. Remote-output injection is still missing."
-        case .remoteIOReady:
-            return "Runtime exports a remote-output bridge. Native host scaffold is active."
-        }
-    }
 }
 
 #if canImport(UIKit)
-private struct GhosttyHostContainer: UIViewRepresentable {
+private struct GhosttyUIKitHostContainer: UIViewRepresentable {
     let renderFeed: TerminalRenderFeed
 
-    func makeCoordinator() -> GhosttyHostCoordinator {
-        GhosttyHostCoordinator()
+    func makeCoordinator() -> GhosttyUIKitHostCoordinator {
+        GhosttyUIKitHostCoordinator()
     }
 
-    func makeUIView(context: Context) -> GhosttyHostView {
-        let view = GhosttyHostView()
+    func makeUIView(context: Context) -> GhosttyUIKitHostView {
+        let view = GhosttyUIKitHostView()
         context.coordinator.attach(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: GhosttyHostView, context: Context) {
+    func updateUIView(
+        _ uiView: GhosttyUIKitHostView,
+        context: Context
+    ) {
         context.coordinator.attach(to: uiView)
         context.coordinator.apply(renderFeed)
     }
 }
 
-private final class GhosttyHostCoordinator {
-    private weak var hostView: GhosttyHostView?
+private final class GhosttyUIKitHostCoordinator {
+    private weak var hostView: GhosttyUIKitHostView?
 
-    func attach(to view: GhosttyHostView) {
+    func attach(to view: GhosttyUIKitHostView) {
         guard hostView !== view else {
             return
         }
@@ -134,59 +138,47 @@ private final class GhosttyHostCoordinator {
 
     @MainActor
     func apply(_ feed: TerminalRenderFeed) {
-        hostView?.update(
-            snapshotText: feed.snapshotText,
-            outputText: feed.outputText
-        )
+        hostView?.applyRenderFeed(feed)
+    }
+}
+#endif
+
+#if canImport(AppKit)
+private struct GhosttyAppKitHostContainer: NSViewRepresentable {
+    let renderFeed: TerminalRenderFeed
+
+    func makeCoordinator() -> GhosttyAppKitHostCoordinator {
+        GhosttyAppKitHostCoordinator()
+    }
+
+    func makeNSView(context: Context) -> GhosttyAppKitHostView {
+        let view = GhosttyAppKitHostView()
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(
+        _ nsView: GhosttyAppKitHostView,
+        context: Context
+    ) {
+        context.coordinator.attach(to: nsView)
+        context.coordinator.apply(renderFeed)
     }
 }
 
-private final class GhosttyHostView: UIView {
-    private let statusLabel = UILabel()
+private final class GhosttyAppKitHostCoordinator {
+    private weak var hostView: GhosttyAppKitHostView?
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = UIColor(
-            red: 0.05,
-            green: 0.06,
-            blue: 0.08,
-            alpha: 1.0
-        )
-        layer.cornerRadius = 22
-        layer.masksToBounds = true
-
-        statusLabel.numberOfLines = 0
-        statusLabel.font = UIFont.monospacedSystemFont(
-            ofSize: 12,
-            weight: .regular
-        )
-        statusLabel.textColor = UIColor(white: 1.0, alpha: 0.72)
-        statusLabel.text = """
-        Ghostty native host scaffold initialized.
-        Waiting for remote-output capable runtime bridge.
-        """
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(statusLabel)
-        NSLayoutConstraint.activate([
-            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            statusLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16)
-        ])
+    func attach(to view: GhosttyAppKitHostView) {
+        guard hostView !== view else {
+            return
+        }
+        hostView = view
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func update(snapshotText: String, outputText: String) {
-        let snapshotInfo = snapshotText.isEmpty ? "empty" : "loaded"
-        let chunkInfo = outputText.isEmpty ? "idle" : "pending chunk"
-        statusLabel.text = """
-        Ghostty native host scaffold initialized.
-        Snapshot: \(snapshotInfo)
-        Output: \(chunkInfo)
-        """
+    @MainActor
+    func apply(_ feed: TerminalRenderFeed) {
+        hostView?.applyRenderFeed(feed)
     }
 }
 #endif

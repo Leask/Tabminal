@@ -50,7 +50,7 @@ struct HostListSheetView: View {
                                             dismiss()
                                             model.beginReconnectHost(host.id)
                                         }
-                                        Button("Open in Browser") {
+                                        Button("Cloudflare Login") {
                                             openURL(host.endpoint.browserLoginURL)
                                         }
                                         Button(

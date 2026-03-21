@@ -6,6 +6,10 @@ public enum TerminalRenderer: String, Sendable, CaseIterable {
 
     public static var current: TerminalRenderer {
         if let override = rendererOverride {
+            if override == .ghostty,
+               !GhosttyRuntimeLoader.shared.canUseGhosttyOverride {
+                return .text
+            }
             return override
         }
 

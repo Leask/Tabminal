@@ -428,7 +428,7 @@ final class MobileAppModel {
                 _ = ensureWorkspace(for: session, on: host.endpoint)
                 activeHostID = hostID
                 activeSessionKey = session.key
-            } catch let TabminalClientError.accessLoginRequired(_) {
+            } catch TabminalClientError.accessLoginRequired {
                 updateHost(hostID) { current in
                     if current.isPrimary {
                         current.connectionState = .error
@@ -887,7 +887,7 @@ final class MobileAppModel {
             if activeHostID == hostID || activeSessionKey == nil {
                 resolveSelection(for: hostID)
             }
-        } catch let TabminalClientError.accessLoginRequired(_) {
+        } catch TabminalClientError.accessLoginRequired {
             updateHost(hostID) { current in
                 if current.isPrimary {
                     current.connectionState = .error

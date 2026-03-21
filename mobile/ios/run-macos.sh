@@ -10,16 +10,21 @@ APP_BUNDLE="${DERIVED_DATA_PATH}/Build/Products/Debug/Tabminal Mobile.app"
 APP_EXECUTABLE="${APP_BUNDLE}/Contents/MacOS/Tabminal Mobile"
 APP_NAME="Tabminal Mobile"
 LOG_FILE="${TMPDIR:-/tmp}/tabminal-mobile-macos.log"
+source "${ROOT_DIR}/ghostty-build-settings.sh"
 
 cd "${ROOT_DIR}"
 
 xcodegen generate >/dev/null
+
+XCODEBUILD_ARGS=()
+tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "macosx" XCODEBUILD_ARGS
 
 xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -destination "platform=macOS" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    "${XCODEBUILD_ARGS[@]}" \
     build
 
 osascript -e "tell application \"${APP_NAME}\" to quit" >/dev/null 2>&1 \
@@ -52,6 +57,16 @@ fi
 if [[ -n "${TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE:-}" ]]; then
     LAUNCH_ENV+=(
         "TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE=${TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE}"
+    )
+fi
+if [[ -n "${TABMINAL_MOBILE_TERMINAL_RENDERER:-}" ]]; then
+    LAUNCH_ENV+=(
+        "TABMINAL_MOBILE_TERMINAL_RENDERER=${TABMINAL_MOBILE_TERMINAL_RENDERER}"
+    )
+fi
+if [[ -n "${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY:-}" ]]; then
+    LAUNCH_ENV+=(
+        "TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY=${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY}"
     )
 fi
 
