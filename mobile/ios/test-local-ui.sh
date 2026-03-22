@@ -12,6 +12,7 @@ DEBUG_PASSWORD="${TABMINAL_MOBILE_DEBUG_PASSWORD:-mobile-debug}"
 PID_FILE="${TMPDIR:-/tmp}/tabminal-mobile-ui.pid"
 LOG_FILE="${TMPDIR:-/tmp}/tabminal-mobile-ui.log"
 source "${ROOT_DIR}/ghostty-build-settings.sh"
+source "${ROOT_DIR}/xcodebuild-lock.sh"
 
 release_debug_port() {
     local existing_pid
@@ -70,6 +71,7 @@ if [[ -z "${DEVICE_ID}" ]]; then
 fi
 
 cd "${ROOT_DIR}"
+tabminal_acquire_xcodebuild_lock
 xcodegen generate >/dev/null
 xcrun simctl boot "${DEVICE_ID}" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "${DEVICE_ID}" -b >/dev/null

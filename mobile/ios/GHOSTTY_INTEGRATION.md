@@ -1,25 +1,29 @@
 # Ghostty Integration Notes
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 
 ## Current status
 
 Tabminal iOS now includes a concrete native Ghostty integration path:
 
 1. raw VT output is preserved alongside the plain-text transcript
-2. renderer selection can switch to `ghostty`
-3. a native Ghostty runtime loader probes for `GhosttyKit.framework`
-4. the package now includes a thin C shim target (`CGhosttyShim`) to
+2. the Apple client can drive a native Ghostty surface through the
+   custom-I/O bridge
+3. renderer selection now defaults to `ghostty` whenever the runtime
+   exports the required remote-I/O symbols
+4. a native Ghostty runtime loader probes for `GhosttyKit.framework`
+   and build-linked xcframework artifacts
+5. the package includes a thin C shim target (`CGhosttyShim`) to
    stabilize the expected runtime artifact and symbol names
-5. a native host scaffold (`GhosttyNativeTerminalSurface`) is now the
-   render entrypoint when `ghostty` is selected
+6. a native host scaffold (`GhosttyNativeTerminalSurface`) is now the
+   render entrypoint when Ghostty is available
 
-This all compiles today without changing the Tabminal backend protocol.
+This all works without changing the Tabminal backend protocol.
 
 ## Current conclusion
 
-Tabminal iOS cannot switch to the public `libghostty` C API directly yet
-without changing the integration surface.
+Tabminal iOS can use `libghostty` directly when the runtime exposes the
+custom-I/O bridge used by remote terminal clients.
 
 The reason is specific and technical:
 
@@ -27,38 +31,28 @@ The reason is specific and technical:
    input, selection, resize, and config hooks.
 2. Tabminal needs a terminal renderer that can consume a remote PTY byte
    stream coming from the existing WebSocket protocol.
-3. The public C API currently does not expose a function equivalent to
-   Ghostty's internal `Termio.processOutput(...)` for feeding external
-   terminal output bytes into a surface.
-4. Ghostty does have this capability internally in Zig, but it is not
-   exported in `include/ghostty.h`.
+3. Stock upstream builds do not currently expose the remote client bridge
+   that Tabminal needs.
+4. The `custom-io` Ghostty fork used by mature Apple clients does export
+   this bridge in `include/ghostty.h`.
 
 ## Source evidence
 
-- Public C header:
-  - `/tmp/ghostty-tabminal/include/ghostty.h`
-  - Public surface API includes:
-    - `ghostty_surface_new`
+- Custom-I/O C header:
+  - `wiedymi/ghostty` `custom-io`
+  - Exported surface API includes:
+    - `ghostty_surface_feed_data`
+    - `ghostty_surface_set_write_callback`
     - `ghostty_surface_draw`
-    - `ghostty_surface_key`
+    - `ghostty_surface_refresh`
     - `ghostty_surface_text`
-    - `ghostty_surface_set_size`
-  - There is no exported API for "feed remote output bytes".
 
-- Internal termio API:
-  - `/tmp/ghostty-tabminal/src/termio/Termio.zig`
-  - `pub fn processOutput(self: *Termio, buf: []const u8) void`
-  - This is the exact kind of API Tabminal needs for remote PTY output.
-
-- Surface wiring:
-  - `/tmp/ghostty-tabminal/src/Surface.zig`
-  - The current embedded path initializes termio with `.backend = .exec`
-  - Surface owns its own child process / PTY model.
-
-- Embedded C exports:
-  - `/tmp/ghostty-tabminal/src/apprt/embedded.zig`
-  - Exported C functions stop at surface/app/input/render/config APIs.
-  - No exported manual-output path exists today.
+- Custom-I/O implementation:
+  - `src/apprt/embedded.zig`
+  - `ghostty_surface_feed_data(...)`
+    forwards to `ptr.core_surface.io.processOutput(...)`
+  - `ghostty_surface_set_write_callback(...)`
+    updates the terminal I/O thread callback backend
 
 ## What this means for Tabminal
 
@@ -69,30 +63,27 @@ It is a remote terminal client with:
 - heartbeat-based session reconciliation
 - remote session ownership on the backend
 
-Therefore, for iOS, the missing bridge is:
+Therefore, for iOS, the required bridge is:
 
-- remote output bytes -> Ghostty termio
-
-Input already maps well:
-
-- keyboard text -> Ghostty surface key/text APIs
-
-Output does not:
-
-- backend WS output currently cannot be injected through the public API
+- backend WS output -> `ghostty_surface_feed_data`
+- local terminal input -> Ghostty write callback -> backend WS input
 
 ## Practical next step
 
-The smallest viable path is a narrow Ghostty fork or upstream patch that
-adds a supported embedded/manual IO bridge. The ideal exported C entry
-points would look conceptually like:
+The viable path is a custom-I/O Ghostty runtime. With that, Tabminal can
+keep the existing backend protocol unchanged and replace only the renderer
+host.
 
-- `ghostty_surface_process_output(surface, bytes, len)`
-- optionally a manual backend/surface config that disables local PTY exec
-- optionally an explicit surface input queue/write API if needed
+Current platform state:
 
-With that, Tabminal can keep the existing backend protocol unchanged and
-replace only the iOS renderer host.
+- `iOS/iPadOS`
+  Ghostty custom-I/O renderer path is working and UI smoke tests pass.
+- `macOS`
+  Ghostty renderer path is working.
+- `visionOS`
+  The app-side bridge now compiles and runs, but the current vendored
+  `GhosttyKit.xcframework` does not ship an `xros/xrsimulator` slice, so
+  the app falls back to text mode there.
 
 ## What has already been prepared in this repo
 
@@ -110,19 +101,19 @@ session, shell, or workspace UI.
 
 Current renderer behavior:
 
-- default: text renderer, because public Ghostty does not yet expose a
-  remote-output symbol
-- forced `ghostty` mode: native runtime loader + host scaffold + status
-  banner + fallback transcript view
-- auto-upgrade to true Ghostty renderer is ready to happen once the
-  runtime exports the missing remote-output symbol
+- default: Ghostty renderer whenever the runtime exports the embedded
+  surface API plus remote-I/O symbols
+- fallback: text renderer when the runtime or platform slice is missing
+- Ghostty mode: native runtime loader + host scaffold + custom-I/O bridge
+  when the runtime exports the required symbols
 
 ## Recommendation
 
 Do not attempt to fake remote rendering by abusing Ghostty's local PTY
 execution path. The correct move remains:
 
-1. add a tiny, explicit embedded/manual output API on top of Ghostty
+1. use a Ghostty runtime that exports the custom-I/O bridge
 2. keep the Tabminal server protocol unchanged
-3. swap the iOS renderer host from scaffolded to live once that symbol is
-   available end-to-end
+3. continue hardening the Apple host views around Ghostty's IOSurface model
+4. add `xros/xrsimulator` slices to the Ghostty vendor pipeline so
+   visionOS can leave text fallback

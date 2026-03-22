@@ -2,17 +2,20 @@ import SwiftUI
 
 public struct TerminalSurfaceHost: View {
     private let transcript: String
-    private let renderFeed: TerminalRenderFeed
+    private let ghosttyController: GhosttyTerminalController
     private let renderer: TerminalRenderer
+    private let onGhosttyWrite: ((String) -> Void)?
 
     public init(
         transcript: String,
-        renderFeed: TerminalRenderFeed = TerminalRenderFeed(),
-        renderer: TerminalRenderer = .current
+        ghosttyController: GhosttyTerminalController = GhosttyTerminalController(),
+        renderer: TerminalRenderer = .current,
+        onGhosttyWrite: ((String) -> Void)? = nil
     ) {
         self.transcript = transcript
-        self.renderFeed = renderFeed
+        self.ghosttyController = ghosttyController
         self.renderer = renderer
+        self.onGhosttyWrite = onGhosttyWrite
     }
 
     public var body: some View {
@@ -24,7 +27,8 @@ public struct TerminalSurfaceHost: View {
         case .ghostty:
             GhosttyNativeTerminalSurface(
                 transcript: transcript,
-                renderFeed: renderFeed
+                controller: ghosttyController,
+                onGhosttyWrite: onGhosttyWrite
             )
         }
     }

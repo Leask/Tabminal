@@ -32,6 +32,9 @@ private typealias GhosttySurfaceNewFn = @convention(c) (
     UnsafePointer<ghostty_surface_config_s>?
 ) -> ghostty_surface_t?
 private typealias GhosttySurfaceFreeFn = @convention(c) (ghostty_surface_t?) -> Void
+private typealias GhosttySurfaceRefreshFn = @convention(c) (
+    ghostty_surface_t?
+) -> Void
 private typealias GhosttySurfaceDrawFn = @convention(c) (ghostty_surface_t?) -> Void
 private typealias GhosttySurfaceSetSizeFn = @convention(c) (
     ghostty_surface_t?,
@@ -47,13 +50,27 @@ private typealias GhosttySurfaceSetFocusFn = @convention(c) (
     ghostty_surface_t?,
     Bool
 ) -> Void
+private typealias GhosttySurfaceSetOcclusionFn = @convention(c) (
+    ghostty_surface_t?,
+    Bool
+) -> Void
 private typealias GhosttySurfaceSizeFn = @convention(c) (
     ghostty_surface_t?
 ) -> ghostty_surface_size_s
-private typealias GhosttySurfaceProcessOutputFn = @convention(c) (
+private typealias GhosttySurfaceTextFn = @convention(c) (
     ghostty_surface_t?,
     UnsafePointer<CChar>?,
     UInt
+) -> Void
+private typealias GhosttySurfaceFeedDataFn = @convention(c) (
+    ghostty_surface_t?,
+    UnsafePointer<UInt8>?,
+    Int
+) -> Void
+private typealias GhosttySurfaceSetWriteCallbackFn = @convention(c) (
+    ghostty_surface_t?,
+    ghostty_surface_write_fn?,
+    UnsafeMutableRawPointer?
 ) -> Void
 
 private final class GhosttyEmbeddedSymbols {
@@ -67,12 +84,16 @@ private final class GhosttyEmbeddedSymbols {
     let surfaceConfigNew: GhosttySurfaceConfigNewFn
     let surfaceNew: GhosttySurfaceNewFn
     let surfaceFree: GhosttySurfaceFreeFn
+    let surfaceRefresh: GhosttySurfaceRefreshFn
     let surfaceDraw: GhosttySurfaceDrawFn
     let surfaceSetSize: GhosttySurfaceSetSizeFn
     let surfaceSetContentScale: GhosttySurfaceSetContentScaleFn
     let surfaceSetFocus: GhosttySurfaceSetFocusFn
+    let surfaceSetOcclusion: GhosttySurfaceSetOcclusionFn
     let surfaceSize: GhosttySurfaceSizeFn
-    let surfaceProcessOutput: GhosttySurfaceProcessOutputFn
+    let surfaceText: GhosttySurfaceTextFn
+    let surfaceFeedData: GhosttySurfaceFeedDataFn
+    let surfaceSetWriteCallback: GhosttySurfaceSetWriteCallbackFn
 
     init?(loader: GhosttyRuntimeLoader = .shared) {
         guard let ghosttyInit = loader.resolveSymbol(
@@ -115,6 +136,10 @@ private final class GhosttyEmbeddedSymbols {
             named: "ghostty_surface_free",
             as: GhosttySurfaceFreeFn.self
         ),
+        let surfaceRefresh = loader.resolveSymbol(
+            named: "ghostty_surface_refresh",
+            as: GhosttySurfaceRefreshFn.self
+        ),
         let surfaceDraw = loader.resolveSymbol(
             named: "ghostty_surface_draw",
             as: GhosttySurfaceDrawFn.self
@@ -131,13 +156,25 @@ private final class GhosttyEmbeddedSymbols {
             named: "ghostty_surface_set_focus",
             as: GhosttySurfaceSetFocusFn.self
         ),
+        let surfaceSetOcclusion = loader.resolveSymbol(
+            named: "ghostty_surface_set_occlusion",
+            as: GhosttySurfaceSetOcclusionFn.self
+        ),
         let surfaceSize = loader.resolveSymbol(
             named: "ghostty_surface_size",
             as: GhosttySurfaceSizeFn.self
         ),
-        let surfaceProcessOutput = loader.resolveSymbol(
-            named: "ghostty_surface_process_output",
-            as: GhosttySurfaceProcessOutputFn.self
+        let surfaceText = loader.resolveSymbol(
+            named: "ghostty_surface_text",
+            as: GhosttySurfaceTextFn.self
+        ),
+        let surfaceFeedData = loader.resolveSymbol(
+            named: "ghostty_surface_feed_data",
+            as: GhosttySurfaceFeedDataFn.self
+        ),
+        let surfaceSetWriteCallback = loader.resolveSymbol(
+            named: "ghostty_surface_set_write_callback",
+            as: GhosttySurfaceSetWriteCallbackFn.self
         ) else {
             return nil
         }
@@ -152,12 +189,16 @@ private final class GhosttyEmbeddedSymbols {
         self.surfaceConfigNew = surfaceConfigNew
         self.surfaceNew = surfaceNew
         self.surfaceFree = surfaceFree
+        self.surfaceRefresh = surfaceRefresh
         self.surfaceDraw = surfaceDraw
         self.surfaceSetSize = surfaceSetSize
         self.surfaceSetContentScale = surfaceSetContentScale
         self.surfaceSetFocus = surfaceSetFocus
+        self.surfaceSetOcclusion = surfaceSetOcclusion
         self.surfaceSize = surfaceSize
-        self.surfaceProcessOutput = surfaceProcessOutput
+        self.surfaceText = surfaceText
+        self.surfaceFeedData = surfaceFeedData
+        self.surfaceSetWriteCallback = surfaceSetWriteCallback
     }
 }
 
@@ -181,11 +222,10 @@ private func tabminalGhosttyReadClipboard(
     _ surface: UnsafeMutableRawPointer?,
     _ clipboard: ghostty_clipboard_e,
     _ request: UnsafeMutableRawPointer?
-) -> Bool {
+) {
     _ = surface
     _ = clipboard
     _ = request
-    return false
 }
 
 private func tabminalGhosttyConfirmReadClipboard(
@@ -212,6 +252,72 @@ private func tabminalGhosttyWriteClipboard(
     _ = contents
     _ = count
     _ = confirmed
+}
+
+private func tabminalGhosttyCloseSurface(
+    _ surface: UnsafeMutableRawPointer?,
+    _ processAlive: Bool
+) {
+    guard let surface else {
+        return
+    }
+
+    let ownerAddress = Int(bitPattern: surface)
+    DispatchQueue.main.async {
+        guard let ownerPointer = UnsafeMutableRawPointer(
+            bitPattern: ownerAddress
+        ) else {
+            return
+        }
+        let owner = Unmanaged<AnyObject>
+            .fromOpaque(ownerPointer)
+            .takeUnretainedValue()
+        guard let handler = owner as? GhosttySurfaceLifecycleHandling else {
+            return
+        }
+        handler.handleGhosttySurfaceClosed(processAlive: processAlive)
+    }
+}
+
+@MainActor
+private protocol GhosttySurfaceWriteHandling: AnyObject {
+    func handleGhosttyWrite(_ data: Data)
+}
+
+@MainActor
+private protocol GhosttySurfaceLifecycleHandling: AnyObject {
+    func handleGhosttySurfaceClosed(processAlive: Bool)
+}
+
+private func tabminalGhosttyWriteToRemote(
+    _ userdata: UnsafeMutableRawPointer?,
+    _ data: UnsafePointer<UInt8>?,
+    _ len: Int
+) {
+    guard let userdata, let data, len > 0 else {
+        return
+    }
+
+    let payload = Data(
+        bytes: UnsafeRawPointer(data),
+        count: len
+    )
+    let ownerAddress = Int(bitPattern: userdata)
+
+    DispatchQueue.main.async {
+        guard let ownerPointer = UnsafeMutableRawPointer(
+            bitPattern: ownerAddress
+        ) else {
+            return
+        }
+        let owner = Unmanaged<AnyObject>
+            .fromOpaque(ownerPointer)
+            .takeUnretainedValue()
+        guard let handler = owner as? GhosttySurfaceWriteHandling else {
+            return
+        }
+        handler.handleGhosttyWrite(payload)
+    }
 }
 
 private final class GhosttyEmbeddedAppRuntime: @unchecked Sendable {
@@ -251,9 +357,10 @@ private final class GhosttyEmbeddedAppRuntime: @unchecked Sendable {
         runtimeConfig.wakeup_cb = tabminalGhosttyWakeup
         runtimeConfig.action_cb = tabminalGhosttyAction
         runtimeConfig.read_clipboard_cb = tabminalGhosttyReadClipboard
-        runtimeConfig.confirm_read_clipboard_cb = tabminalGhosttyConfirmReadClipboard
+        runtimeConfig.confirm_read_clipboard_cb =
+            tabminalGhosttyConfirmReadClipboard
         runtimeConfig.write_clipboard_cb = tabminalGhosttyWriteClipboard
-        runtimeConfig.close_surface_cb = nil
+        runtimeConfig.close_surface_cb = tabminalGhosttyCloseSurface
 
         guard let app = symbols.appNew(&runtimeConfig, config) else {
             symbols.configFree(config)
@@ -285,10 +392,9 @@ private final class GhosttyEmbeddedAppRuntime: @unchecked Sendable {
 
         var config = symbols.surfaceConfigNew()
         config.userdata = Unmanaged.passUnretained(hostView).toOpaque()
-        config.font_size = 0
         config.wait_after_command = false
-        config.manual_io = true
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        config.use_custom_io = true
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
         if let view = hostView as? NSView {
@@ -347,21 +453,79 @@ private final class GhosttyEmbeddedAppRuntime: @unchecked Sendable {
     }
 
     @MainActor
+    func setSurfaceOcclusion(_ surface: ghostty_surface_t?, visible: Bool) {
+        guard let symbols else {
+            return
+        }
+        symbols.surfaceSetOcclusion(surface, visible)
+    }
+
+    @MainActor
+    func setWriteCallback(
+        _ surface: ghostty_surface_t?,
+        owner: GhosttySurfaceWriteHandling?
+    ) {
+        guard let symbols else {
+            return
+        }
+
+        let userdata = owner.map {
+            Unmanaged.passUnretained($0 as AnyObject).toOpaque()
+        }
+        symbols.surfaceSetWriteCallback(
+            surface,
+            owner == nil ? nil : tabminalGhosttyWriteToRemote,
+            userdata
+        )
+    }
+
+    @MainActor
     func feedOutput(_ surface: ghostty_surface_t?, text: String) {
+        guard let data = text.data(using: .utf8) else {
+            return
+        }
+        feedOutput(surface, data: data)
+    }
+
+    @MainActor
+    func feedOutput(_ surface: ghostty_surface_t?, data: Data) {
+        guard let symbols, let surface, !data.isEmpty else {
+            return
+        }
+
+        data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress?
+                .assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+            symbols.surfaceFeedData(surface, baseAddress, buffer.count)
+        }
+    }
+
+    @MainActor
+    func requestRender(_ surface: ghostty_surface_t?) {
+        guard let symbols, let surface else {
+            return
+        }
+        scheduleTick()
+        symbols.surfaceRefresh(surface)
+        symbols.surfaceDraw(surface)
+    }
+
+    @MainActor
+    func sendInput(_ surface: ghostty_surface_t?, text: String) {
         guard let symbols, let surface, !text.isEmpty else {
             return
         }
 
-        let data = Array(text.utf8)
-        data.withUnsafeBufferPointer { buffer in
+        let bytes = text.utf8CString
+        bytes.withUnsafeBufferPointer { buffer in
             guard let baseAddress = buffer.baseAddress else {
                 return
             }
-            let raw = UnsafeRawPointer(baseAddress)
-                .assumingMemoryBound(to: CChar.self)
-            symbols.surfaceProcessOutput(surface, raw, UInt(buffer.count))
+            let length = max(buffer.count - 1, 0)
+            symbols.surfaceText(surface, baseAddress, UInt(length))
         }
-        symbols.surfaceDraw(surface)
     }
 
     @MainActor
@@ -394,26 +558,39 @@ private final class GhosttyEmbeddedAppRuntime: @unchecked Sendable {
     }
 }
 
-@MainActor
-protocol GhosttySurfaceHosting: AnyObject {
-    func applyRenderFeed(_ feed: TerminalRenderFeed)
-}
-
 #if canImport(UIKit)
 @MainActor
-final class GhosttyUIKitHostView: UIView, GhosttySurfaceHosting {
+final class GhosttyUIKitHostView: UIView,
+    GhosttyTerminalSurfaceDriver,
+    GhosttySurfaceWriteHandling,
+    GhosttySurfaceLifecycleHandling {
+    private static let renderPassByteBudget = 4 * 1024
+
     private let runtime = GhosttyEmbeddedAppRuntime.shared
     private var surface: ghostty_surface_t?
-    private var lastSnapshotSequence: UInt64 = .max
-    private var lastOutputSequence: UInt64 = .max
-    private var pendingFeed = TerminalRenderFeed()
+    private var surfaceGeneration: UInt64 = 0
+    private var isShuttingDown = false
+    private var isPaused = true
+    private var customIORedrawScheduled = false
+    private var surfaceInitializationScheduled = false
+    private var hasAppliedSnapshot = false
+    private var currentSnapshotText: String = ""
+    private var currentOutputText: String = ""
+    private var pendingInputTexts: [String] = []
+    private var pendingRenderChunks: [Data] = []
+    private var renderDispatchScheduled = false
+    private var writeFilter = GhosttyWriteFilter()
+    private var onGhosttyWrite: ((String) -> Void)?
+    private var lastPixelSize: CGSize = .zero
+    private var lastContentScale: CGFloat = 0
 
     override class var layerClass: AnyClass {
-        CAMetalLayer.self
+        CALayer.self
     }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        contentScaleFactor = resolvedDisplayScale
         backgroundColor = UIColor(
             red: 0.05,
             green: 0.06,
@@ -422,6 +599,8 @@ final class GhosttyUIKitHostView: UIView, GhosttySurfaceHosting {
         )
         clipsToBounds = true
         layer.cornerRadius = 22
+        layer.masksToBounds = true
+        setupLifecycleObservers()
     }
 
     @available(*, unavailable)
@@ -431,68 +610,456 @@ final class GhosttyUIKitHostView: UIView, GhosttySurfaceHosting {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil {
-            runtime.freeSurface(surface)
-            surface = nil
+        guard !isShuttingDown else {
             return
         }
-        scheduleSurfaceInitialization()
+
+        if window == nil {
+            pauseRendering()
+            destroySurface()
+            return
+        }
+
+        if isSurfaceVisible {
+            resumeRendering()
+        } else {
+            pauseRendering()
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        scheduleSurfaceInitialization()
+        guard !isShuttingDown else {
+            return
+        }
+
+        sizeDidChange(bounds.size)
     }
 
-    func applyRenderFeed(_ feed: TerminalRenderFeed) {
-        pendingFeed = feed
-        initializeSurfaceIfNeeded()
+    func updateGhosttyWriteHandler(
+        _ onGhosttyWrite: ((String) -> Void)?
+    ) {
+        self.onGhosttyWrite = onGhosttyWrite
+    }
+
+    func replaceGhosttySnapshot(
+        _ snapshotText: String,
+        outputText: String
+    ) {
+        currentSnapshotText = snapshotText
+        currentOutputText = outputText
+
+        guard !snapshotText.isEmpty || !outputText.isEmpty else {
+            pendingRenderChunks.removeAll(keepingCapacity: false)
+            hasAppliedSnapshot = false
+            return
+        }
+
+        _ = initializeSurfaceIfNeeded()
+        if surface != nil && hasAppliedSnapshot {
+            rebuildSurface()
+        }
+        hasAppliedSnapshot = true
+        replayCurrentState()
+    }
+
+    func appendGhosttyOutput(_ text: String) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        currentOutputText.append(text)
+        _ = initializeSurfaceIfNeeded()
         guard surface != nil else {
             return
         }
 
-        if feed.snapshotSequence != lastSnapshotSequence {
-            rebuildSurface()
-            runtime.feedOutput(surface, text: feed.snapshotText)
-            lastSnapshotSequence = feed.snapshotSequence
-            lastOutputSequence = feed.outputSequence
-            if !feed.outputText.isEmpty {
-                runtime.feedOutput(surface, text: feed.outputText)
-            }
+        enqueueRenderTexts([text], replacingPending: false)
+    }
+
+    func enqueueGhosttyInput(_ text: String) {
+        guard !text.isEmpty else {
             return
         }
 
-        if feed.outputSequence != lastOutputSequence {
-            runtime.feedOutput(surface, text: feed.outputText)
-            lastOutputSequence = feed.outputSequence
+        _ = initializeSurfaceIfNeeded()
+        guard surface != nil else {
+            pendingInputTexts.append(text)
+            return
+        }
+
+        runtime.sendInput(surface, text: text)
+    }
+
+    func handleGhosttyWrite(_ data: Data) {
+        let filtered = writeFilter.consume(data)
+        guard !filtered.isEmpty else {
+            return
+        }
+
+        let text = String(decoding: filtered, as: UTF8.self)
+        guard !text.isEmpty else {
+            return
+        }
+        onGhosttyWrite?(text)
+    }
+
+    func handleGhosttySurfaceClosed(processAlive: Bool) {
+        _ = processAlive
+        surface = nil
+        surfaceGeneration &+= 1
+        renderDispatchScheduled = false
+        customIORedrawScheduled = false
+        lastPixelSize = .zero
+        lastContentScale = 0
+        writeFilter.reset()
+
+        if !isShuttingDown && isSurfaceVisible {
+            scheduleSurfaceInitializationIfNeeded()
         }
     }
 
-    private func initializeSurfaceIfNeeded() {
+    func cleanup() {
+        isShuttingDown = true
+        onGhosttyWrite = nil
+        NotificationCenter.default.removeObserver(self)
+        runtime.setSurfaceFocus(surface, focused: false)
+        runtime.setSurfaceOcclusion(surface, visible: false)
+        runtime.setWriteCallback(surface, owner: nil)
+        destroySurface()
+    }
+
+    private func configureIOSurfaceLayers() {
+        let targetBounds = bounds
+        let scale = contentScaleFactor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.sublayers?.forEach { sublayer in
+            sublayer.frame = targetBounds
+            sublayer.contentsScale = scale
+        }
+        CATransaction.commit()
+    }
+
+    private func markIOSurfaceLayersForDisplay() {
+        layer.setNeedsDisplay()
+        layer.sublayers?.forEach { $0.setNeedsDisplay() }
+    }
+
+    private func updateContentScaleIfNeeded() {
+        let targetScale = resolvedDisplayScale
+        if contentScaleFactor != targetScale {
+            contentScaleFactor = targetScale
+        }
+    }
+
+    private var resolvedDisplayScale: CGFloat {
+        let windowScale = window?.traitCollection.displayScale ?? 0
+        if windowScale > 0 {
+            return windowScale
+        }
+
+        let traitScale = traitCollection.displayScale
+        if traitScale > 0 {
+            return traitScale
+        }
+
+        return 1
+    }
+
+    private func refreshSurface() {
+        sizeDidChange(bounds.size)
+    }
+
+    private func initializeSurfaceIfNeeded() -> Bool {
         guard surface == nil,
+              window != nil,
+              bounds.width > 1,
+              bounds.height > 1 else {
+            return false
+        }
+        surface = runtime.makeSurface(for: self)
+        surfaceGeneration &+= 1
+        runtime.setWriteCallback(
+            surface,
+            owner: onGhosttyWrite == nil ? nil : self
+        )
+        runtime.setSurfaceFocus(surface, focused: isSurfaceVisible)
+        runtime.setSurfaceOcclusion(surface, visible: isSurfaceVisible)
+        sizeDidChange(bounds.size)
+        return surface != nil
+    }
+
+    private func rebuildSurface() {
+        destroySurface()
+        if initializeSurfaceIfNeeded() {
+            replayCurrentState()
+            flushPendingInputIfNeeded()
+        }
+    }
+
+    private func destroySurface() {
+        let currentSurface = surface
+        surface = nil
+        surfaceInitializationScheduled = false
+        customIORedrawScheduled = false
+        pendingRenderChunks.removeAll(keepingCapacity: false)
+        pendingInputTexts.removeAll(keepingCapacity: false)
+        renderDispatchScheduled = false
+        runtime.setSurfaceOcclusion(currentSurface, visible: false)
+        runtime.setWriteCallback(currentSurface, owner: nil)
+        runtime.freeSurface(currentSurface)
+        surfaceGeneration &+= 1
+        lastPixelSize = .zero
+        lastContentScale = 0
+        writeFilter.reset()
+    }
+
+    private func enqueueRenderTexts(
+        _ texts: [String],
+        replacingPending: Bool
+    ) {
+        let payloads: [Data] = texts.compactMap { text in
+            guard !text.isEmpty else {
+                return nil
+            }
+            return text.data(using: .utf8)
+        }
+        guard !payloads.isEmpty else {
+            return
+        }
+
+        if replacingPending {
+            pendingRenderChunks = payloads
+        } else {
+            pendingRenderChunks.append(contentsOf: payloads)
+        }
+        scheduleRenderDispatch()
+    }
+
+    private func scheduleRenderDispatch() {
+        guard !renderDispatchScheduled else {
+            return
+        }
+        renderDispatchScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.renderDispatchScheduled = false
+            self.processPendingRenderPass()
+        }
+    }
+
+    private func processPendingRenderPass() {
+        guard let surface,
               window != nil,
               bounds.width > 1,
               bounds.height > 1 else {
             return
         }
-        surface = runtime.makeSurface(for: self)
-        syncGeometry()
-        runtime.setSurfaceFocus(surface, focused: true)
+
+        if var chunk = pendingRenderChunks.first {
+            let consume = min(Self.renderPassByteBudget, chunk.count)
+            runtime.feedOutput(surface, data: chunk.prefix(consume))
+
+            if consume < chunk.count {
+                chunk.removeFirst(consume)
+                pendingRenderChunks[0] = chunk
+            } else {
+                pendingRenderChunks.removeFirst()
+            }
+        }
+
+        scheduleCustomIORedraw()
+
+        if !pendingRenderChunks.isEmpty {
+            scheduleRenderDispatch()
+        }
     }
 
-    private func rebuildSurface() {
-        runtime.freeSurface(surface)
-        surface = nil
-        initializeSurfaceIfNeeded()
-    }
-
-    private func syncGeometry() {
-        runtime.updateSurfaceGeometry(
-            surface,
-            width: bounds.width,
-            height: bounds.height,
-            scale: contentScaleFactor
+    private func replayCurrentState() {
+        guard surface != nil else {
+            return
+        }
+        enqueueRenderTexts(
+            currentOutputText.isEmpty
+                ? [currentSnapshotText]
+                : [currentSnapshotText, currentOutputText],
+            replacingPending: true
         )
+    }
+
+    private func flushPendingInputIfNeeded() {
+        guard let surface,
+              !pendingInputTexts.isEmpty else {
+            return
+        }
+
+        let buffered = pendingInputTexts
+        pendingInputTexts.removeAll(keepingCapacity: false)
+        for item in buffered {
+            runtime.sendInput(surface, text: item)
+        }
+    }
+
+    private func pauseRendering() {
+        isPaused = true
+        runtime.setSurfaceFocus(surface, focused: false)
+        runtime.setSurfaceOcclusion(surface, visible: false)
+    }
+
+    private func resumeRendering() {
+        guard !isShuttingDown else {
+            return
+        }
+
+        isPaused = false
+        if initializeSurfaceIfNeeded() {
+            replayCurrentState()
+            flushPendingInputIfNeeded()
+        }
+        sizeDidChange(bounds.size)
+        runtime.setSurfaceFocus(surface, focused: true)
+        runtime.setSurfaceOcclusion(surface, visible: true)
+        if !pendingRenderChunks.isEmpty {
+            scheduleRenderDispatch()
+        }
+        requestRender()
+    }
+
+    private func requestRender() {
+        guard !isShuttingDown,
+              !isPaused,
+              surface != nil,
+              bounds.width > 0,
+              bounds.height > 0 else {
+            return
+        }
+        markIOSurfaceLayersForDisplay()
+    }
+
+    private func scheduleCustomIORedraw() {
+        guard !customIORedrawScheduled else {
+            return
+        }
+
+        customIORedrawScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.customIORedrawScheduled = false
+            guard !self.isShuttingDown,
+                  !self.isPaused,
+                  let surface = self.surface,
+                  self.bounds.width > 0,
+                  self.bounds.height > 0 else {
+                return
+            }
+
+            self.updateContentScaleIfNeeded()
+            self.configureIOSurfaceLayers()
+            self.runtime.requestRender(surface)
+            self.markIOSurfaceLayersForDisplay()
+        }
+    }
+
+    private func sizeDidChange(_ size: CGSize) {
+        guard !isShuttingDown else {
+            return
+        }
+
+        guard let surface = surface ?? {
+            initializeSurfaceIfNeeded() ? self.surface : nil
+        }(), size.width > 0, size.height > 0 else {
+            return
+        }
+
+        updateContentScaleIfNeeded()
+        configureIOSurfaceLayers()
+
+        let scale = contentScaleFactor
+        let pixelWidth = floor(size.width * scale)
+        let pixelHeight = floor(size.height * scale)
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            return
+        }
+
+        let pixelSize = CGSize(width: pixelWidth, height: pixelHeight)
+        let sizeChanged = pixelSize != lastPixelSize || scale != lastContentScale
+        if sizeChanged {
+            lastPixelSize = pixelSize
+            lastContentScale = scale
+            runtime.updateSurfaceGeometry(
+                surface,
+                width: size.width,
+                height: size.height,
+                scale: scale
+            )
+        }
+
+        if !isPaused {
+            runtime.requestRender(surface)
+            markIOSurfaceLayersForDisplay()
+        }
+    }
+
+    private var isSurfaceVisible: Bool {
+        guard window != nil, !isHidden, alpha > 0.01 else {
+            return false
+        }
+
+        if UIApplication.shared.applicationState != .active {
+            return false
+        }
+
+        return true
+    }
+
+    private func setupLifecycleObservers() {
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleApplicationWillResignActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleApplicationDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleApplicationWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleApplicationDidBecomeActive() {
+        scheduleSurfaceInitializationIfNeeded()
+    }
+
+    @objc private func handleApplicationWillResignActive() {
+        pauseRendering()
+    }
+
+    @objc private func handleApplicationDidEnterBackground() {
+        pauseRendering()
+    }
+
+    @objc private func handleApplicationWillEnterForeground() {
+        scheduleSurfaceInitializationIfNeeded()
     }
 
     private func scheduleSurfaceInitialization() {
@@ -500,26 +1067,47 @@ final class GhosttyUIKitHostView: UIView, GhosttySurfaceHosting {
             guard let self else {
                 return
             }
-            self.initializeSurfaceIfNeeded()
-            self.syncGeometry()
-            self.runtime.setSurfaceFocus(self.surface, focused: self.window != nil)
-            if self.surface != nil,
-               !self.pendingFeed.isEmpty {
-                self.applyRenderFeed(self.pendingFeed)
+            self.surfaceInitializationScheduled = false
+            guard !self.isShuttingDown else {
+                return
+            }
+
+            if self.isSurfaceVisible {
+                self.resumeRendering()
+            } else {
+                self.pauseRendering()
             }
         }
+    }
+
+    private func scheduleSurfaceInitializationIfNeeded() {
+        guard !surfaceInitializationScheduled else {
+            return
+        }
+        surfaceInitializationScheduled = true
+        scheduleSurfaceInitialization()
     }
 }
 #endif
 
 #if canImport(AppKit)
 @MainActor
-final class GhosttyAppKitHostView: NSView, GhosttySurfaceHosting {
+final class GhosttyAppKitHostView: NSView,
+    GhosttyTerminalSurfaceDriver,
+    GhosttySurfaceWriteHandling {
+    private static let renderPassByteBudget = 256 * 1024
+
     private let runtime = GhosttyEmbeddedAppRuntime.shared
     private var surface: ghostty_surface_t?
-    private var lastSnapshotSequence: UInt64 = .max
-    private var lastOutputSequence: UInt64 = .max
-    private var pendingFeed = TerminalRenderFeed()
+    private var surfaceGeneration: UInt64 = 0
+    private var hasAppliedSnapshot = false
+    private var currentSnapshotText: String = ""
+    private var currentOutputText: String = ""
+    private var pendingInputTexts: [String] = []
+    private var pendingRenderChunks: [Data] = []
+    private var renderDispatchScheduled = false
+    private var writeFilter = GhosttyWriteFilter()
+    private var onGhosttyWrite: ((String) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -543,8 +1131,7 @@ final class GhosttyAppKitHostView: NSView, GhosttySurfaceHosting {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
-            runtime.freeSurface(surface)
-            surface = nil
+            destroySurface()
             return
         }
         scheduleSurfaceInitialization()
@@ -555,49 +1142,88 @@ final class GhosttyAppKitHostView: NSView, GhosttySurfaceHosting {
         scheduleSurfaceInitialization()
     }
 
-    func applyRenderFeed(_ feed: TerminalRenderFeed) {
-        pendingFeed = feed
+    func updateGhosttyWriteHandler(
+        _ onGhosttyWrite: ((String) -> Void)?
+    ) {
+        self.onGhosttyWrite = onGhosttyWrite
+    }
+
+    func replaceGhosttySnapshot(
+        _ snapshotText: String,
+        outputText: String
+    ) {
+        currentSnapshotText = snapshotText
+        currentOutputText = outputText
+
+        guard !snapshotText.isEmpty || !outputText.isEmpty else {
+            pendingRenderChunks.removeAll(keepingCapacity: false)
+            hasAppliedSnapshot = false
+            return
+        }
+
+        initializeSurfaceIfNeeded()
+        if surface != nil && hasAppliedSnapshot {
+            rebuildSurface()
+        }
+        hasAppliedSnapshot = true
+        replayCurrentState()
+    }
+
+    func appendGhosttyOutput(_ text: String) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        currentOutputText.append(text)
         initializeSurfaceIfNeeded()
         guard surface != nil else {
             return
         }
 
-        if feed.snapshotSequence != lastSnapshotSequence {
-            rebuildSurface()
-            runtime.feedOutput(surface, text: feed.snapshotText)
-            lastSnapshotSequence = feed.snapshotSequence
-            lastOutputSequence = feed.outputSequence
-            if !feed.outputText.isEmpty {
-                runtime.feedOutput(surface, text: feed.outputText)
-            }
+        enqueueRenderTexts([text], replacingPending: false)
+    }
+
+    func enqueueGhosttyInput(_ text: String) {
+        guard !text.isEmpty else {
             return
         }
 
-        if feed.outputSequence != lastOutputSequence {
-            runtime.feedOutput(surface, text: feed.outputText)
-            lastOutputSequence = feed.outputSequence
-        }
-    }
-
-    private func initializeSurfaceIfNeeded() {
-        guard surface == nil,
-              window != nil,
-              bounds.width > 1,
-              bounds.height > 1 else {
-            return
-        }
-        surface = runtime.makeSurface(for: self)
-        syncGeometry()
-        runtime.setSurfaceFocus(surface, focused: true)
-    }
-
-    private func rebuildSurface() {
-        runtime.freeSurface(surface)
-        surface = nil
         initializeSurfaceIfNeeded()
+        guard surface != nil else {
+            pendingInputTexts.append(text)
+            return
+        }
+
+        runtime.sendInput(surface, text: text)
     }
 
-    private func syncGeometry() {
+    func handleGhosttyWrite(_ data: Data) {
+        let filtered = writeFilter.consume(data)
+        guard !filtered.isEmpty else {
+            return
+        }
+
+        let text = String(decoding: filtered, as: UTF8.self)
+        guard !text.isEmpty else {
+            return
+        }
+        onGhosttyWrite?(text)
+    }
+
+    func cleanup() {
+        onGhosttyWrite = nil
+        runtime.setSurfaceFocus(surface, focused: false)
+        runtime.setSurfaceOcclusion(surface, visible: false)
+        runtime.setWriteCallback(surface, owner: nil)
+        destroySurface()
+    }
+
+    private func markSurfaceForDisplay() {
+        needsDisplay = true
+        layer?.setNeedsDisplay()
+    }
+
+    private func refreshSurface() {
         runtime.updateSurfaceGeometry(
             surface,
             width: bounds.width,
@@ -608,6 +1234,135 @@ final class GhosttyAppKitHostView: NSView, GhosttySurfaceHosting {
                     ?? 1
             )
         )
+        markSurfaceForDisplay()
+    }
+
+    private func initializeSurfaceIfNeeded() {
+        guard surface == nil,
+              window != nil,
+              bounds.width > 1,
+              bounds.height > 1 else {
+            return
+        }
+        surface = runtime.makeSurface(for: self)
+        surfaceGeneration &+= 1
+        runtime.setWriteCallback(
+            surface,
+            owner: onGhosttyWrite == nil ? nil : self
+        )
+        refreshSurface()
+        runtime.setSurfaceFocus(surface, focused: true)
+        runtime.setSurfaceOcclusion(surface, visible: true)
+        replayCurrentState()
+        flushPendingInputIfNeeded()
+    }
+
+    private func rebuildSurface() {
+        destroySurface()
+        initializeSurfaceIfNeeded()
+    }
+
+    private func destroySurface() {
+        pendingRenderChunks.removeAll(keepingCapacity: false)
+        pendingInputTexts.removeAll(keepingCapacity: false)
+        renderDispatchScheduled = false
+        runtime.setSurfaceOcclusion(surface, visible: false)
+        runtime.setWriteCallback(surface, owner: nil)
+        runtime.freeSurface(surface)
+        surface = nil
+        surfaceGeneration &+= 1
+        writeFilter.reset()
+    }
+
+    private func enqueueRenderTexts(
+        _ texts: [String],
+        replacingPending: Bool
+    ) {
+        let payloads: [Data] = texts.compactMap { text in
+            guard !text.isEmpty else {
+                return nil
+            }
+            return text.data(using: .utf8)
+        }
+        guard !payloads.isEmpty else {
+            return
+        }
+
+        if replacingPending {
+            pendingRenderChunks = payloads
+        } else {
+            pendingRenderChunks.append(contentsOf: payloads)
+        }
+        scheduleRenderDispatch()
+    }
+
+    private func scheduleRenderDispatch() {
+        guard !renderDispatchScheduled else {
+            return
+        }
+        renderDispatchScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.renderDispatchScheduled = false
+            self.processPendingRenderPass()
+        }
+    }
+
+    private func processPendingRenderPass() {
+        guard let surface,
+              window != nil,
+              bounds.width > 1,
+              bounds.height > 1 else {
+            return
+        }
+
+        var remainingBudget = Self.renderPassByteBudget
+        while remainingBudget > 0 && !pendingRenderChunks.isEmpty {
+            var chunk = pendingRenderChunks.removeFirst()
+            let consume = min(remainingBudget, chunk.count)
+            runtime.feedOutput(surface, data: chunk.prefix(consume))
+
+            if consume < chunk.count {
+                chunk.removeFirst(consume)
+                pendingRenderChunks.insert(chunk, at: 0)
+            }
+
+            remainingBudget -= consume
+        }
+
+        runtime.requestRender(surface)
+        markSurfaceForDisplay()
+
+        if !pendingRenderChunks.isEmpty {
+            scheduleRenderDispatch()
+        }
+    }
+
+    private func replayCurrentState() {
+        guard surface != nil else {
+            return
+        }
+        enqueueRenderTexts(
+            currentOutputText.isEmpty
+                ? [currentSnapshotText]
+                : [currentSnapshotText, currentOutputText],
+            replacingPending: true
+        )
+    }
+
+    private func flushPendingInputIfNeeded() {
+        guard let surface,
+              !pendingInputTexts.isEmpty else {
+            return
+        }
+
+        let buffered = pendingInputTexts
+        pendingInputTexts.removeAll(keepingCapacity: false)
+        for item in buffered {
+            runtime.sendInput(surface, text: item)
+        }
     }
 
     private func scheduleSurfaceInitialization() {
@@ -616,12 +1371,22 @@ final class GhosttyAppKitHostView: NSView, GhosttySurfaceHosting {
                 return
             }
             self.initializeSurfaceIfNeeded()
-            self.syncGeometry()
-            self.runtime.setSurfaceFocus(self.surface, focused: self.window != nil)
-            if self.surface != nil,
-               !self.pendingFeed.isEmpty {
-                self.applyRenderFeed(self.pendingFeed)
-            }
+            self.refreshSurface()
+            self.runtime.setWriteCallback(
+                self.surface,
+                owner: self.onGhosttyWrite == nil ? nil : self
+            )
+            self.runtime.setSurfaceFocus(
+                self.surface,
+                focused: self.window != nil
+            )
+            self.runtime.setSurfaceOcclusion(
+                self.surface,
+                visible: self.window != nil
+            )
+            self.replayCurrentState()
+            self.flushPendingInputIfNeeded()
+            self.markSurfaceForDisplay()
         }
     }
 }

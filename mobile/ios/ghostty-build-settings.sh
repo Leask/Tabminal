@@ -20,24 +20,67 @@ tabminal_ghostty_resolve_xcframework() {
 tabminal_ghostty_library_for_sdk() {
     local sdk="$1"
     local xcframework_path="$2"
+    local candidate
 
     case "${sdk}" in
         iphonesimulator)
-            printf '%s\n' \
-                "${xcframework_path}/ios-arm64-simulator/libghostty-fat.a"
+            for candidate in \
+                "${xcframework_path}/ios-arm64-simulator/libghostty-fat.a" \
+                "${xcframework_path}/ios-arm64-simulator/libghostty.a"; do
+                if [[ -f "${candidate}" ]]; then
+                    printf '%s\n' "${candidate}"
+                    return 0
+                fi
+            done
             ;;
         iphoneos)
-            printf '%s\n' \
-                "${xcframework_path}/ios-arm64/libghostty-fat.a"
+            for candidate in \
+                "${xcframework_path}/ios-arm64/libghostty-fat.a" \
+                "${xcframework_path}/ios-arm64/libghostty.a"; do
+                if [[ -f "${candidate}" ]]; then
+                    printf '%s\n' "${candidate}"
+                    return 0
+                fi
+            done
             ;;
         macosx)
-            printf '%s\n' \
-                "${xcframework_path}/macos-arm64_x86_64/libghostty.a"
+            for candidate in \
+                "${xcframework_path}/macos-arm64_x86_64/libghostty.a" \
+                "${xcframework_path}/macos-arm64_x86_64/libghostty-fat.a"; do
+                if [[ -f "${candidate}" ]]; then
+                    printf '%s\n' "${candidate}"
+                    return 0
+                fi
+            done
+            ;;
+        xros)
+            for candidate in \
+                "${xcframework_path}/xros-arm64/libghostty.a" \
+                "${xcframework_path}/xros-arm64/libghostty-fat.a"; do
+                if [[ -f "${candidate}" ]]; then
+                    printf '%s\n' "${candidate}"
+                    return 0
+                fi
+            done
+            ;;
+        xrsimulator)
+            for candidate in \
+                "${xcframework_path}/xrsimulator-arm64/libghostty.a" \
+                "${xcframework_path}/xrsimulator-arm64/libghostty-fat.a" \
+                "${xcframework_path}/xrsimulator-arm64_x86_64/libghostty.a" \
+                "${xcframework_path}/xrsimulator-arm64_x86_64/libghostty-fat.a"; do
+                if [[ -f "${candidate}" ]]; then
+                    printf '%s\n' "${candidate}"
+                    return 0
+                fi
+            done
             ;;
         *)
             return 1
             ;;
     esac
+
+    return 1
 }
 
 tabminal_ghostty_xcodebuild_args() {

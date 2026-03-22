@@ -11,6 +11,7 @@ public struct TerminalScreenView: View {
     @State private var model: TerminalScreenModel
     @State private var lastViewportSize: CGSize = .zero
     @State private var inputFocused: Bool = false
+    private let renderer: TerminalRenderer
     private let onClose: (() -> Void)?
 
     public init(
@@ -24,6 +25,7 @@ public struct TerminalScreenView: View {
                 sessionID: sessionID
             )
         )
+        renderer = .current
         self.onClose = onClose
     }
 
@@ -33,8 +35,11 @@ public struct TerminalScreenView: View {
                 terminalAccessibilityAnchor
                 TerminalSurfaceHost(
                     transcript: model.terminalTranscript,
-                    renderFeed: model.terminalRenderFeed,
-                    renderer: .current
+                    ghosttyController: model.ghosttyController,
+                    renderer: renderer,
+                    onGhosttyWrite: { input in
+                        model.handleGhosttyWrite(input)
+                    }
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -71,7 +76,10 @@ public struct TerminalScreenView: View {
                 TerminalInputBridge(
                     isFocused: $inputFocused,
                     onInput: { input in
-                        model.sendInput(input)
+                        model.sendLocalInput(
+                            input,
+                            renderer: renderer
+                        )
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,13 +93,17 @@ public struct TerminalScreenView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                updateViewportIfNeeded(proxy.size)
+                DispatchQueue.main.async {
+                    updateViewportIfNeeded(proxy.size)
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     inputFocused = true
                 }
             }
             .onChange(of: proxy.size) { _, newSize in
-                updateViewportIfNeeded(newSize)
+                DispatchQueue.main.async {
+                    updateViewportIfNeeded(newSize)
+                }
             }
         }
         .toolbar {
@@ -180,7 +192,10 @@ public struct TerminalScreenView: View {
                 keyboardKey("Paste") {
                     if let text = platformPasteboardString(),
                        !text.isEmpty {
-                        model.sendInput(text)
+                        model.sendLocalInput(
+                            text,
+                            renderer: renderer
+                        )
                     }
                 }
                 keyboardKey("Hide") {

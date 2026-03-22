@@ -35,22 +35,29 @@ public struct GhosttyRuntimeStatus: Sendable, Equatable {
         "ghostty_surface_config_new",
         "ghostty_surface_new",
         "ghostty_surface_free",
+        "ghostty_surface_refresh",
         "ghostty_surface_draw",
         "ghostty_surface_set_size",
         "ghostty_surface_set_content_scale",
         "ghostty_surface_set_focus",
+        "ghostty_surface_set_occlusion",
         "ghostty_surface_size",
         "ghostty_surface_text"
+    ]
+
+    static let requiredRemoteIOSymbols = [
+        String(cString: tabminal_ghostty_feed_data_symbol()),
+        String(cString: tabminal_ghostty_write_callback_symbol())
     ]
 
     static func evaluate(
         libraryPath: String?,
         loadedSymbols: Set<String>
     ) -> GhosttyRuntimeStatus {
-        let remoteIOSymbol = String(
-            cString: tabminal_ghostty_remote_output_symbol()
-        )
         let missing = requiredSurfaceSymbols.filter { !loadedSymbols.contains($0) }
+        let missingRemote = requiredRemoteIOSymbols.filter {
+            !loadedSymbols.contains($0)
+        }
 
         guard missing.isEmpty else {
             let detail: String
@@ -67,20 +74,20 @@ public struct GhosttyRuntimeStatus: Sendable, Equatable {
             )
         }
 
-        if loadedSymbols.contains(remoteIOSymbol) {
+        if missingRemote.isEmpty {
             return GhosttyRuntimeStatus(
                 availability: .remoteIOReady,
                 libraryPath: libraryPath,
                 missingSymbols: [],
-                detail: "Ghostty runtime exports embedded surface symbols and a remote-output bridge."
+                detail: "Ghostty runtime exports embedded surface symbols and the custom-I/O bridge."
             )
         }
 
         return GhosttyRuntimeStatus(
             availability: .publicSurfaceAPI,
             libraryPath: libraryPath,
-            missingSymbols: [remoteIOSymbol],
-            detail: "Ghostty runtime exports embedded surface APIs, but remote PTY output injection is not available."
+            missingSymbols: missingRemote,
+            detail: "Ghostty runtime exports embedded surface APIs, but custom-I/O bridging is not available."
         )
     }
 }
@@ -147,25 +154,8 @@ public final class GhosttyRuntimeLoader: @unchecked Sendable {
 }
 
 private enum GhosttyPlatformPolicy {
-    static var prefersGhosttyByDefault: Bool {
-#if os(macOS)
-        true
-#else
-        false
-#endif
-    }
-
-    static var allowsGhosttyOverride: Bool {
-        if prefersGhosttyByDefault {
-            return true
-        }
-
-        let environment = ProcessInfo.processInfo.environment
-        let value = environment["TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        return value == "1" || value == "true" || value == "yes"
-    }
+    static let prefersGhosttyByDefault = true
+    static let allowsGhosttyOverride = true
 }
 
 #if canImport(Darwin)
@@ -218,9 +208,8 @@ private extension GhosttyRuntimeLoader {
     }
 
     static func requiredSymbols() -> [String] {
-        GhosttyRuntimeStatus.requiredSurfaceSymbols + [
-            String(cString: tabminal_ghostty_remote_output_symbol())
-        ]
+        GhosttyRuntimeStatus.requiredSurfaceSymbols
+            + GhosttyRuntimeStatus.requiredRemoteIOSymbols
     }
 
     static func exportedSymbols(

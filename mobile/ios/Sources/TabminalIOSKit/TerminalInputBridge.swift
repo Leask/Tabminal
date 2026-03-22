@@ -24,14 +24,7 @@ struct TerminalInputBridge: UIViewRepresentable {
     func updateUIView(_ uiView: TerminalInputTextView, context: Context) {
         uiView.inputDelegateBridge = context.coordinator
         uiView.delegate = context.coordinator
-
-        if isFocused {
-            if !uiView.isFirstResponder {
-                _ = uiView.becomeFirstResponder()
-            }
-        } else if uiView.isFirstResponder {
-            uiView.resignFirstResponder()
-        }
+        context.coordinator.syncFocus(of: uiView, isFocused: isFocused)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -44,6 +37,21 @@ struct TerminalInputBridge: UIViewRepresentable {
         ) {
             _isFocused = isFocused
             self.onInput = onInput
+        }
+
+        func syncFocus(
+            of textView: TerminalInputTextView,
+            isFocused: Bool
+        ) {
+            DispatchQueue.main.async {
+                if isFocused {
+                    if !textView.isFirstResponder {
+                        _ = textView.becomeFirstResponder()
+                    }
+                } else if textView.isFirstResponder {
+                    textView.resignFirstResponder()
+                }
+            }
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -269,18 +277,7 @@ struct TerminalInputBridge: NSViewRepresentable {
 
     func updateNSView(_ nsView: TerminalInputTextView, context: Context) {
         nsView.inputDelegateBridge = context.coordinator
-
-        guard let window = nsView.window else {
-            return
-        }
-
-        if isFocused {
-            if window.firstResponder !== nsView {
-                window.makeFirstResponder(nsView)
-            }
-        } else if window.firstResponder === nsView {
-            window.makeFirstResponder(nil)
-        }
+        context.coordinator.syncFocus(of: nsView, isFocused: isFocused)
     }
 
     final class Coordinator: NSObject {
@@ -293,6 +290,25 @@ struct TerminalInputBridge: NSViewRepresentable {
         ) {
             _isFocused = isFocused
             self.onInput = onInput
+        }
+
+        func syncFocus(
+            of textView: TerminalInputTextView,
+            isFocused: Bool
+        ) {
+            DispatchQueue.main.async {
+                guard let window = textView.window else {
+                    return
+                }
+
+                if isFocused {
+                    if window.firstResponder !== textView {
+                        window.makeFirstResponder(textView)
+                    }
+                } else if window.firstResponder === textView {
+                    window.makeFirstResponder(nil)
+                }
+            }
         }
 
         func focusChanged(_ focused: Bool) {

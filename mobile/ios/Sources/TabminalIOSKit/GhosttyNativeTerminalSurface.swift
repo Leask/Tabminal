@@ -8,16 +8,19 @@ import AppKit
 
 public struct GhosttyNativeTerminalSurface: View {
     private let transcript: String
-    private let renderFeed: TerminalRenderFeed
+    private let controller: GhosttyTerminalController
+    private let onGhosttyWrite: ((String) -> Void)?
     private let runtimeStatus: GhosttyRuntimeStatus
 
     public init(
         transcript: String,
-        renderFeed: TerminalRenderFeed,
+        controller: GhosttyTerminalController,
+        onGhosttyWrite: ((String) -> Void)? = nil,
         runtimeStatus: GhosttyRuntimeStatus = GhosttyRuntimeLoader.shared.status
     ) {
         self.transcript = transcript
-        self.renderFeed = renderFeed
+        self.controller = controller
+        self.onGhosttyWrite = onGhosttyWrite
         self.runtimeStatus = runtimeStatus
     }
 
@@ -65,9 +68,15 @@ public struct GhosttyNativeTerminalSurface: View {
     @ViewBuilder
     private var nativeSurface: some View {
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
-        GhosttyAppKitHostContainer(renderFeed: renderFeed)
+        GhosttyAppKitHostContainer(
+            controller: controller,
+            onGhosttyWrite: onGhosttyWrite
+        )
 #elseif canImport(UIKit)
-        GhosttyUIKitHostContainer(renderFeed: renderFeed)
+        GhosttyUIKitHostContainer(
+            controller: controller,
+            onGhosttyWrite: onGhosttyWrite
+        )
 #else
         TextTerminalSurface(
             transcript: transcript,
@@ -105,7 +114,8 @@ public struct GhosttyNativeTerminalSurface: View {
 
 #if canImport(UIKit)
 private struct GhosttyUIKitHostContainer: UIViewRepresentable {
-    let renderFeed: TerminalRenderFeed
+    let controller: GhosttyTerminalController
+    let onGhosttyWrite: ((String) -> Void)?
 
     func makeCoordinator() -> GhosttyUIKitHostCoordinator {
         GhosttyUIKitHostCoordinator()
@@ -122,30 +132,70 @@ private struct GhosttyUIKitHostContainer: UIViewRepresentable {
         context: Context
     ) {
         context.coordinator.attach(to: uiView)
-        context.coordinator.apply(renderFeed)
+        context.coordinator.apply(
+            controller: controller,
+            onGhosttyWrite: onGhosttyWrite
+        )
+    }
+
+    static func dismantleUIView(
+        _ uiView: GhosttyUIKitHostView,
+        coordinator: GhosttyUIKitHostCoordinator
+    ) {
+        coordinator.detachCurrentController()
+        uiView.cleanup()
     }
 }
 
+@MainActor
 private final class GhosttyUIKitHostCoordinator {
     private weak var hostView: GhosttyUIKitHostView?
+    private var controller: GhosttyTerminalController?
 
     func attach(to view: GhosttyUIKitHostView) {
         guard hostView !== view else {
             return
         }
+        if let controller, let hostView {
+            controller.detach(from: hostView)
+        }
         hostView = view
+        if let controller {
+            controller.attach(to: view)
+        }
+    }
+
+    func detachCurrentController() {
+        if let controller, let hostView {
+            controller.detach(from: hostView)
+        }
+        controller = nil
+        hostView = nil
     }
 
     @MainActor
-    func apply(_ feed: TerminalRenderFeed) {
-        hostView?.applyRenderFeed(feed)
+    func apply(
+        controller: GhosttyTerminalController,
+        onGhosttyWrite: ((String) -> Void)?
+    ) {
+        if self.controller !== controller {
+            if let current = self.controller, let hostView {
+                current.detach(from: hostView)
+            }
+            self.controller = controller
+            if let hostView {
+                controller.attach(to: hostView)
+            }
+        }
+        controller.setWriteHandler(onGhosttyWrite)
     }
 }
 #endif
 
 #if canImport(AppKit)
 private struct GhosttyAppKitHostContainer: NSViewRepresentable {
-    let renderFeed: TerminalRenderFeed
+    let controller: GhosttyTerminalController
+    let onGhosttyWrite: ((String) -> Void)?
 
     func makeCoordinator() -> GhosttyAppKitHostCoordinator {
         GhosttyAppKitHostCoordinator()
@@ -162,23 +212,62 @@ private struct GhosttyAppKitHostContainer: NSViewRepresentable {
         context: Context
     ) {
         context.coordinator.attach(to: nsView)
-        context.coordinator.apply(renderFeed)
+        context.coordinator.apply(
+            controller: controller,
+            onGhosttyWrite: onGhosttyWrite
+        )
+    }
+
+    static func dismantleNSView(
+        _ nsView: GhosttyAppKitHostView,
+        coordinator: GhosttyAppKitHostCoordinator
+    ) {
+        coordinator.detachCurrentController()
+        nsView.cleanup()
     }
 }
 
+@MainActor
 private final class GhosttyAppKitHostCoordinator {
     private weak var hostView: GhosttyAppKitHostView?
+    private var controller: GhosttyTerminalController?
 
     func attach(to view: GhosttyAppKitHostView) {
         guard hostView !== view else {
             return
         }
+        if let controller, let hostView {
+            controller.detach(from: hostView)
+        }
         hostView = view
+        if let controller {
+            controller.attach(to: view)
+        }
+    }
+
+    func detachCurrentController() {
+        if let controller, let hostView {
+            controller.detach(from: hostView)
+        }
+        controller = nil
+        hostView = nil
     }
 
     @MainActor
-    func apply(_ feed: TerminalRenderFeed) {
-        hostView?.applyRenderFeed(feed)
+    func apply(
+        controller: GhosttyTerminalController,
+        onGhosttyWrite: ((String) -> Void)?
+    ) {
+        if self.controller !== controller {
+            if let current = self.controller, let hostView {
+                current.detach(from: hostView)
+            }
+            self.controller = controller
+            if let hostView {
+                controller.attach(to: hostView)
+            }
+        }
+        controller.setWriteHandler(onGhosttyWrite)
     }
 }
 #endif

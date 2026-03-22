@@ -8,6 +8,10 @@ const char *tabminal_ghostty_executable_name(void) {
     return "GhosttyKit";
 }
 
-const char *tabminal_ghostty_remote_output_symbol(void) {
-    return "ghostty_surface_process_output";
+const char *tabminal_ghostty_feed_data_symbol(void) {
+    return "ghostty_surface_feed_data";
+}
+
+const char *tabminal_ghostty_write_callback_symbol(void) {
+    return "ghostty_surface_set_write_callback";
 }

@@ -634,7 +634,7 @@ final class MobileAppModel {
     }
 
     func workspaceForSession(_ session: SessionRecord) -> SessionWorkspaceModel? {
-        return ensureWorkspaceForSelection(session)
+        workspaces[session.key]
     }
 
     func triggerManualSync() {

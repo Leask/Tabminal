@@ -21,6 +21,7 @@ struct AppRootView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.phase)
         .task {
+            await Task.yield()
             model.runStartupFlowIfNeeded()
         }
         .sheet(isPresented: $model.isPresentingHostEditor) {

@@ -82,7 +82,8 @@ Planned medium-term split:
 ## iOS Direction
 
 iOS is the lead platform because the `libghostty` integration path is most
-natural there.
+natural there, and the Ghostty custom-I/O bridge is now validated in the
+current mobile shell.
 
 Decisions:
 
@@ -116,16 +117,21 @@ Decisions:
 
 ## Current Status
 
-This branch starts Phase 1 and the first iOS slice:
+This branch is past the initial scaffold phase:
 
-- Protocol and transport models are moved into `mobile/ios`.
-- A native iOS-facing shell module is scaffolded.
-- A minimal iOS app host exists and builds against the local Swift package.
-- A CLI launch path exists via `mobile/ios/run-sim.sh`.
-- The terminal area now has a working plain-text fallback:
-  session creation, websocket connect, snapshot/output display, and input send.
-- `libghostty` is still represented as a dedicated bridge surface boundary and
-  is the next renderer integration step.
+- Protocol and transport models live in `mobile/ios`.
+- A native Apple app host exists and builds for `iOS`, `iPadOS`, `macOS`,
+  and `visionOS`.
+- CLI launch paths exist via:
+  - `mobile/ios/run-sim.sh`
+  - `mobile/ios/run-macos.sh`
+  - `mobile/ios/run-visionos.sh`
+- The Ghostty custom-I/O renderer path is working on iPhone and iPad
+  simulator runs.
+- The macOS Ghostty renderer path is working.
+- The app compiles and runs on visionOS, but the current Ghostty vendor
+  artifact does not yet include `xros/xrsimulator` slices, so visionOS
+  uses text fallback today.
 
 ## Current iOS CLI Flow
 

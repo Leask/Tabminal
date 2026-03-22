@@ -9,8 +9,11 @@ DEVICE_NAME="${1:-Apple Vision Pro}"
 APP_BUNDLE="${ROOT_DIR}/build-visionos/Build/Products/Debug-xrsimulator/Tabminal Mobile.app"
 APP_ID="com.leask.tabminal.mobile"
 source "${ROOT_DIR}/ghostty-build-settings.sh"
+source "${ROOT_DIR}/xcodebuild-lock.sh"
 
 cd "${ROOT_DIR}"
+
+tabminal_acquire_xcodebuild_lock
 
 xcodegen generate >/dev/null
 

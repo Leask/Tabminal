@@ -21,6 +21,9 @@ This directory also contains:
   Minimal native iOS app shell that consumes the local package.
 - `run-sim.sh`
   Command-line build/install/launch entry point for the simulator.
+- `xcodebuild-lock.sh`
+  Shared lock helper that prevents concurrent `xcodegen` / `xcodebuild`
+  commands from corrupting the generated Xcode project.
 
 ## Why Swift Package First
 
@@ -91,24 +94,27 @@ What works now:
 - Restore the backend cluster registry and saved sub-hosts
 - Create, close, and switch sessions across multiple hosts
 - Open the websocket for the active session with reconnect behavior
-- Render snapshot and output into a plain-text terminal fallback
+- Drive a native Ghostty renderer through the custom-I/O bridge when the
+  runtime is linked and exports the required symbols
+- Fall back to the text renderer when the runtime or platform slice is
+  missing
 - Send input, return, tab, escape, Ctrl-C, and arrow keys
 - Browse files, open files, edit them, and save them back to the server
 - Open sub-host browser login flows for Access-style auth
 
 What is still pending:
 
-- Replace the plain-text fallback with a real `libghostty` renderer host
+- Ship a Ghostty vendor artifact that includes `xros/xrsimulator` slices
+  so visionOS can use Ghostty instead of text fallback
 - Rich terminal behaviors such as proper native selection and full VT rendering
 - iPad-focused split-pane workspace and more polished mobile shell ergonomics
 
 ## Near-Term Next Steps
 
-1. Vendor or wrap a Ghostty fork for Apple platforms.
-2. Expose a remote-output bridge into Ghostty term state.
-3. Replace the placeholder terminal surface with a real native renderer host.
-4. Add richer terminal UX such as selection, search, and better copy/paste.
-5. Polish iPad and large-screen workspace layouts.
+1. Produce a Ghostty xcframework that includes `xros/xrsimulator` slices.
+2. Polish the Apple host views around Ghostty's IOSurface lifecycle.
+3. Add richer terminal UX such as selection, search, and better copy/paste.
+4. Polish iPad and large-screen workspace layouts.
 
 ## libghostty Integration Boundary
 

@@ -44,6 +44,8 @@ final class SessionWorkspaceModel {
     private let apiClient = TabminalAPIClient()
     @ObservationIgnored
     private var restoredServerEditorState = false
+    @ObservationIgnored
+    private var pendingServerEditorState: TabminalSessionEditorState?
 
     init(
         hostID: String,
@@ -96,6 +98,19 @@ final class SessionWorkspaceModel {
 
     func setPresented(_ presented: Bool) {
         isPresented = presented
+        guard presented else {
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.hydratePendingEditorStateIfNeeded()
+            if self.entries.isEmpty && !self.browserPath.isEmpty {
+                await self.loadDirectory(path: self.browserPath)
+            }
+        }
     }
 
     func reconcile(
@@ -103,10 +118,6 @@ final class SessionWorkspaceModel {
         editorState: TabminalSessionEditorState?
     ) async {
         ensureRoot(cwd)
-
-        if entries.isEmpty && !browserPath.isEmpty {
-            await loadDirectory(path: browserPath)
-        }
 
         guard let editorState else {
             return
@@ -119,11 +130,28 @@ final class SessionWorkspaceModel {
             }
         }
 
-        guard !restoredServerEditorState else {
+        pendingServerEditorState = editorState
+
+        if editorState.isVisible {
+            isPresented = true
+        }
+
+        if isPresented {
+            await hydratePendingEditorStateIfNeeded()
+            if entries.isEmpty && !browserPath.isEmpty {
+                await loadDirectory(path: browserPath)
+            }
+        }
+    }
+
+    private func hydratePendingEditorStateIfNeeded() async {
+        guard !restoredServerEditorState,
+              let editorState = pendingServerEditorState else {
             return
         }
 
         restoredServerEditorState = true
+        pendingServerEditorState = nil
 
         for filePath in editorState.openFiles {
             do {

@@ -275,14 +275,21 @@ struct MobileShellView: View {
         for session: MobileAppModel.SessionRecord,
         host: MobileAppModel.HostRecord
     ) -> some View {
-        TerminalScreenView(
-            server: host.endpoint,
-            sessionID: session.id,
-            onClose: {
-                model.closeActiveSession()
-            }
-        )
-        .id(session.key)
+        ZStack(alignment: .topLeading) {
+            accessibilityAnchor(
+                id: "terminal.session.\(session.key)",
+                label: "Terminal Session"
+            )
+
+            TerminalScreenView(
+                server: host.endpoint,
+                sessionID: session.id,
+                onClose: {
+                    model.closeActiveSession()
+                }
+            )
+            .id(session.key)
+        }
         .padding(isCompact ? 8 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -358,6 +365,12 @@ struct MobileShellView: View {
                 id: "session.card.\(session.key)",
                 label: "Session Card"
             )
+            if isActive {
+                accessibilityAnchor(
+                    id: "session.active.\(session.key)",
+                    label: "Active Session"
+                )
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(session.title)
@@ -453,7 +466,14 @@ struct MobileShellView: View {
                     accessibilityID: "session.editor.\(session.key)",
                     accessibilityLabel: "Toggle Editor"
                 ) {
-                    model.toggleWorkspace(for: session)
+                    if isCompact {
+                        sidebarPresented = false
+                        DispatchQueue.main.async {
+                            model.toggleWorkspace(for: session)
+                        }
+                    } else {
+                        model.toggleWorkspace(for: session)
+                    }
                 }
                 .padding(10)
                 .frame(

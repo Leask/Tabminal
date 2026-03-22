@@ -18,6 +18,8 @@ public final class TerminalScreenModel {
     public private(set) var workingDirectory: String = ""
     public private(set) var terminalTranscript: String = ""
     public private(set) var terminalRenderFeed = TerminalRenderFeed()
+    public private(set) var terminalInputFeed = TerminalInputFeed()
+    public let ghosttyController = GhosttyTerminalController()
 
     public let server: TabminalServerEndpoint
     public let sessionID: String
@@ -66,6 +68,30 @@ public final class TerminalScreenModel {
         }
     }
 
+    public func sendLocalInput(
+        _ data: String,
+        renderer: TerminalRenderer = .current
+    ) {
+        guard !data.isEmpty else {
+            return
+        }
+
+        if renderer == .ghostty {
+            terminalInputFeed.enqueue(data)
+            ghosttyController.enqueueInput(data)
+            return
+        }
+
+        sendInput(data)
+    }
+
+    public func handleGhosttyWrite(_ data: String) {
+        guard !data.isEmpty else {
+            return
+        }
+        sendInput(data)
+    }
+
     public func sendInput(_ data: String) {
         Task {
             do {
@@ -80,12 +106,12 @@ public final class TerminalScreenModel {
     }
 
     public func sendLine(_ line: String) {
-        sendInput(line)
-        sendInput("\r")
+        sendLocalInput(line)
+        sendLocalInput("\r")
     }
 
     public func sendControl(_ data: String) {
-        sendInput(data)
+        sendLocalInput(data)
     }
 
     public func resize(cols: Int, rows: Int) {
@@ -148,11 +174,13 @@ public final class TerminalScreenModel {
             terminalBuffer.replace(with: text)
             terminalTranscript = terminalBuffer.text
             terminalRenderFeed.replaceSnapshot(with: text)
+            ghosttyController.replaceSnapshot(with: text)
             connectionState = .connected
         case .output(let text):
             terminalBuffer.append(text)
             terminalTranscript = terminalBuffer.text
             terminalRenderFeed.appendOutput(text)
+            ghosttyController.appendOutput(text)
             connectionState = .connected
         case .meta(let delta):
             if let title = delta.title, !title.isEmpty {

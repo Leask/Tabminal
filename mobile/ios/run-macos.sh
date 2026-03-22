@@ -11,8 +11,11 @@ APP_EXECUTABLE="${APP_BUNDLE}/Contents/MacOS/Tabminal Mobile"
 APP_NAME="Tabminal Mobile"
 LOG_FILE="${TMPDIR:-/tmp}/tabminal-mobile-macos.log"
 source "${ROOT_DIR}/ghostty-build-settings.sh"
+source "${ROOT_DIR}/xcodebuild-lock.sh"
 
 cd "${ROOT_DIR}"
+
+tabminal_acquire_xcodebuild_lock
 
 xcodegen generate >/dev/null
 
