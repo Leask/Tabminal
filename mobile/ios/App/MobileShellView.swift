@@ -435,13 +435,16 @@ struct MobileShellView: View {
             }
             .contextMenu {
                 Button("Open Editor", systemImage: "folder") {
-                    model.toggleWorkspace(for: session)
+                    model.selectSession(session)
+                    DispatchQueue.main.async {
+                        model.toggleWorkspace(for: session)
+                    }
                 }
                 Button("Close Tab", systemImage: "xmark", role: .destructive) {
                     model.closeSession(session)
                 }
             }
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(session.title)
             .accessibilityHint("Select tab")
@@ -466,12 +469,11 @@ struct MobileShellView: View {
                     accessibilityID: "session.editor.\(session.key)",
                     accessibilityLabel: "Toggle Editor"
                 ) {
+                    model.selectSession(session)
                     if isCompact {
                         sidebarPresented = false
-                        DispatchQueue.main.async {
-                            model.toggleWorkspace(for: session)
-                        }
-                    } else {
+                    }
+                    DispatchQueue.main.async {
                         model.toggleWorkspace(for: session)
                     }
                 }

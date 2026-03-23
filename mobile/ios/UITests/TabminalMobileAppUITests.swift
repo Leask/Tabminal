@@ -50,8 +50,21 @@ final class TabminalMobileAppUITests: XCTestCase {
                 let shell = warmup.descendants(matching: .any)
                     .matching(identifier: "shell.view")
                     .firstMatch
-                _ = terminal.waitForExistence(timeout: 15)
+                let hostAdd = warmup.descendants(matching: .any)
+                    .matching(identifier: "host.add")
+                    .firstMatch
+                let sidebarToggle = warmup.buttons.matching(
+                    identifier: "shell.sidebarToggle"
+                ).firstMatch
+                let shellReady = terminal.waitForExistence(timeout: 15)
                     || shell.waitForExistence(timeout: 15)
+                if debugSidebarRequested {
+                    _ = shellReady
+                    _ = hostAdd.waitForExistence(timeout: 15)
+                        || sidebarToggle.waitForExistence(timeout: 15)
+                } else {
+                    _ = shellReady
+                }
                 warmup.terminate()
                 Self.didWarmGhosttyRenderer = true
             }
@@ -180,13 +193,15 @@ final class TabminalMobileAppUITests: XCTestCase {
 
     @MainActor
     private func ensureSidebarVisible() {
-        if hostAddButton().waitForExistence(timeout: 2) {
+        if hostAddButton().waitForExistence(timeout: 10) {
             return
         }
 
         let toggle = button("shell.sidebarToggle")
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        toggle.tap()
+        if toggle.waitForExistence(timeout: 2) {
+            toggle.tap()
+        }
+
         XCTAssertTrue(hostAddButton().waitForExistence(timeout: 10))
     }
 
