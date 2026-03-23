@@ -9,12 +9,11 @@ import * as persistence from './persistence.mjs';
 import { config } from './config.mjs';
 
 function resolveShell() {
-    if (process.platform === 'win32') {
-        return process.env.COMSPEC || 'cmd.exe';
-    }
-    // config.shell has already handled process.env.SHELL and TABMINAL_SHELL via config.mjs
     if (config.shell) {
         return config.shell;
+    }
+    if (process.platform === 'win32') {
+        return process.env.COMSPEC || 'cmd.exe';
     }
     // Try to use Homebrew installed bash if available (newer version)
     if (fs.existsSync('/opt/homebrew/bin/bash')) {
@@ -60,7 +59,12 @@ export class TerminalManager {
 
         // Inject shell tools
         const shellToolsPath = path.join(process.cwd(), 'shell');
-        env.PATH = `${shellToolsPath}:${env.PATH}`;
+        const pathDelimiter = path.delimiter;
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+        const existingPath = env[pathKey];
+        env[pathKey] = existingPath
+            ? `${shellToolsPath}${pathDelimiter}${existingPath}`
+            : shellToolsPath;
 
         let args = [];
         let initFilePath = null;
@@ -151,14 +155,17 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
 
         let ptyProcess;
         try {
-            ptyProcess = pty.spawn(shell, args, {
+            const ptyOptions = {
                 name: 'xterm-256color',
                 cols: cols,
                 rows: rows,
                 cwd: initialCwd,
-                env: env,
-                encoding: 'utf8'
-            });
+                env: env
+            };
+            if (process.platform !== 'win32') {
+                ptyOptions.encoding = 'utf8';
+            }
+            ptyProcess = pty.spawn(shell, args, ptyOptions);
         } catch (err) {
             const spawnInfo = {
                 shell,
@@ -295,7 +302,11 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         this.disposing = true;
         for (const session of this.sessions.values()) {
             try {
-                session.pty.kill('SIGHUP');
+                if (process.platform === 'win32') {
+                    session.pty.kill();
+                } else {
+                    session.pty.kill('SIGHUP');
+                }
             } catch {
                 // ignore
             }

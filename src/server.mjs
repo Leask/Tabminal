@@ -275,6 +275,14 @@ app.use(router.allowedMethods());
 
 const httpServer = createServer(app.callback());
 const wss = new WebSocketServer({ noServer: true, verifyClient });
+const httpConnections = new Set();
+
+httpServer.on('connection', (socket) => {
+    httpConnections.add(socket);
+    socket.on('close', () => {
+        httpConnections.delete(socket);
+    });
+});
 
 httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
@@ -370,6 +378,9 @@ function shutdown(signal) {
     isShuttingDown = true;
     console.log(`Shutting down (${signal})...`);
     clearInterval(heartbeatInterval);
+    for (const socket of wss.clients) {
+        socket.terminate();
+    }
     wss.close();
     terminalManager.dispose();
 
@@ -382,6 +393,11 @@ function shutdown(signal) {
         clearTimeout(forceExitTimer);
         process.exit(0);
     });
+    httpServer.closeIdleConnections?.();
+    httpServer.closeAllConnections?.();
+    for (const socket of httpConnections) {
+        socket.destroy();
+    }
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
