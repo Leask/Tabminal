@@ -13,6 +13,7 @@ import bodyParser from 'koa-bodyparser';
 import { WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
+import { AcpManager } from './acp-manager.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import { authMiddleware, verifyClient } from './auth.mjs';
@@ -130,6 +131,7 @@ app.use(authMiddleware);
 
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
+const acpManager = new AcpManager();
 
 // Restore sessions
 (async () => {
@@ -201,6 +203,7 @@ router.post('/api/sessions', (ctx) => {
 
 router.delete('/api/sessions/:id', async (ctx) => {
     const { id } = ctx.params;
+    await acpManager.closeTabsForTerminalSession(id);
     await terminalManager.removeSession(id);
     ctx.status = 204;
 });
@@ -269,6 +272,96 @@ router.put('/api/cluster', async (ctx) => {
     }
 });
 
+router.get('/api/agents', async (ctx) => {
+    ctx.body = await acpManager.listState();
+});
+
+router.post('/api/agents/tabs', async (ctx) => {
+    const { agentId, cwd, terminalSessionId } = ctx.request.body || {};
+    if (!agentId || typeof agentId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'agentId is required' };
+        return;
+    }
+    if (!cwd || typeof cwd !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'cwd is required' };
+        return;
+    }
+
+    try {
+        ctx.status = 201;
+        ctx.body = await acpManager.createTab({
+            agentId,
+            cwd,
+            terminalSessionId: typeof terminalSessionId === 'string'
+                ? terminalSessionId
+                : ''
+        });
+    } catch (error) {
+        ctx.status = 500;
+        ctx.body = { error: error?.message || 'Failed to create agent tab' };
+    }
+});
+
+router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
+    const { tabId } = ctx.params;
+    const { text } = ctx.request.body || {};
+    if (!text || typeof text !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'text is required' };
+        return;
+    }
+    try {
+        await acpManager.sendPrompt(tabId, text);
+        ctx.status = 202;
+        ctx.body = { ok: true };
+    } catch (error) {
+        ctx.status = 500;
+        ctx.body = { error: error?.message || 'Failed to send prompt' };
+    }
+});
+
+router.post('/api/agents/tabs/:tabId/cancel', async (ctx) => {
+    const { tabId } = ctx.params;
+    try {
+        await acpManager.cancel(tabId);
+        ctx.status = 202;
+        ctx.body = { ok: true };
+    } catch (error) {
+        ctx.status = 500;
+        ctx.body = { error: error?.message || 'Failed to cancel prompt' };
+    }
+});
+
+router.post(
+    '/api/agents/tabs/:tabId/permissions/:permissionId',
+    async (ctx) => {
+        const { tabId, permissionId } = ctx.params;
+        const { optionId } = ctx.request.body || {};
+        try {
+            await acpManager.resolvePermission(
+                tabId,
+                permissionId,
+                typeof optionId === 'string' ? optionId : ''
+            );
+            ctx.status = 200;
+            ctx.body = { ok: true };
+        } catch (error) {
+            ctx.status = 500;
+            ctx.body = {
+                error: error?.message || 'Failed to resolve permission'
+            };
+        }
+    }
+);
+
+router.delete('/api/agents/tabs/:tabId', async (ctx) => {
+    const { tabId } = ctx.params;
+    await acpManager.closeTab(tabId);
+    ctx.status = 204;
+});
+
 // Middleware
 app.use(router.routes());
 app.use(router.allowedMethods());
@@ -288,7 +381,21 @@ httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const pathname = url.pathname;
 
-    if (pathname.startsWith('/ws/')) {
+    if (pathname.startsWith('/ws/agents/')) {
+        const match = pathname.match(/^\/ws\/agents\/([a-zA-Z0-9-]+)$/);
+        if (!match) {
+            socket.destroy();
+            return;
+        }
+
+        const tabId = match[1];
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, {
+                kind: 'agent',
+                tabId
+            });
+        });
+    } else if (pathname.startsWith('/ws/')) {
         const match = pathname.match(/^\/ws\/([a-zA-Z0-9-]+)$/);
         if (!match) {
             socket.destroy();
@@ -305,20 +412,36 @@ httpServer.on('upgrade', (request, socket, head) => {
                 return;
             }
             const ua = request.headers['user-agent'] || 'Unknown';
-            wss.emit('connection', ws, session, ua);
+            wss.emit('connection', ws, {
+                kind: 'terminal',
+                session,
+                ua
+            });
         });
     } else {
         socket.destroy();
     }
 });
 
-wss.on('connection', (socket, session, ua) => {
+wss.on('connection', (socket, target) => {
     socket.isAlive = true;
     socket.on('pong', () => {
         socket.isAlive = true;
     });
-    debugLog(`[Server] WebSocket connected to session ${session.id} [${ua}]`);
-    session.attach(socket);
+    if (target.kind === 'terminal') {
+        debugLog(
+            `[Server] WebSocket connected to session `
+            + `${target.session.id} [${target.ua}]`
+        );
+        target.session.attach(socket);
+        return;
+    }
+    if (target.kind === 'agent') {
+        debugLog(
+            `[Server] WebSocket connected to agent tab ${target.tabId}`
+        );
+        acpManager.attachSocket(target.tabId, socket);
+    }
 });
 
 const heartbeatInterval = setInterval(() => {
@@ -383,6 +506,7 @@ function shutdown(signal) {
     }
     wss.close();
     terminalManager.dispose();
+    void acpManager.dispose();
 
     const forceExitTimer = setTimeout(() => {
         console.warn('Forced shutdown after timeout.');

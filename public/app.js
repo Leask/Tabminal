@@ -59,7 +59,10 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
+const FILE_WORKSPACE_TAB_PREFIX = 'file:';
+const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -67,6 +70,29 @@ const serverModalState = {
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
 // #endregion
+
+function makeFileWorkspaceTabKey(filePath) {
+    return `${FILE_WORKSPACE_TAB_PREFIX}${filePath}`;
+}
+
+function makeAgentTabKey(serverId, tabId) {
+    return `${AGENT_WORKSPACE_TAB_PREFIX}${serverId}:${tabId}`;
+}
+
+function isAgentWorkspaceTabKey(key) {
+    return typeof key === 'string'
+        && key.startsWith(AGENT_WORKSPACE_TAB_PREFIX);
+}
+
+function isFileWorkspaceTabKey(key) {
+    return typeof key === 'string'
+        && key.startsWith(FILE_WORKSPACE_TAB_PREFIX);
+}
+
+function workspaceKeyToFilePath(key) {
+    if (!isFileWorkspaceTabKey(key)) return '';
+    return key.slice(FILE_WORKSPACE_TAB_PREFIX.length);
+}
 
 // #region Sidebar Toggle (Mobile)
 const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -222,6 +248,7 @@ class ServerClient {
         this.heartbeatSmoothedMaxVal = 1;
         this.heartbeatTimer = null;
         this.nextSyncAt = 0;
+        this.agentStateLoaded = false;
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
         this.expandedPaths = new Set();
@@ -291,6 +318,23 @@ class ServerClient {
         return wsUrl.toString();
     }
 
+    resolveAgentWsUrl(tabId, token = '') {
+        const base = new URL(this.baseUrl);
+        const shouldUseSecureWs = (
+            base.protocol === 'https:'
+            || window.location.protocol === 'https:'
+        );
+        const wsProtocol = shouldUseSecureWs ? 'wss:' : 'ws:';
+        const wsUrl = new URL(
+            `/ws/agents/${tabId}`,
+            `${wsProtocol}//${base.host}`
+        );
+        if (token) {
+            wsUrl.searchParams.set('token', token);
+        }
+        return wsUrl.toString();
+    }
+
     async login(password) {
         const hashed = await hashPassword(password);
         await this.loginWithToken(hashed);
@@ -309,6 +353,7 @@ class ServerClient {
         this.setToken('');
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
+        this.agentStateLoaded = false;
         this.stopHeartbeat();
         if (!this.isPrimary) {
             syncServerList().catch(() => {});
@@ -412,14 +457,123 @@ class EditorManager {
         this.pane = document.getElementById('editor-pane');
         this.resizer = document.getElementById('editor-resizer');
         this.tabsContainer = document.getElementById('editor-tabs');
+        this.contentContainer = document.getElementById('editor-content');
         this.monacoContainer = document.getElementById('monaco-container');
         this.imagePreviewContainer = document.getElementById('image-preview-container');
         this.imagePreview = document.getElementById('image-preview');
         this.emptyState = document.getElementById('empty-editor-state');
-        
+        this.agentContainer = null;
+        this.agentHeader = null;
+        this.agentMeta = null;
+        this.agentTranscript = null;
+        this.agentTools = null;
+        this.agentPermissions = null;
+        this.agentPrompt = null;
+        this.agentSendButton = null;
+        this.agentCancelButton = null;
+
         this.initResizer();
+        this.initAgentPanel();
         this.initMonaco();
         this.loadIconMap();
+    }
+
+    initAgentPanel() {
+        this.agentContainer = document.createElement('div');
+        this.agentContainer.className = 'agent-panel';
+        this.agentContainer.style.display = 'none';
+
+        const header = document.createElement('div');
+        header.className = 'agent-panel-header';
+
+        this.agentHeader = document.createElement('div');
+        this.agentHeader.className = 'agent-panel-title';
+
+        this.agentMeta = document.createElement('div');
+        this.agentMeta.className = 'agent-panel-meta';
+
+        header.appendChild(this.agentHeader);
+        header.appendChild(this.agentMeta);
+
+        this.agentTools = document.createElement('div');
+        this.agentTools.className = 'agent-panel-tools';
+
+        this.agentPermissions = document.createElement('div');
+        this.agentPermissions.className = 'agent-panel-permissions';
+
+        this.agentTranscript = document.createElement('div');
+        this.agentTranscript.className = 'agent-panel-transcript';
+
+        const composer = document.createElement('div');
+        composer.className = 'agent-panel-composer';
+
+        this.agentPrompt = document.createElement('textarea');
+        this.agentPrompt.className = 'agent-panel-input';
+        this.agentPrompt.placeholder = 'Ask the agent to inspect or change code';
+        this.agentPrompt.rows = 3;
+        this.agentPrompt.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                void this.submitActiveAgentPrompt();
+            }
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'agent-panel-actions';
+
+        this.agentCancelButton = document.createElement('button');
+        this.agentCancelButton.type = 'button';
+        this.agentCancelButton.className = 'agent-panel-button secondary';
+        this.agentCancelButton.textContent = 'Cancel';
+        this.agentCancelButton.addEventListener('click', () => {
+            void this.cancelActiveAgentPrompt();
+        });
+
+        this.agentSendButton = document.createElement('button');
+        this.agentSendButton.type = 'button';
+        this.agentSendButton.className = 'agent-panel-button';
+        this.agentSendButton.textContent = 'Send';
+        this.agentSendButton.addEventListener('click', () => {
+            void this.submitActiveAgentPrompt();
+        });
+
+        actions.appendChild(this.agentCancelButton);
+        actions.appendChild(this.agentSendButton);
+        composer.appendChild(this.agentPrompt);
+        composer.appendChild(actions);
+
+        this.agentContainer.appendChild(header);
+        this.agentContainer.appendChild(this.agentTools);
+        this.agentContainer.appendChild(this.agentPermissions);
+        this.agentContainer.appendChild(this.agentTranscript);
+        this.agentContainer.appendChild(composer);
+        this.contentContainer.appendChild(this.agentContainer);
+    }
+
+    getActiveWorkspaceTabKey(session = this.currentSession) {
+        if (!session) return '';
+        const explicitKey = session.workspaceState?.activeTabKey || '';
+        if (explicitKey) {
+            if (
+                isAgentWorkspaceTabKey(explicitKey)
+                && state.agentTabs.has(explicitKey)
+            ) {
+                return explicitKey;
+            }
+            if (
+                isFileWorkspaceTabKey(explicitKey)
+                && session.editorState.openFiles.includes(
+                    workspaceKeyToFilePath(explicitKey)
+                )
+            ) {
+                return explicitKey;
+            }
+        }
+        if (session.editorState.activeFilePath) {
+            return makeFileWorkspaceTabKey(session.editorState.activeFilePath);
+        }
+        const agentTabs = getAgentTabsForSession(session);
+        return agentTabs[0]?.key || '';
     }
 
     getModelStore(session = this.currentSession) {
@@ -576,7 +730,8 @@ class EditorManager {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
         const hasOpenFiles = state.openFiles.length > 0;
-        const shouldShow = state.isVisible && hasOpenFiles;
+        const hasAgentTabs = getAgentTabsForSession(this.currentSession).length > 0;
+        const shouldShow = state.isVisible && (hasOpenFiles || hasAgentTabs);
         
         this.pane.style.display = shouldShow ? 'flex' : 'none';
         this.resizer.style.display = shouldShow ? 'flex' : 'none';
@@ -607,8 +762,9 @@ class EditorManager {
                 this.refreshSessionTree(this.currentSession);
             }
             this.renderEditorTabs();
-            if (state.activeFilePath) {
-                this.activateTab(state.activeFilePath, true);
+            const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
+            if (activeKey) {
+                this.activateWorkspaceTab(activeKey, true);
             }
         }
         
@@ -637,8 +793,11 @@ class EditorManager {
         // Only render tabs and content, file tree is persistent in sidebar
         if (state.isVisible) {
             this.renderEditorTabs();
-            if (state.activeFilePath) {
-                this.activateTab(state.activeFilePath, true);
+            const activeKey = this.getActiveWorkspaceTabKey(session);
+            if (activeKey) {
+                this.activateWorkspaceTab(activeKey, true);
+            } else {
+                this.showEmptyState();
             }
         }
         
@@ -796,7 +955,7 @@ class EditorManager {
             });
         }
 
-        this.activateTab(filePath);
+        this.activateFileTab(filePath);
         this.currentSession.saveState();
     }
 
@@ -814,10 +973,18 @@ class EditorManager {
         
         if (state.activeFilePath === filePath) {
             if (state.openFiles.length > 0) {
-                this.activateTab(state.openFiles[state.openFiles.length - 1]);
+                this.activateFileTab(state.openFiles[state.openFiles.length - 1]);
             } else {
-                state.activeFilePath = null;
-                this.showEmptyState();
+                const agentTabs = getAgentTabsForSession(this.currentSession);
+                if (agentTabs.length > 0) {
+                    this.activateAgentTab(agentTabs[0].key);
+                } else {
+                    state.activeFilePath = null;
+                    if (this.currentSession.workspaceState) {
+                        this.currentSession.workspaceState.activeTabKey = '';
+                    }
+                    this.showEmptyState();
+                }
             }
         }
         
@@ -828,12 +995,15 @@ class EditorManager {
     renderEditorTabs() {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
+        const activeWorkspaceTabKey = this.getActiveWorkspaceTabKey();
 
         this.tabsContainer.innerHTML = '';
         for (const path of state.openFiles) {
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
-            if (path === state.activeFilePath) tab.classList.add('active');
+            if (makeFileWorkspaceTabKey(path) === activeWorkspaceTabKey) {
+                tab.classList.add('active');
+            }
             
             const fileModel = this.getModel(path);
             if (fileModel && fileModel.readonly) {
@@ -844,23 +1014,63 @@ class EditorManager {
             const span = document.createElement('span');
             span.textContent = name;
             
-                        const closeBtn = document.createElement('span');
-                closeBtn.className = 'close-btn';
-                closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-                closeBtn.onclick = (e) => {
-                            e.stopPropagation();
-                            this.closeFile(path);            };
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'close-btn';
+            closeBtn.innerHTML = CLOSE_ICON_SVG;
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.closeFile(path);
+            };
             
-            tab.onclick = () => this.activateTab(path);
+            tab.onclick = () => this.activateFileTab(path);
             
             tab.appendChild(span);
             tab.appendChild(closeBtn);
             this.tabsContainer.appendChild(tab);
         }
+
+        for (const agentTab of getAgentTabsForSession(this.currentSession)) {
+            const tab = document.createElement('div');
+            tab.className = 'editor-tab agent-editor-tab';
+            if (agentTab.key === activeWorkspaceTabKey) {
+                tab.classList.add('active');
+            }
+
+            const icon = document.createElement('span');
+            icon.className = 'agent-editor-tab-icon';
+            icon.innerHTML = AGENT_ICON_SVG;
+
+            const label = document.createElement('span');
+            label.textContent = agentTab.agentLabel;
+
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'close-btn';
+            closeBtn.innerHTML = CLOSE_ICON_SVG;
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                void this.closeAgentTab(agentTab.key);
+            };
+
+            tab.onclick = () => this.activateAgentTab(agentTab.key);
+
+            tab.appendChild(icon);
+            tab.appendChild(label);
+            tab.appendChild(closeBtn);
+            this.tabsContainer.appendChild(tab);
+        }
     }
 
-    activateTab(filePath, isRestore = false) {
+    activateWorkspaceTab(workspaceTabKey, isRestore = false) {
+        if (isAgentWorkspaceTabKey(workspaceTabKey)) {
+            this.activateAgentTab(workspaceTabKey, isRestore);
+            return;
+        }
+        this.activateFileTab(workspaceKeyToFilePath(workspaceTabKey), isRestore);
+    }
+
+    activateFileTab(filePath, isRestore = false) {
         if (!this.currentSession) return;
+        if (!filePath) return;
         const state = this.currentSession.editorState;
 
         if (!isRestore && state.activeFilePath && state.activeFilePath !== filePath) {
@@ -871,6 +1081,7 @@ class EditorManager {
         }
 
         state.activeFilePath = filePath;
+        this.currentSession.workspaceState.activeTabKey = makeFileWorkspaceTabKey(filePath);
         this.currentSession.saveState();
         const file = this.getModel(filePath);
         
@@ -883,6 +1094,7 @@ class EditorManager {
         }
 
         if (file.type === 'image') {
+            this.agentContainer.style.display = 'none';
             this.monacoContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'flex';
             
@@ -896,6 +1108,7 @@ class EditorManager {
                 `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${this.currentSession.server.token}`
             );
         } else {
+            this.agentContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'none';
             this.monacoContainer.style.display = 'block';
             
@@ -918,15 +1131,259 @@ class EditorManager {
         }
     }
 
+    activateAgentTab(agentTabKey, isRestore = false) {
+        if (!this.currentSession) return;
+        const agentTab = state.agentTabs.get(agentTabKey);
+        if (!agentTab) {
+            this.showEmptyState();
+            return;
+        }
+        if (
+            agentTab.terminalSessionId
+            && agentTab.terminalSessionId !== this.currentSession.id
+        ) {
+            return;
+        }
+
+        if (
+            !isRestore
+            && this.editor
+            && this.currentSession.editorState.activeFilePath
+        ) {
+            const filePath = this.currentSession.editorState.activeFilePath;
+            const model = this.getModel(filePath);
+            if (model && model.type === 'text') {
+                this.currentSession.editorState.viewStates.set(
+                    filePath,
+                    this.editor.saveViewState()
+                );
+            }
+        }
+
+        this.currentSession.workspaceState.activeTabKey = agentTabKey;
+        this.renderEditorTabs();
+        this.monacoContainer.style.display = 'none';
+        this.imagePreviewContainer.style.display = 'none';
+        this.emptyState.style.display = 'none';
+        this.agentContainer.style.display = 'flex';
+        this.renderAgentPanel(agentTab);
+    }
+
+    async closeAgentTab(agentTabKey) {
+        const agentTab = state.agentTabs.get(agentTabKey);
+        if (!agentTab) return;
+        await agentTab.close();
+        removeAgentTab(agentTabKey);
+    }
+
+    renderAgentPanel(agentTab) {
+        this.agentHeader.textContent = agentTab.agentLabel;
+        this.agentMeta.textContent = [
+            `HOST ${getDisplayHost(agentTab.server)}`,
+            agentTab.cwd ? `CWD ${agentTab.cwd}` : '',
+            `STATUS ${agentTab.status}${agentTab.busy ? ' (running)' : ''}`
+        ].filter(Boolean).join(' · ');
+
+        this.agentTranscript.innerHTML = '';
+        for (const message of agentTab.messages) {
+            const item = document.createElement('div');
+            item.className = `agent-message ${message.role} ${message.kind}`;
+
+            const role = document.createElement('div');
+            role.className = 'agent-message-role';
+            role.textContent = `${message.role} · ${message.kind}`;
+
+            const body = document.createElement('pre');
+            body.className = 'agent-message-body';
+            body.textContent = message.text || '';
+
+            item.appendChild(role);
+            item.appendChild(body);
+            this.agentTranscript.appendChild(item);
+        }
+        this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
+
+        this.agentTools.innerHTML = '';
+        for (const toolCall of agentTab.toolCalls.values()) {
+            const node = document.createElement('div');
+            node.className = 'agent-tool-call';
+            node.textContent = [
+                toolCall.title || toolCall.toolCallId,
+                toolCall.status || 'pending'
+            ].join(' · ');
+            this.agentTools.appendChild(node);
+        }
+
+        this.agentPermissions.innerHTML = '';
+        for (const permission of agentTab.permissions.values()) {
+            if (permission.status !== 'pending') continue;
+            const card = document.createElement('div');
+            card.className = 'agent-permission-card';
+
+            const title = document.createElement('div');
+            title.className = 'agent-permission-title';
+            title.textContent = permission.toolCall?.title || 'Permission required';
+            card.appendChild(title);
+
+            const options = document.createElement('div');
+            options.className = 'agent-permission-options';
+
+            for (const option of permission.options || []) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'agent-permission-option';
+                button.textContent = option.name || option.id;
+                button.onclick = async () => {
+                    try {
+                        await agentTab.resolvePermission(
+                            permission.id,
+                            option.id
+                        );
+                    } catch (error) {
+                        alert(error.message, {
+                            type: 'error',
+                            title: 'Agent'
+                        });
+                    }
+                };
+                options.appendChild(button);
+            }
+
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.className = 'agent-permission-option secondary';
+            cancelButton.textContent = 'Cancel';
+            cancelButton.onclick = async () => {
+                try {
+                    await agentTab.resolvePermission(permission.id, '');
+                } catch (error) {
+                    alert(error.message, {
+                        type: 'error',
+                        title: 'Agent'
+                    });
+                }
+            };
+            options.appendChild(cancelButton);
+            card.appendChild(options);
+            this.agentPermissions.appendChild(card);
+        }
+
+        this.agentPrompt.disabled = false;
+        this.agentSendButton.disabled = agentTab.busy;
+        this.agentCancelButton.disabled = !agentTab.busy;
+    }
+
+    async submitActiveAgentPrompt() {
+        const activeTabKey = this.getActiveWorkspaceTabKey();
+        if (!isAgentWorkspaceTabKey(activeTabKey)) return;
+        const agentTab = state.agentTabs.get(activeTabKey);
+        if (!agentTab) return;
+        const text = this.agentPrompt.value.trim();
+        if (!text) return;
+        this.agentPrompt.value = '';
+        try {
+            await agentTab.sendPrompt(text);
+            agentTab.busy = true;
+            agentTab.status = 'running';
+            this.renderAgentPanel(agentTab);
+        } catch (error) {
+            alert(error.message, {
+                type: 'error',
+                title: 'Agent'
+            });
+        }
+    }
+
+    async cancelActiveAgentPrompt() {
+        const activeTabKey = this.getActiveWorkspaceTabKey();
+        if (!isAgentWorkspaceTabKey(activeTabKey)) return;
+        const agentTab = state.agentTabs.get(activeTabKey);
+        if (!agentTab) return;
+        try {
+            await agentTab.cancel();
+        } catch (error) {
+            alert(error.message, {
+                type: 'error',
+                title: 'Agent'
+            });
+        }
+    }
+
     showEmptyState() {
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
+        this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'flex';
     }
 }
 
 const editorManager = new EditorManager();
 // #endregion
+
+const agentDropdownEl = document.createElement('div');
+agentDropdownEl.className = 'agent-dropdown';
+agentDropdownEl.style.display = 'none';
+document.body.appendChild(agentDropdownEl);
+
+function closeAgentDropdown() {
+    agentDropdownEl.style.display = 'none';
+    agentDropdownEl.innerHTML = '';
+}
+
+function openAgentDropdown(session, anchor) {
+    if (!session || !anchor) return;
+    const definitions = getAgentDefinitionsForServer(session.serverId);
+    agentDropdownEl.innerHTML = '';
+
+    for (const definition of definitions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'agent-dropdown-item';
+        button.disabled = definition.available === false;
+        button.textContent = definition.available === false
+            ? `${definition.label} (not installed)`
+            : definition.label;
+        button.onclick = async (event) => {
+            event.stopPropagation();
+            closeAgentDropdown();
+            try {
+                await createAgentTab(session, definition.id);
+                if (state.activeSessionKey !== session.key) {
+                    await switchToSession(session.key);
+                } else {
+                    refreshWorkspaceIfSessionActive(session);
+                }
+            } catch (error) {
+                alert(error.message, {
+                    type: 'error',
+                    title: 'Agent'
+                });
+            }
+        };
+        agentDropdownEl.appendChild(button);
+    }
+
+    if (definitions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'agent-dropdown-empty';
+        empty.textContent = 'No agents available';
+        agentDropdownEl.appendChild(empty);
+    }
+
+    const rect = anchor.getBoundingClientRect();
+    agentDropdownEl.style.display = 'flex';
+    agentDropdownEl.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    agentDropdownEl.style.left = `${rect.left + window.scrollX}px`;
+}
+
+document.addEventListener('click', (event) => {
+    if (event.target.closest('.toggle-agent-btn')) {
+        return;
+    }
+    if (!event.target.closest('.agent-dropdown')) {
+        closeAgentDropdown();
+    }
+});
 
 // #region FPS Counter
 let frameCount = 0;
@@ -972,6 +1429,11 @@ class Session {
             openFiles: data.editorState?.openFiles || [],
             activeFilePath: data.editorState?.activeFilePath || null,
             viewStates: new Map() // Path -> ViewState
+        };
+        this.workspaceState = {
+            activeTabKey: data.editorState?.activeFilePath
+                ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
+                : ''
         };
         
         this.layoutState = {
@@ -1297,10 +1759,246 @@ class Session {
 }
 // #endregion
 
+class AgentTab {
+    constructor(data, server) {
+        this.server = server;
+        this.serverId = server.id;
+        this.id = data.id;
+        this.key = makeAgentTabKey(this.serverId, this.id);
+        this.socket = null;
+        this.update(data);
+        this.connect();
+    }
+
+    getLinkedSession() {
+        if (!this.terminalSessionId) return null;
+        return state.sessions.get(
+            makeSessionKey(this.serverId, this.terminalSessionId)
+        ) || null;
+    }
+
+    notifyUi() {
+        const session = this.getLinkedSession();
+        if (!session) return;
+        refreshWorkspaceIfSessionActive(session);
+    }
+
+    update(data) {
+        this.runtimeId = data.runtimeId || '';
+        this.runtimeKey = data.runtimeKey || '';
+        this.acpSessionId = data.acpSessionId || '';
+        this.agentId = data.agentId || '';
+        this.agentLabel = data.agentLabel || 'Agent';
+        this.commandLabel = data.commandLabel || '';
+        this.terminalSessionId = data.terminalSessionId || '';
+        this.cwd = data.cwd || '';
+        this.createdAt = data.createdAt || new Date().toISOString();
+        this.status = data.status || 'ready';
+        this.busy = !!data.busy;
+        this.errorMessage = data.errorMessage || '';
+        this.currentModeId = data.currentModeId || '';
+        this.availableModes = Array.isArray(data.availableModes)
+            ? data.availableModes
+            : [];
+        this.messages = Array.isArray(data.messages)
+            ? data.messages.map((message) => ({ ...message }))
+            : [];
+        this.toolCalls = new Map();
+        for (const toolCall of data.toolCalls || []) {
+            if (toolCall?.toolCallId) {
+                this.toolCalls.set(toolCall.toolCallId, { ...toolCall });
+            }
+        }
+        this.permissions = new Map();
+        for (const permission of data.permissions || []) {
+            if (permission?.id) {
+                this.permissions.set(permission.id, { ...permission });
+            }
+        }
+    }
+
+    connect() {
+        if (!this.server.isAuthenticated) return;
+        if (
+            this.socket
+            && (
+                this.socket.readyState === WebSocket.OPEN
+                || this.socket.readyState === WebSocket.CONNECTING
+            )
+        ) {
+            return;
+        }
+
+        const endpoint = this.server.resolveAgentWsUrl(
+            this.id,
+            this.server.token
+        );
+        this.socket = new WebSocket(endpoint);
+        this.socket.addEventListener('message', (event) => {
+            try {
+                this.handleMessage(JSON.parse(event.data));
+            } catch {
+                // Ignore malformed agent payloads.
+            }
+        });
+        this.socket.addEventListener('close', () => {
+            this.socket = null;
+            if (this.status === 'running') {
+                this.status = 'disconnected';
+                this.busy = false;
+                this.notifyUi();
+            }
+        });
+    }
+
+    handleMessage(message) {
+        switch (message.type) {
+            case 'snapshot':
+                this.update(message.tab || {});
+                break;
+            case 'message_open':
+                this.messages.push({ ...message.message });
+                break;
+            case 'message_chunk':
+                this.#appendChunk(message);
+                break;
+            case 'session_update':
+                this.#applySessionUpdate(message.update || {});
+                if (message.tab?.currentModeId) {
+                    this.currentModeId = message.tab.currentModeId;
+                }
+                break;
+            case 'permission_request':
+                if (message.permission?.id) {
+                    this.permissions.set(message.permission.id, {
+                        ...message.permission
+                    });
+                }
+                break;
+            case 'permission_resolved': {
+                const permission = this.permissions.get(message.permissionId);
+                if (permission) {
+                    permission.status = message.status || permission.status;
+                }
+                break;
+            }
+            case 'status':
+                this.status = message.status || this.status;
+                this.busy = !!message.busy;
+                this.errorMessage = message.errorMessage || '';
+                break;
+            case 'complete':
+                this.status = message.status || 'ready';
+                this.busy = !!message.busy;
+                break;
+            default:
+                break;
+        }
+        this.notifyUi();
+    }
+
+    #appendChunk(message) {
+        const last = this.messages[this.messages.length - 1] || null;
+        if (
+            last
+            && last.streamKey === message.streamKey
+            && last.role === message.role
+            && last.kind === message.kind
+        ) {
+            last.text += message.text || '';
+            return;
+        }
+
+        this.messages.push({
+            id: crypto.randomUUID(),
+            streamKey: message.streamKey,
+            role: message.role || 'assistant',
+            kind: message.kind || 'message',
+            text: message.text || ''
+        });
+    }
+
+    #applySessionUpdate(update) {
+        switch (update.sessionUpdate) {
+            case 'tool_call':
+                if (update.toolCallId) {
+                    this.toolCalls.set(update.toolCallId, { ...update });
+                }
+                break;
+            case 'tool_call_update': {
+                const previous = this.toolCalls.get(update.toolCallId) || {};
+                this.toolCalls.set(update.toolCallId, {
+                    ...previous,
+                    ...update
+                });
+                break;
+            }
+            case 'current_mode_update':
+                this.currentModeId = update.currentModeId || '';
+                break;
+            default:
+                break;
+        }
+    }
+
+    async sendPrompt(text) {
+        const response = await this.server.fetch(
+            `/api/agents/tabs/${this.id}/prompt`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            }
+        );
+        if (!response.ok) {
+            throw new Error('Failed to send prompt');
+        }
+    }
+
+    async cancel() {
+        const response = await this.server.fetch(
+            `/api/agents/tabs/${this.id}/cancel`,
+            {
+                method: 'POST'
+            }
+        );
+        if (!response.ok) {
+            throw new Error('Failed to cancel prompt');
+        }
+    }
+
+    async resolvePermission(permissionId, optionId = '') {
+        const response = await this.server.fetch(
+            `/api/agents/tabs/${this.id}/permissions/${permissionId}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ optionId })
+            }
+        );
+        if (!response.ok) {
+            throw new Error('Failed to resolve permission');
+        }
+    }
+
+    async close() {
+        await this.server.fetch(`/api/agents/tabs/${this.id}`, {
+            method: 'DELETE'
+        });
+    }
+
+    dispose() {
+        this.socket?.close();
+        this.socket = null;
+    }
+}
+
 // #region State Management
 const state = {
     servers: new Map(), // serverId -> ServerClient
     sessions: new Map(), // sessionKey -> Session
+    agentDefinitions: new Map(), // serverId -> definitions[]
+    agentTabs: new Map(), // agentTabKey -> AgentTab
     activeSessionKey: null,
     serverRegistryLoaded: false
 };
@@ -1338,6 +2036,142 @@ function getSessionsForServer(serverId) {
     return Array.from(state.sessions.values()).filter(
         session => session.serverId === serverId
     );
+}
+
+function getAgentDefinitionsForServer(serverId) {
+    return state.agentDefinitions.get(serverId) || [];
+}
+
+function getAgentTabsForServer(serverId) {
+    return Array.from(state.agentTabs.values()).filter(
+        (tab) => tab.serverId === serverId
+    );
+}
+
+function getAgentTabsForSession(session) {
+    if (!session) return [];
+    return getAgentTabsForServer(session.serverId).filter(
+        (tab) => tab.terminalSessionId === session.id
+    );
+}
+
+function refreshWorkspaceIfSessionActive(session) {
+    if (!session) return;
+    if (state.activeSessionKey !== session.key) return;
+    if (editorManager.currentSession?.key !== session.key) {
+        editorManager.switchTo(session);
+        return;
+    }
+    editorManager.renderEditorTabs();
+    const activeKey = editorManager.getActiveWorkspaceTabKey(session);
+    if (isAgentWorkspaceTabKey(activeKey)) {
+        const agentTab = state.agentTabs.get(activeKey);
+        if (agentTab) {
+            editorManager.renderAgentPanel(agentTab);
+        }
+    }
+}
+
+function upsertAgentTab(server, data) {
+    const key = makeAgentTabKey(server.id, data.id);
+    const existing = state.agentTabs.get(key);
+    if (existing) {
+        existing.update(data);
+        existing.connect();
+        return existing;
+    }
+    const agentTab = new AgentTab(data, server);
+    state.agentTabs.set(key, agentTab);
+    return agentTab;
+}
+
+function removeAgentTab(agentTabKey) {
+    const agentTab = state.agentTabs.get(agentTabKey);
+    if (!agentTab) return;
+    const session = agentTab.getLinkedSession();
+    agentTab.dispose();
+    state.agentTabs.delete(agentTabKey);
+
+    if (
+        session
+        && session.workspaceState?.activeTabKey === agentTabKey
+    ) {
+        const files = session.editorState.openFiles;
+        if (files.length > 0) {
+            session.workspaceState.activeTabKey = makeFileWorkspaceTabKey(
+                files[files.length - 1]
+            );
+        } else {
+            const remaining = getAgentTabsForSession(session);
+            session.workspaceState.activeTabKey = remaining[0]?.key || '';
+        }
+    }
+
+    refreshWorkspaceIfSessionActive(session);
+}
+
+function removeAgentTabsForTerminalSession(session) {
+    if (!session) return;
+    const keys = getAgentTabsForSession(session).map((tab) => tab.key);
+    for (const key of keys) {
+        removeAgentTab(key);
+    }
+}
+
+async function syncAgentsForServer(server, { force = false } = {}) {
+    if (!server || !server.isAuthenticated) return;
+    if (!force && server.agentStateLoaded) return;
+
+    const response = await server.fetch('/api/agents');
+    if (!response.ok) {
+        throw new Error(`Failed to load agents: HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    state.agentDefinitions.set(
+        server.id,
+        Array.isArray(data?.definitions) ? data.definitions : []
+    );
+
+    const seenKeys = new Set();
+    for (const tabData of data?.tabs || []) {
+        const key = makeAgentTabKey(server.id, tabData.id);
+        seenKeys.add(key);
+        upsertAgentTab(server, tabData);
+    }
+
+    for (const agentTab of getAgentTabsForServer(server.id)) {
+        if (seenKeys.has(agentTab.key)) continue;
+        removeAgentTab(agentTab.key);
+    }
+
+    server.agentStateLoaded = true;
+    const session = getActiveSession();
+    if (session && session.serverId === server.id) {
+        editorManager.switchTo(session);
+    }
+}
+
+async function createAgentTab(session, agentId) {
+    if (!session || !agentId) return null;
+    const response = await session.server.fetch('/api/agents/tabs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            agentId,
+            cwd: session.cwd || session.initialCwd || '/',
+            terminalSessionId: session.id
+        })
+    });
+    if (!response.ok) {
+        throw new Error('Failed to create agent tab');
+    }
+    const data = await response.json();
+    const agentTab = upsertAgentTab(session.server, data);
+    session.editorState.isVisible = true;
+    session.workspaceState.activeTabKey = agentTab.key;
+    session.saveState();
+    refreshWorkspaceIfSessionActive(session);
+    return agentTab;
 }
 
 function getServerEndpointKey(server) {
@@ -1419,6 +2253,7 @@ function resetServerEndpoint(server, normalizedUrl) {
     server.baseUrl = normalizedUrl;
     server.modelStore.clear();
     server.expandedPaths.clear();
+    server.agentStateLoaded = false;
     server.lastSystemData = null;
     server.lastLatency = 0;
     server.needsAccessLogin = false;
@@ -1549,8 +2384,10 @@ async function fetchExpandedPaths(server) {
 async function syncServer(server) {
     if (!server || !server.isAuthenticated) return;
     const now = Date.now();
+    const wasReconnecting = server.connectionStatus === 'reconnecting';
+    const shouldRefreshAgents = !server.agentStateLoaded || wasReconnecting;
     if (
-        server.connectionStatus === 'reconnecting'
+        wasReconnecting
         && server.nextSyncAt
         && now < server.nextSyncAt
     ) {
@@ -1601,7 +2438,6 @@ async function syncServer(server) {
         const latency = Date.now() - startTime;
 
         if (!response.ok) {
-            const wasReconnecting = server.connectionStatus === 'reconnecting';
             if (!wasReconnecting) {
                 console.warn(
                     `[Heartbeat] ${getDisplayHost(server)} returned HTTP ${response.status}. Reconnecting...`
@@ -1657,8 +2493,14 @@ async function syncServer(server) {
 
         const sessions = Array.isArray(data) ? data : data.sessions;
         reconcileSessions(server, sessions || []);
+        if (shouldRefreshAgents) {
+            try {
+                await syncAgentsForServer(server, { force: true });
+            } catch (error) {
+                console.warn('Failed to sync agents:', error);
+            }
+        }
     } catch (error) {
-        const wasReconnecting = server.connectionStatus === 'reconnecting';
         if (!wasReconnecting) {
             console.warn(
                 `[Heartbeat] ${getDisplayHost(server)} unavailable (${formatHeartbeatError(error)}). Reconnecting...`
@@ -2173,6 +3015,7 @@ async function createNewSession(server = getActiveServer()) {
 function removeSession(key) {
     const session = state.sessions.get(key);
     if (session) {
+        removeAgentTabsForTerminalSession(session);
         session.dispose();
         state.sessions.delete(key);
     }
@@ -2305,6 +3148,27 @@ function createTabElement(session) {
         }
     };
     tab.appendChild(toggleEditorBtn);
+
+    const agentBtn = document.createElement('button');
+    agentBtn.className = 'toggle-agent-btn';
+    agentBtn.innerHTML = AGENT_ICON_SVG;
+    agentBtn.title = 'Open Agent';
+    agentBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!session.server.agentStateLoaded) {
+            try {
+                await syncAgentsForServer(session.server, { force: true });
+            } catch (error) {
+                alert(error.message, {
+                    type: 'error',
+                    title: 'Agent'
+                });
+                return;
+            }
+        }
+        openAgentDropdown(session, agentBtn);
+    };
+    tab.appendChild(agentBtn);
     
     const fileTree = document.createElement('div');
     fileTree.className = 'tab-file-tree';
@@ -2425,6 +3289,10 @@ async function removeServer(serverId, { persist = true } = {}) {
     if (!server || server.isPrimary) return;
 
     server.stopHeartbeat();
+    for (const agentTab of getAgentTabsForServer(serverId)) {
+        removeAgentTab(agentTab.key);
+    }
+    state.agentDefinitions.delete(serverId);
     const keysToDelete = Array.from(state.sessions.values())
         .filter(session => session.serverId === serverId)
         .map(session => session.key);

@@ -1331,6 +1331,17 @@ kbd {
     flex-shrink: 0;
 }
 
+.agent-editor-tab {
+    gap: 6px;
+}
+
+.agent-editor-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
 .editor-tab:hover {
     background-color: var(--bg-base);
 }
@@ -1381,6 +1392,177 @@ kbd {
     position: relative;
     overflow: hidden;
     min-width: 0;
+}
+
+.agent-panel {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-base);
+}
+
+.agent-panel-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background-color: rgba(7, 54, 66, 0.55);
+}
+
+.agent-panel-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-highlight);
+}
+
+.agent-panel-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.agent-panel-tools,
+.agent-panel-permissions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px 0;
+}
+
+.agent-tool-call,
+.agent-permission-card {
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: rgba(7, 54, 66, 0.4);
+    color: var(--text-base);
+    font-size: 0.82rem;
+}
+
+.agent-permission-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.agent-permission-title {
+    color: var(--text-highlight);
+}
+
+.agent-permission-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.agent-permission-option,
+.agent-panel-button,
+.agent-dropdown-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: rgba(38, 139, 210, 0.12);
+    color: var(--text-highlight);
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.agent-permission-option.secondary,
+.agent-panel-button.secondary {
+    background-color: rgba(88, 110, 117, 0.2);
+    color: var(--text-base);
+}
+
+.agent-panel-transcript {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.agent-message {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background-color: rgba(7, 54, 66, 0.35);
+}
+
+.agent-message.user {
+    border-color: rgba(38, 139, 210, 0.45);
+}
+
+.agent-message.assistant.thought {
+    border-style: dashed;
+}
+
+.agent-message-role {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.agent-message-body {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
+    color: var(--text-base);
+}
+
+.agent-panel-composer {
+    padding: 12px 14px 14px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background-color: rgba(0, 43, 54, 0.7);
+}
+
+.agent-panel-input {
+    width: 100%;
+    resize: vertical;
+    min-height: 72px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background-color: rgba(7, 54, 66, 0.45);
+    color: var(--text-highlight);
+    font: inherit;
+}
+
+.agent-panel-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.agent-dropdown {
+    position: absolute;
+    z-index: 1200;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background-color: rgba(0, 43, 54, 0.96);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.agent-dropdown-item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.agent-dropdown-empty {
+    padding: 8px 12px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
 }
 
 .monaco-container {
@@ -1452,6 +1634,44 @@ kbd {
     font-size: 14px;
     padding: 0;
     line-height: 1;
+}
+
+.toggle-agent-btn {
+    position: absolute;
+    top: 4px;
+    right: 36px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    color: var(--text-highlight);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.2s ease;
+    z-index: 10;
+    font-size: 14px;
+    padding: 0;
+    line-height: 1;
+}
+
+.tab-item:hover .toggle-agent-btn,
+.tab-item.active .toggle-agent-btn {
+    opacity: 1;
+}
+
+.toggle-agent-btn:hover {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.toggle-agent-btn:active {
+    transform: translateY(1px);
 }
 
 /* Show when hovering the tab */

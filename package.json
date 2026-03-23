@@ -32,6 +32,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.16.1",
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^15.4.0",
     "@mozilla/readability": "^0.6.0",
