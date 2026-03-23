@@ -303,6 +303,86 @@ ${buildExitSequence(0, 'echo hi')}`);
         assert.strictEqual(session.lastExecution.exitCode, 127);
         assert.match(session.lastExecution.output, /command not found/);
     });
+
+    it('cancels an active AI response with Ctrl+C', async () => {
+        session = new TerminalSession(pty);
+        session._isAiEnabled = () => true;
+
+        const client = new MockSocket();
+        session.attach(client);
+        await client.waitForMessages(3);
+        client.sent = [];
+
+        let streamCallback = null;
+        let releasePrompt;
+        const promptDone = new Promise((resolve) => {
+            releasePrompt = resolve;
+        });
+        session._promptAi = async (_prompt, options) => {
+            streamCallback = options.stream;
+            await promptDone;
+            return { text: 'late answer' };
+        };
+
+        const aiTask = session._handleAiCommand('test prompt');
+        await Promise.resolve();
+
+        session.write('\x03');
+        await Promise.resolve();
+        await streamCallback?.({ text: 'ignored after cancel' });
+        releasePrompt();
+        await aiTask;
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        assert.ok(
+            !payloads.some(
+                (payload) => payload.type === 'output'
+                    && payload.data.includes('ignored after cancel')
+            )
+        );
+        assert.strictEqual(session.executions.at(-1)?.command, 'ai');
+        assert.strictEqual(session.executions.at(-1)?.exitCode, 130);
+        assert.match(
+            session.executions.at(-1)?.output || '',
+            /cancelled/i
+        );
+        assert.ok(
+            pty.write.mock.calls.some((call) => call.arguments[0] === '\x03')
+        );
+    });
+
+    it('cancels an active AI response with Ctrl+D without sending EOF', async () => {
+        session = new TerminalSession(pty);
+        session._isAiEnabled = () => true;
+
+        let releasePrompt;
+        const promptDone = new Promise((resolve) => {
+            releasePrompt = resolve;
+        });
+        session._promptAi = async () => {
+            await promptDone;
+            return { text: 'late answer' };
+        };
+
+        const aiTask = session._handleAiCommand('test prompt');
+        await Promise.resolve();
+
+        session.write('\x04');
+        releasePrompt();
+        await aiTask;
+
+        assert.strictEqual(session.executions.at(-1)?.command, 'ai');
+        assert.strictEqual(session.executions.at(-1)?.exitCode, 130);
+        assert.ok(
+            !pty.write.mock.calls.some((call) => call.arguments[0] === '\x04')
+        );
+        assert.ok(
+            pty.write.mock.calls.some((call) => call.arguments[0] === '\x15')
+        );
+        assert.ok(
+            pty.write.mock.calls.some((call) => call.arguments[0] === '\r')
+        );
+    });
 });
 
 class FakePty {

@@ -121,7 +121,9 @@ export class TerminalSession {
         this.captureStartedAt = null;
         this.lastExecution = null;
         this.skipNextShellLog = false;
+        this.skipNextShellLogResetTimer = null;
         this.partialSequenceBuffer = '';
+        this.activeAiRun = null;
         this.snapshotScrollback = estimateSnapshotScrollback(
             this.pty.cols,
             this.pty.rows,
@@ -352,6 +354,7 @@ export class TerminalSession {
 
     dispose() {
         this.stopTitlePolling();
+        this._clearSkipNextShellLogResetTimer();
         this.clients.clear();
         this.pendingClients.clear();
         this.dataSubscription?.dispose?.();
@@ -416,6 +419,11 @@ export class TerminalSession {
     }
 
     write(data) {
+        if (this.activeAiRun && typeof data === 'string') {
+            this._handleInputDuringAi(data);
+            return;
+        }
+
         if (typeof data === 'string' && data.startsWith('\x1b')) {
             this.pty.write(data);
             this.inputBuffer = '';
@@ -503,6 +511,19 @@ export class TerminalSession {
         }
     }
 
+    _handleInputDuringAi(data) {
+        for (const char of data) {
+            if (char === '\x03') {
+                this._cancelActiveAiRun('ctrl_c');
+                return;
+            }
+            if (char === '\x04') {
+                this._cancelActiveAiRun('ctrl_d');
+                return;
+            }
+        }
+    }
+
     _buildAiContext(history) {
         let pendingShellHistory = '';
         const conversationHistory = [];
@@ -526,9 +547,67 @@ export class TerminalSession {
         return { conversationHistory, pendingShellHistory };
     }
 
+    _promptAi(prompt, options) {
+        return alan.prompt(prompt, options);
+    }
+
+    _clearSkipNextShellLogResetTimer() {
+        if (this.skipNextShellLogResetTimer) {
+            clearTimeout(this.skipNextShellLogResetTimer);
+            this.skipNextShellLogResetTimer = null;
+        }
+    }
+
+    _scheduleSkipNextShellLogReset() {
+        this._clearSkipNextShellLogResetTimer();
+        this.skipNextShellLogResetTimer = setTimeout(() => {
+            this.skipNextShellLog = false;
+            this.skipNextShellLogResetTimer = null;
+        }, 500);
+        this.skipNextShellLogResetTimer.unref?.();
+    }
+
+    _finishAiInteraction(mode = 'normal') {
+        this.suppressPtyOutput = false;
+        this._scheduleSkipNextShellLogReset();
+
+        if (mode === 'ctrl_c') {
+            this._writeToLogAndBroadcast('\x1b[0m');
+            this.pty.write('\x03');
+            return;
+        }
+
+        this._writeToLogAndBroadcast('\x1b[0m\r\n');
+        if (mode === 'ctrl_d') {
+            this.pty.write('\x15');
+        }
+        this.pty.write('\r');
+    }
+
+    _cancelActiveAiRun(reason) {
+        const run = this.activeAiRun;
+        if (!run || run.cancelled) {
+            return false;
+        }
+
+        run.cancelled = true;
+        this.activeAiRun = null;
+        this._logCommandExecution({
+            command: 'ai',
+            exitCode: 130,
+            input: run.prompt,
+            output: 'AI generation cancelled.',
+            startedAt: run.startedAt,
+            completedAt: new Date()
+        });
+        this._finishAiInteraction(reason);
+        return true;
+    }
+
     async _handleAiCommand(prompt) {
         // Prevent duplicate logging from shell integration
         this.skipNextShellLog = true;
+        this._clearSkipNextShellLogResetTimer();
         // Ensure clean line start and set Cyan color (No prefix yet)
         this._writeToLogAndBroadcast('\r\x1b[K\x1b[36m');
         // Gather Context (Current Session Only)
@@ -546,8 +625,17 @@ export class TerminalSession {
         const startTime = new Date();
         let fullResponse = '';
         let isFirstChunk = true;
+        const run = {
+            prompt,
+            startedAt: startTime,
+            cancelled: false
+        };
+        this.activeAiRun = run;
         try {
             const streamCallback = (chunk) => {
+                if (this.activeAiRun !== run || run.cancelled) {
+                    return;
+                }
                 // console.log('Chunk Received:');
                 // console.log(chunk);
                 if (chunk && chunk.text) {
@@ -563,12 +651,16 @@ export class TerminalSession {
                 }
             };
             // console.log('Start AI Prompt...');
-            const result = await alan.prompt(finalPrompt, {
+            const result = await this._promptAi(finalPrompt, {
                 stream: streamCallback,
                 delta: true,
                 messages: conversationHistory,
                 trimBeginning: true
             });
+
+            if (this.activeAiRun !== run || run.cancelled) {
+                return;
+            }
 
             if (result && result.text) {
                 fullResponse = result.text;
@@ -588,6 +680,9 @@ export class TerminalSession {
             });
 
         } catch (e) {
+            if (this.activeAiRun !== run || run.cancelled) {
+                return;
+            }
             this._writeToLogAndBroadcast(`\x1b[31mAI Error: ${e.message}\x1b[0m\r\n`);
 
             this._logCommandExecution({
@@ -598,13 +693,12 @@ export class TerminalSession {
                 startedAt: startTime,
                 completedAt: new Date()
             });
+        } finally {
+            if (this.activeAiRun === run) {
+                this.activeAiRun = null;
+                this._finishAiInteraction('normal');
+            }
         }
-
-        // Resume PTY output
-        this.suppressPtyOutput = false;
-
-        // Restore prompt by sending \r to pty (empty command)
-        this.pty.write('\r');
     }
 
     _handleResize(cols, rows) {
@@ -639,6 +733,7 @@ export class TerminalSession {
     _handleExitCodeSequence(exitCodeStr, cmdB64) {
         if (this.skipNextShellLog) {
             this.skipNextShellLog = false;
+            this._clearSkipNextShellLogResetTimer();
             this.captureBuffer = '';
             this.captureStartedAt = null;
             return;
