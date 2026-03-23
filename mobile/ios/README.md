@@ -59,6 +59,14 @@ cd mobile/ios
 ./run-sim.sh "iPhone 17"
 ```
 
+For a full Apple Ghostty regression run using a local custom-I/O Ghostty
+checkout:
+
+```bash
+cd mobile/ios
+./test-apple-ghostty.sh /path/to/ghostty-checkout
+```
+
 The script will:
 
 1. Generate `TabminalMobileApp.xcodeproj`
