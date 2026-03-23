@@ -142,6 +142,7 @@ const acpManager = new AcpManager();
             terminalManager.createSession(data);
         }
     }
+    await acpManager.restoreTabs(new Set(terminalManager.sessions.keys()));
 })();
 
 // Setup FS Routes

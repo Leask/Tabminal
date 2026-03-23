@@ -7,6 +7,7 @@ const BASE_DIR = path.join(HOME_DIR, '.tabminal');
 const SESSIONS_DIR = path.join(BASE_DIR, 'sessions');
 const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
 const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');
+const AGENT_TABS_FILE = path.join(BASE_DIR, 'agent-tabs.json');
 const getSessionSnapshotPath = (id) => path.join(SESSIONS_DIR, `${id}.snapshot`);
 
 // Ensure directories exist
@@ -189,6 +190,66 @@ export const saveCluster = async (servers) => {
         await fs.writeFile(CLUSTER_FILE, JSON.stringify(payload, null, 2));
     } catch (e) {
         console.error('[Persistence] Failed to save cluster:', e);
+        throw e;
+    }
+};
+
+// --- ACP Agent Tab Persistence ---
+
+function normalizeAgentTabs(tabs) {
+    if (!Array.isArray(tabs)) return [];
+    const normalized = [];
+    for (const entry of tabs) {
+        if (!entry || typeof entry !== 'object') continue;
+        const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+        const agentId = typeof entry.agentId === 'string'
+            ? entry.agentId.trim()
+            : '';
+        const cwd = typeof entry.cwd === 'string' ? entry.cwd.trim() : '';
+        const acpSessionId = typeof entry.acpSessionId === 'string'
+            ? entry.acpSessionId.trim()
+            : '';
+        const terminalSessionId = typeof entry.terminalSessionId === 'string'
+            ? entry.terminalSessionId.trim()
+            : '';
+        const createdAt = typeof entry.createdAt === 'string'
+            ? entry.createdAt.trim()
+            : '';
+        if (!id || !agentId || !cwd || !acpSessionId) continue;
+        normalized.push({
+            id,
+            agentId,
+            cwd,
+            acpSessionId,
+            terminalSessionId,
+            createdAt
+        });
+    }
+    return normalized;
+}
+
+export const loadAgentTabs = async () => {
+    await init();
+    try {
+        const content = await fs.readFile(AGENT_TABS_FILE, 'utf-8');
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+            return normalizeAgentTabs(parsed);
+        }
+        return normalizeAgentTabs(parsed?.tabs);
+    } catch {
+        return [];
+    }
+};
+
+export const saveAgentTabs = async (tabs) => {
+    await init();
+    const normalized = normalizeAgentTabs(tabs);
+    const payload = { tabs: normalized };
+    try {
+        await fs.writeFile(AGENT_TABS_FILE, JSON.stringify(payload, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save agent tabs:', e);
         throw e;
     }
 };

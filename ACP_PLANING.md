@@ -82,13 +82,18 @@ Status:
 - Backend ACP supervisor, API, and WS fan-out are live.
 - Frontend agent tabs, transcript rendering, prompt send/cancel, and
   permission resolution are live.
+- Agent tab metadata now persists on the backend and restores across backend
+  restart for ACP runtimes that support `loadSession`.
 - Verified with:
   - `npm run lint`
   - `npm test`
   - browser smoke against isolated local ACP test agent
+  - browser restart-restore validation against real Codex ACP runtime
 - Current polish fixes already applied:
   - Codex token stream is coalesced into a single assistant message instead of
     one message per chunk.
+  - User prompts are no longer duplicated when an ACP runtime echoes
+    `user_message_chunk` updates after local optimistic insertion.
   - Gemini definition availability is disabled with reason
     `API key missing` when no key is configured.
   - Agent panel typography has been reduced to align with the existing
@@ -120,7 +125,6 @@ Frontend:
 - Full ACP permission approval UI.
 - Terminal/tool call visualization.
 - Registry-driven install UX.
-- Session persistence across backend restart.
 - TCP ACP runtime support in UI.
 
 ## Safety and Isolation

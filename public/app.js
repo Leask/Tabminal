@@ -1433,9 +1433,10 @@ class Session {
             viewStates: new Map() // Path -> ViewState
         };
         this.workspaceState = {
-            activeTabKey: data.editorState?.activeFilePath
-                ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
-                : ''
+            activeTabKey: data.editorState?.activeWorkspaceTabKey
+                || (data.editorState?.activeFilePath
+                    ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
+                    : '')
         };
         
         this.layoutState = {
@@ -1643,7 +1644,8 @@ class Session {
             isVisible: this.editorState.isVisible,
             root: this.editorState.root,
             openFiles: this.editorState.openFiles,
-            activeFilePath: this.editorState.activeFilePath
+            activeFilePath: this.editorState.activeFilePath,
+            activeWorkspaceTabKey: this.workspaceState.activeTabKey || ''
         };
     }
 
@@ -2164,9 +2166,46 @@ async function syncAgentsForServer(server, { force = false } = {}) {
     }
 
     server.agentStateLoaded = true;
-    const session = getActiveSession();
-    if (session && session.serverId === server.id) {
-        editorManager.switchTo(session);
+    const activeSession = getActiveSession();
+    const sessions = getSessionsForServer(server.id);
+    for (const session of sessions) {
+        const activeKey = session.workspaceState?.activeTabKey || '';
+        if (
+            isAgentWorkspaceTabKey(activeKey)
+            && state.agentTabs.has(activeKey)
+        ) {
+            session.editorState.isVisible = true;
+            session.saveState();
+        }
+    }
+
+    if (activeSession && activeSession.serverId === server.id) {
+        const activeKey = editorManager.getActiveWorkspaceTabKey(activeSession);
+        if (activeKey) {
+            editorManager.switchTo(activeSession);
+            return;
+        }
+    }
+
+    const preferredSession = sessions.find((session) => {
+        const activeKey = session.workspaceState?.activeTabKey || '';
+        return (
+            isAgentWorkspaceTabKey(activeKey)
+            && state.agentTabs.has(activeKey)
+        );
+    }) || sessions.find(
+        (session) => getAgentTabsForSession(session).length > 0
+    );
+
+    if (preferredSession) {
+        if (!preferredSession.workspaceState.activeTabKey) {
+            preferredSession.workspaceState.activeTabKey = (
+                getAgentTabsForSession(preferredSession)[0]?.key || ''
+            );
+        }
+        preferredSession.editorState.isVisible = true;
+        preferredSession.saveState();
+        switchToSession(preferredSession.key);
     }
 }
 

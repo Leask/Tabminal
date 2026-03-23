@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as acp from '@agentclientprotocol/sdk';
 import pkg from '../package.json' with { type: 'json' };
+import * as persistence from './persistence.mjs';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
@@ -233,6 +234,42 @@ class AcpRuntime extends EventEmitter {
         this.terminals = new Map();
     }
 
+    #buildTab({
+        id,
+        acpSessionId,
+        terminalSessionId,
+        cwd,
+        createdAt,
+        currentModeId = '',
+        availableModes = []
+    }) {
+        return {
+            id,
+            runtimeId: this.runtimeId,
+            runtimeKey: this.runtimeKey,
+            agentId: this.definition.id,
+            agentLabel: this.definition.label,
+            commandLabel: this.definition.commandLabel,
+            terminalSessionId: terminalSessionId || '',
+            cwd,
+            acpSessionId,
+            createdAt: createdAt || new Date().toISOString(),
+            status: 'ready',
+            busy: false,
+            errorMessage: '',
+            messages: [],
+            toolCalls: new Map(),
+            permissions: new Map(),
+            syntheticStreams: new Map(),
+            syntheticStreamTurn: 0,
+            pendingUserEcho: null,
+            currentModeId,
+            availableModes,
+            clients: new Set(),
+            messageCounter: 0
+        };
+    }
+
     async start() {
         if (this.started) return;
         if (this.startPromise) return this.startPromise;
@@ -337,33 +374,68 @@ class AcpRuntime extends EventEmitter {
             cwd: meta.cwd,
             mcpServers: []
         });
-        const tab = {
+        const tab = this.#buildTab({
             id: meta.id,
-            runtimeId: this.runtimeId,
-            runtimeKey: this.runtimeKey,
-            agentId: this.definition.id,
-            agentLabel: this.definition.label,
-            commandLabel: this.definition.commandLabel,
+            acpSessionId: response.sessionId,
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
-            acpSessionId: response.sessionId,
-            createdAt: new Date().toISOString(),
-            status: 'ready',
-            busy: false,
-            errorMessage: '',
-            messages: [],
-            toolCalls: new Map(),
-            permissions: new Map(),
-            syntheticStreams: new Map(),
-            syntheticStreamTurn: 0,
             currentModeId: response.modes?.currentModeId || '',
-            availableModes: response.modes?.availableModes || [],
-            clients: new Set(),
-            messageCounter: 0
-        };
+            availableModes: response.modes?.availableModes || []
+        });
         this.tabs.set(tab.id, tab);
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
         return this.serializeTab(tab);
+    }
+
+    async restoreTab(meta) {
+        await this.start();
+        this.clearIdleShutdown();
+
+        if (
+            !this.agentCapabilities?.loadSession
+            || typeof this.connection.loadSession !== 'function'
+        ) {
+            throw new Error(
+                `${this.definition.label} does not support session restore`
+            );
+        }
+
+        const tab = this.#buildTab({
+            id: meta.id,
+            acpSessionId: meta.acpSessionId,
+            terminalSessionId: meta.terminalSessionId,
+            cwd: meta.cwd,
+            createdAt: meta.createdAt
+        });
+        tab.status = 'restoring';
+        tab.busy = true;
+
+        this.tabs.set(tab.id, tab);
+        this.sessionToTabId.set(tab.acpSessionId, tab.id);
+
+        try {
+            const response = await this.connection.loadSession({
+                cwd: meta.cwd,
+                sessionId: meta.acpSessionId,
+                mcpServers: []
+            });
+            const restoredSessionId = response?.sessionId || meta.acpSessionId;
+            if (restoredSessionId !== tab.acpSessionId) {
+                this.sessionToTabId.delete(tab.acpSessionId);
+                tab.acpSessionId = restoredSessionId;
+                this.sessionToTabId.set(tab.acpSessionId, tab.id);
+            }
+            tab.currentModeId = response?.modes?.currentModeId || '';
+            tab.availableModes = response?.modes?.availableModes || [];
+            tab.status = 'ready';
+            tab.busy = false;
+            tab.errorMessage = '';
+            return this.serializeTab(tab);
+        } catch (error) {
+            this.tabs.delete(tab.id);
+            this.sessionToTabId.delete(tab.acpSessionId);
+            throw error;
+        }
     }
 
     serializeTab(tab) {
@@ -431,6 +503,10 @@ class AcpRuntime extends EventEmitter {
             text,
             streamKey: crypto.randomUUID()
         });
+        tab.pendingUserEcho = {
+            text,
+            matched: 0
+        };
         this.#broadcast(tab, {
             type: 'status',
             status: tab.status,
@@ -451,6 +527,7 @@ class AcpRuntime extends EventEmitter {
             tab.busy = false;
             tab.status = 'ready';
             tab.syntheticStreams.clear();
+            tab.pendingUserEcho = null;
             this.#broadcast(tab, {
                 type: 'complete',
                 stopReason: response.stopReason,
@@ -463,6 +540,7 @@ class AcpRuntime extends EventEmitter {
             tab.status = 'error';
             tab.errorMessage = error?.message || 'Agent request failed.';
             tab.syntheticStreams.clear();
+            tab.pendingUserEcho = null;
             this.#broadcast(tab, {
                 type: 'status',
                 status: tab.status,
@@ -624,6 +702,9 @@ class AcpRuntime extends EventEmitter {
         const text = content.type === 'text'
             ? (content.text || '')
             : `[${content.type}]`;
+        if (role === 'user' && kind === 'message' && this.#consumeUserEcho(tab, text)) {
+            return;
+        }
         const streamKey = this.#getStreamKey(tab, update, role, kind);
         const last = tab.messages[tab.messages.length - 1] || null;
 
@@ -659,6 +740,25 @@ class AcpRuntime extends EventEmitter {
             type: 'message_open',
             message
         });
+    }
+
+    #consumeUserEcho(tab, text) {
+        const pending = tab.pendingUserEcho;
+        if (!pending || !text) {
+            return false;
+        }
+
+        const remaining = pending.text.slice(pending.matched);
+        if (!remaining.startsWith(text)) {
+            tab.pendingUserEcho = null;
+            return false;
+        }
+
+        pending.matched += text.length;
+        if (pending.matched >= pending.text.length) {
+            tab.pendingUserEcho = null;
+        }
+        return true;
     }
 
     #appendMessage(tab, message) {
@@ -774,6 +874,35 @@ export class AcpManager {
         this.definitions = makeBuiltInDefinitions();
         this.runtimes = new Map();
         this.tabs = new Map();
+        this.loadTabs = options.loadTabs || persistence.loadAgentTabs;
+        this.saveTabs = options.saveTabs || persistence.saveAgentTabs;
+        this.persistenceChain = Promise.resolve();
+        this.disposing = false;
+    }
+
+    queuePersistence(operation) {
+        this.persistenceChain = this.persistenceChain
+            .catch(() => {})
+            .then(operation);
+        return this.persistenceChain;
+    }
+
+    getPersistedTabs() {
+        return Array.from(this.tabs.values()).map((entry) => {
+            const tab = entry.serialize();
+            return {
+                id: tab.id,
+                agentId: tab.agentId,
+                cwd: tab.cwd,
+                acpSessionId: tab.acpSessionId,
+                terminalSessionId: tab.terminalSessionId,
+                createdAt: tab.createdAt
+            };
+        });
+    }
+
+    persistTabs() {
+        return this.queuePersistence(() => this.saveTabs(this.getPersistedTabs()));
     }
 
     async listDefinitions() {
@@ -820,11 +949,13 @@ export class AcpManager {
             };
             this.runtimes.set(runtimeKey, runtimeEntry);
             runtime.on('runtime_exit', () => {
+                if (this.disposing) return;
                 for (const [tabId, tabEntry] of this.tabs.entries()) {
                     if (tabEntry.runtime !== runtime) continue;
                     this.tabs.delete(tabId);
                 }
                 this.runtimes.delete(runtimeKey);
+                void this.persistTabs();
             });
         }
 
@@ -842,7 +973,88 @@ export class AcpManager {
             }
         };
         this.tabs.set(tabId, tabEntry);
+        await this.persistTabs();
         return tabEntry.serialize();
+    }
+
+    async restoreTabs(validTerminalSessionIds = new Set()) {
+        const entries = await this.loadTabs();
+        let changed = false;
+
+        for (const meta of entries) {
+            if (
+                meta.terminalSessionId
+                && !validTerminalSessionIds.has(meta.terminalSessionId)
+            ) {
+                changed = true;
+                continue;
+            }
+
+            const definition = this.definitions.find(
+                (entry) => entry.id === meta.agentId
+            );
+            if (!definition) {
+                changed = true;
+                continue;
+            }
+
+            const availability = getDefinitionAvailability(definition);
+            if (!availability.available) {
+                changed = true;
+                continue;
+            }
+
+            const cwd = path.resolve(meta.cwd || process.cwd());
+            const runtimeKey = makeRuntimeKey(definition.id, cwd);
+            let runtimeEntry = this.runtimes.get(runtimeKey);
+            if (!runtimeEntry) {
+                const runtime = this.runtimeFactory(definition, {
+                    cwd,
+                    idleTimeoutMs: this.idleTimeoutMs
+                });
+                runtimeEntry = {
+                    runtime,
+                    definition,
+                    runtimeKey
+                };
+                this.runtimes.set(runtimeKey, runtimeEntry);
+                runtime.on('runtime_exit', () => {
+                    if (this.disposing) return;
+                    for (const [tabId, tabEntry] of this.tabs.entries()) {
+                        if (tabEntry.runtime !== runtime) continue;
+                        this.tabs.delete(tabId);
+                    }
+                    this.runtimes.delete(runtimeKey);
+                    void this.persistTabs();
+                });
+            }
+
+            try {
+                const serialized = await runtimeEntry.runtime.restoreTab({
+                    ...meta,
+                    cwd
+                });
+                this.tabs.set(meta.id, {
+                    runtime: runtimeEntry.runtime,
+                    serialize: () => {
+                        const tab = runtimeEntry.runtime.tabs.get(meta.id);
+                        return tab
+                            ? runtimeEntry.runtime.serializeTab(tab)
+                            : serialized;
+                    }
+                });
+            } catch (error) {
+                changed = true;
+                console.warn(
+                    `[ACP] Failed to restore agent tab ${meta.id}:`,
+                    error?.message || error
+                );
+            }
+        }
+
+        if (changed) {
+            await this.persistTabs();
+        }
     }
 
     attachSocket(tabId, socket) {
@@ -883,6 +1095,7 @@ export class AcpManager {
         if (!tabEntry) return;
         await tabEntry.runtime.closeTab(tabId);
         this.tabs.delete(tabId);
+        await this.persistTabs();
         tabEntry.runtime.scheduleIdleShutdown(async () => {
             if (
                 Array.from(this.tabs.values()).some(
@@ -910,9 +1123,12 @@ export class AcpManager {
         }
     }
 
-    async dispose() {
-        for (const tabId of Array.from(this.tabs.keys())) {
-            await this.closeTab(tabId);
+    async dispose({ preserveTabs = true } = {}) {
+        this.disposing = true;
+        if (preserveTabs) {
+            await this.persistTabs();
+        } else {
+            await this.saveTabs([]);
         }
         for (const runtimeEntry of this.runtimes.values()) {
             await runtimeEntry.runtime.dispose();
