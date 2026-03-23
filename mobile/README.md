@@ -126,12 +126,23 @@ This branch is past the initial scaffold phase:
   - `mobile/ios/run-sim.sh`
   - `mobile/ios/run-macos.sh`
   - `mobile/ios/run-visionos.sh`
+- A serial Apple Ghostty smoke runner now exists:
+  - `mobile/ios/test-apple-ghostty.sh`
+- A baseline GitHub Actions workflow now validates:
+  - `npm test`
+  - `swift test` for `mobile/ios`
+  - shell syntax for mobile scripts
+  - a macOS app-shell build
 - The Ghostty custom-I/O renderer path is working on iPhone and iPad
   simulator runs.
 - The macOS Ghostty renderer path is working.
-- The app compiles and runs on visionOS, but the current Ghostty vendor
-  artifact does not yet include `xros/xrsimulator` slices, so visionOS
-  uses text fallback today.
+- The app compiles and runs on visionOS.
+- When the linked Ghostty artifact includes the visionOS slices
+  `xros-arm64` and `xros-arm64-simulator`, the Ghostty renderer path also
+  works on visionOS.
+- The new vendor flow can consume either:
+  - `TABMINAL_GHOSTTY_XCFRAMEWORK_PATH=/path/to/GhosttyKit.xcframework`
+  - `TABMINAL_GHOSTTY_REPO_PATH=/path/to/ghostty-checkout`
 
 ## Current iOS CLI Flow
 
@@ -154,6 +165,13 @@ Optional device argument:
 ```bash
 cd mobile/ios
 ./run-sim.sh "iPad Pro 11-inch (M5)"
+```
+
+Full Apple Ghostty regression command:
+
+```bash
+cd mobile/ios
+./test-apple-ghostty.sh /path/to/ghostty-checkout
 ```
 
 Prerequisites:
