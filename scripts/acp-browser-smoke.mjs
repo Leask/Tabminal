@@ -440,6 +440,46 @@ async function main() {
         );
     });
 
+    await page.send('Page.reload', { ignoreCache: true });
+    log('reloaded-page');
+
+    await waitFor('document-ready-after-reload', async () => {
+        const readyState = await evaluate('document.readyState');
+        return readyState === 'complete';
+    });
+
+    await waitFor('restored-session', async () => {
+        return await evaluate(
+            toExpression(`
+                () => document.querySelectorAll('.tab-item').length > 0
+            `),
+            15000,
+            250
+        );
+    });
+
+    await waitFor('restored-agent-tab', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const tab = document.querySelector(
+                        '.agent-editor-tab.active'
+                    );
+                    const panel = document.querySelector('.agent-panel');
+                    const messages = document.querySelectorAll(
+                        '.agent-message'
+                    ).length;
+                    return Boolean(tab)
+                        && Boolean(panel)
+                        && getComputedStyle(panel).display !== 'none'
+                        && messages > 0;
+                }
+            `),
+            15000,
+            250
+        );
+    });
+
     const finalState = await evaluate(
         toExpression(`
             () => ({
