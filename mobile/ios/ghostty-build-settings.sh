@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
 
+tabminal_ghostty_candidate_paths() {
+    local root_dir="$1"
+    local repo_path="${TABMINAL_GHOSTTY_REPO_PATH:-}"
+    local candidates=()
+
+    if [[ -n "${TABMINAL_GHOSTTY_XCFRAMEWORK_PATH:-}" ]]; then
+        candidates+=("${TABMINAL_GHOSTTY_XCFRAMEWORK_PATH}")
+    fi
+
+    if [[ -n "${TABMINAL_GHOSTTY_FRAMEWORK_PATH:-}" ]]; then
+        candidates+=("${TABMINAL_GHOSTTY_FRAMEWORK_PATH}")
+    fi
+
+    if [[ -n "${repo_path}" ]]; then
+        candidates+=("${repo_path}/macos/GhosttyKit.xcframework")
+    fi
+
+    candidates+=("${root_dir}/Vendor/Ghostty/GhosttyKit.xcframework")
+
+    printf '%s\n' "${candidates[@]}"
+}
+
 tabminal_ghostty_resolve_xcframework() {
     local root_dir="$1"
     local candidate
 
-    for candidate in \
-        "${TABMINAL_GHOSTTY_XCFRAMEWORK_PATH:-}" \
-        "${TABMINAL_GHOSTTY_FRAMEWORK_PATH:-}" \
-        "${root_dir}/Vendor/Ghostty/GhosttyKit.xcframework"; do
+    while IFS= read -r candidate; do
         if [[ -n "${candidate}" && -d "${candidate}" ]]; then
             printf '%s\n' "${candidate}"
             return 0
         fi
-    done
+    done < <(tabminal_ghostty_candidate_paths "${root_dir}")
 
     return 1
 }

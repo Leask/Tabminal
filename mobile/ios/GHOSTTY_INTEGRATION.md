@@ -1,6 +1,6 @@
 # Ghostty Integration Notes
 
-Last updated: 2026-03-21
+Last updated: 2026-03-23
 
 ## Current status
 
@@ -81,9 +81,9 @@ Current platform state:
 - `macOS`
   Ghostty renderer path is working.
 - `visionOS`
-  The app-side bridge now compiles and runs, but the current vendored
-  `GhosttyKit.xcframework` does not ship an `xros/xrsimulator` slice, so
-  the app falls back to text mode there.
+  The app-side bridge compiles and runs. Ghostty rendering works when the
+  linked `GhosttyKit.xcframework` includes `xros/xrsimulator` slices; text
+  fallback remains the safe path when no such artifact is linked.
 
 ## What has already been prepared in this repo
 
@@ -115,5 +115,23 @@ execution path. The correct move remains:
 1. use a Ghostty runtime that exports the custom-I/O bridge
 2. keep the Tabminal server protocol unchanged
 3. continue hardening the Apple host views around Ghostty's IOSurface model
-4. add `xros/xrsimulator` slices to the Ghostty vendor pipeline so
-   visionOS can leave text fallback
+4. bundle or vendor a Ghostty artifact with `xros/xrsimulator` slices so
+   visionOS can use Ghostty by default instead of relying on explicit local
+   overrides
+
+## Vendor workflow
+
+This repo now includes a dedicated helper workflow for Ghostty vendor
+artifacts:
+
+- `/Users/leask/Documents/Tabminal/mobile/ghostty-vendor/README.md`
+
+That workflow can build a `GhosttyKit.xcframework` from a compatible
+custom-I/O Ghostty checkout and verify the resulting Apple slices.
+
+Supported integration inputs in the Apple app now are:
+
+1. `TABMINAL_GHOSTTY_XCFRAMEWORK_PATH=/path/to/GhosttyKit.xcframework`
+2. `TABMINAL_GHOSTTY_REPO_PATH=/path/to/ghostty-checkout`
+
+The repo-path form resolves `<repo>/macos/GhosttyKit.xcframework`.

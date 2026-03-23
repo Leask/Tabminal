@@ -96,6 +96,8 @@ What works now:
 - Open the websocket for the active session with reconnect behavior
 - Drive a native Ghostty renderer through the custom-I/O bridge when the
   runtime is linked and exports the required symbols
+- Use the same Ghostty renderer path on visionOS when the linked
+  `GhosttyKit.xcframework` includes `xros/xrsimulator` slices
 - Fall back to the text renderer when the runtime or platform slice is
   missing
 - Send input, return, tab, escape, Ctrl-C, and arrow keys
@@ -104,14 +106,14 @@ What works now:
 
 What is still pending:
 
-- Ship a Ghostty vendor artifact that includes `xros/xrsimulator` slices
-  so visionOS can use Ghostty instead of text fallback
+- Make the visionOS-capable Ghostty vendor artifact the default bundled
+  developer path instead of an explicit local override
 - Rich terminal behaviors such as proper native selection and full VT rendering
 - iPad-focused split-pane workspace and more polished mobile shell ergonomics
 
 ## Near-Term Next Steps
 
-1. Produce a Ghostty xcframework that includes `xros/xrsimulator` slices.
+1. Bundle or vend a Ghostty artifact by default for local Apple builds.
 2. Polish the Apple host views around Ghostty's IOSurface lifecycle.
 3. Add richer terminal UX such as selection, search, and better copy/paste.
 4. Polish iPad and large-screen workspace layouts.
@@ -128,3 +130,23 @@ The intended ownership split is:
 - Future app target
   Owns navigation, persistence, scene lifecycle, notifications, and polished
   iOS presentation.
+
+## Ghostty Vendor Workflow
+
+There are now two supported ways to point the Apple app at a custom-I/O
+Ghostty runtime:
+
+1. `TABMINAL_GHOSTTY_XCFRAMEWORK_PATH=/path/to/GhosttyKit.xcframework`
+2. `TABMINAL_GHOSTTY_REPO_PATH=/path/to/ghostty-checkout`
+
+The repo-path form is intended for the new vendor flow. When present, the
+build scripts resolve the artifact from:
+
+- `<repo>/macos/GhosttyKit.xcframework`
+
+The helper workflow for building that artifact lives in:
+
+- `/Users/leask/Documents/Tabminal/mobile/ghostty-vendor/README.md`
+
+That workflow now supports `ios`, `macOS`, and `visionOS`
+(`xros/xrsimulator`) slices.

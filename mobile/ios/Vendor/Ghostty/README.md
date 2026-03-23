@@ -1,10 +1,16 @@
 # GhosttyKit Vendor Layout
 
-Tabminal iOS now looks for a `GhosttyKit.framework` /
-`GhosttyKit.xcframework` artifact that exports Ghostty's embedded surface
-API plus the custom-I/O symbols used by remote terminal clients.
+Tabminal iOS looks for a Ghostty runtime artifact that exports Ghostty's
+embedded surface API plus the custom-I/O symbols used by remote terminal
+clients.
 
 Expected discovery order:
+
+1. `TABMINAL_GHOSTTY_XCFRAMEWORK_PATH`
+2. `TABMINAL_GHOSTTY_REPO_PATH` -> `<repo>/macos/GhosttyKit.xcframework`
+3. Checked-in `Vendor/Ghostty/GhosttyKit.xcframework`
+
+At runtime, the loader still probes linked symbols first, then falls back to:
 
 1. `TABMINAL_GHOSTTY_FRAMEWORK_PATH`
 2. App bundle `Frameworks/GhosttyKit.framework/GhosttyKit`
@@ -12,20 +18,26 @@ Expected discovery order:
 4. `libghostty.dylib` in the bundle
 
 The most useful form today is a `custom-io` Ghostty build, such as the
-xcframework produced by the `wiedymi/ghostty` fork used by VVTerm.
+xcframework produced by the `wiedymi/ghostty` `custom-io` fork lineage.
 
-Example build from a custom-I/O Ghostty checkout:
+Recommended local workflow:
 
 ```bash
-zig build -Dapp-runtime=none -Demit-xcframework=true
+cd /Users/leask/Documents/Tabminal
+./mobile/ghostty-vendor/scripts/build-xcframework.sh /path/to/ghostty-checkout
 ```
 
-That build emits `macos/GhosttyKit.xcframework` from the Ghostty project.
-
-For simulator debugging, you can point Tabminal directly at the xcframework:
+That emits `macos/GhosttyKit.xcframework` from the Ghostty checkout. You can
+then point Tabminal at either the xcframework directly or the checkout root:
 
 ```bash
 TABMINAL_GHOSTTY_XCFRAMEWORK_PATH=/path/to/GhosttyKit.xcframework
+```
+
+or:
+
+```bash
+TABMINAL_GHOSTTY_REPO_PATH=/path/to/ghostty-checkout
 ```
 
 Required custom-I/O exports:
@@ -33,17 +45,14 @@ Required custom-I/O exports:
 - `ghostty_surface_feed_data`
 - `ghostty_surface_set_write_callback`
 
-Current platform expectation:
+Current supported slice set:
 
 - `ios-arm64`
 - `ios-arm64-simulator`
 - `macos-arm64_x86_64`
-
-Tabminal now also probes for future visionOS slices:
-
 - `xros-arm64`
 - `xrsimulator-arm64`
 - `xrsimulator-arm64_x86_64`
 
-If the xcframework omits the visionOS slices, the app still builds and
-runs on visionOS, but it falls back to the text renderer there.
+If the xcframework omits the visionOS slices, the app still builds and runs
+on visionOS, but it falls back to the text renderer there.
