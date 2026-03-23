@@ -31,6 +31,8 @@ The scripts here document and reproduce that workflow.
   Patch scope and upstream strategy.
 - `scripts/build-xcframework.sh`
   Rebuild a universal Ghostty xcframework from a Ghostty custom-I/O repo.
+  The script defaults to a repo-local Zig cache so it does not rely on the
+  user's global cache permissions.
 - `scripts/verify-slices.sh`
   Verify the xcframework contains the required Apple platform slices.
 - `scripts/smoke-tabminal-visionos.sh`

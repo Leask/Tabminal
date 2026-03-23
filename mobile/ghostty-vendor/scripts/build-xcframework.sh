@@ -13,8 +13,15 @@ if [[ ! -d ${repo_root} ]]; then
     exit 1
 fi
 
+cache_root=${TABMINAL_GHOSTTY_ZIG_CACHE_ROOT:-${repo_root}/.tabminal-zig-cache}
+local_cache_dir=${cache_root}/local
+global_cache_dir=${cache_root}/global
+mkdir -p "${local_cache_dir}" "${global_cache_dir}"
+
 pushd "${repo_root}" >/dev/null
 zig build \
+    --cache-dir "${local_cache_dir}" \
+    --global-cache-dir "${global_cache_dir}" \
     -Dapp-runtime=none \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
