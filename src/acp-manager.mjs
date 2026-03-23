@@ -25,14 +25,19 @@ function commandExists(command) {
 }
 
 function makeBuiltInDefinitions() {
+    const hasGeminiBinary = commandExists('gemini');
     const definitions = [
         {
             id: 'gemini',
             label: 'Gemini CLI',
             description: 'Google Gemini CLI over ACP',
-            command: NPX_COMMAND,
-            args: ['@google/gemini-cli@latest', '--experimental-acp'],
-            commandLabel: 'npx @google/gemini-cli@latest --experimental-acp'
+            command: hasGeminiBinary ? 'gemini' : NPX_COMMAND,
+            args: hasGeminiBinary
+                ? ['--acp']
+                : ['@google/gemini-cli@latest', '--acp'],
+            commandLabel: hasGeminiBinary
+                ? 'gemini --acp'
+                : 'npx @google/gemini-cli@latest --acp'
         },
         {
             id: 'codex',
@@ -70,6 +75,32 @@ function makeBuiltInDefinitions() {
         });
     }
     return definitions;
+}
+
+function getDefinitionAvailability(definition) {
+    if (!commandExists(definition.command)) {
+        return {
+            available: false,
+            reason: 'not installed'
+        };
+    }
+
+    if (definition.id === 'gemini') {
+        const hasApiKey = Boolean(
+            process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
+        );
+        if (!hasApiKey) {
+            return {
+                available: false,
+                reason: 'API key missing'
+            };
+        }
+    }
+
+    return {
+        available: true,
+        reason: ''
+    };
 }
 
 function makeRuntimeKey(agentId, cwd) {
@@ -323,6 +354,8 @@ class AcpRuntime extends EventEmitter {
             messages: [],
             toolCalls: new Map(),
             permissions: new Map(),
+            syntheticStreams: new Map(),
+            syntheticStreamTurn: 0,
             currentModeId: response.modes?.currentModeId || '',
             availableModes: response.modes?.availableModes || [],
             clients: new Set(),
@@ -390,6 +423,8 @@ class AcpRuntime extends EventEmitter {
         tab.errorMessage = '';
         tab.busy = true;
         tab.status = 'running';
+        tab.syntheticStreamTurn += 1;
+        tab.syntheticStreams.clear();
         this.#appendMessage(tab, {
             role: 'user',
             kind: 'message',
@@ -415,6 +450,7 @@ class AcpRuntime extends EventEmitter {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'ready';
+            tab.syntheticStreams.clear();
             this.#broadcast(tab, {
                 type: 'complete',
                 stopReason: response.stopReason,
@@ -426,6 +462,7 @@ class AcpRuntime extends EventEmitter {
             tab.busy = false;
             tab.status = 'error';
             tab.errorMessage = error?.message || 'Agent request failed.';
+            tab.syntheticStreams.clear();
             this.#broadcast(tab, {
                 type: 'status',
                 status: tab.status,
@@ -587,8 +624,7 @@ class AcpRuntime extends EventEmitter {
         const text = content.type === 'text'
             ? (content.text || '')
             : `[${content.type}]`;
-        const streamKey = update.messageId
-            || `${update.sessionUpdate}:${tab.messageCounter}`;
+        const streamKey = this.#getStreamKey(tab, update, role, kind);
         const last = tab.messages[tab.messages.length - 1] || null;
 
         if (
@@ -706,6 +742,26 @@ class AcpRuntime extends EventEmitter {
             }
         }
     }
+
+    #getStreamKey(tab, update, role, kind) {
+        if (update.messageId) {
+            return update.messageId;
+        }
+
+        const bucketKey = `${update.sessionUpdate}:${role}:${kind}`;
+        let streamKey = tab.syntheticStreams.get(bucketKey) || '';
+        if (!streamKey) {
+            streamKey = [
+                'synthetic',
+                tab.syntheticStreamTurn,
+                update.sessionUpdate,
+                role,
+                kind
+            ].join(':');
+            tab.syntheticStreams.set(bucketKey, streamKey);
+        }
+        return streamKey;
+    }
 }
 
 export class AcpManager {
@@ -721,13 +777,17 @@ export class AcpManager {
     }
 
     async listDefinitions() {
-        return this.definitions.map((definition) => ({
+        return this.definitions.map((definition) => {
+            const availability = getDefinitionAvailability(definition);
+            return {
             id: definition.id,
             label: definition.label,
             description: definition.description,
             commandLabel: definition.commandLabel,
-            available: commandExists(definition.command)
-        }));
+            available: availability.available,
+            reason: availability.reason
+        };
+        });
     }
 
     async listState() {

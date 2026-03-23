@@ -1400,6 +1400,8 @@ kbd {
     display: flex;
     flex-direction: column;
     background-color: var(--bg-base);
+    font-size: 13px;
+    line-height: 1.45;
 }
 
 .agent-panel-header {
@@ -1412,13 +1414,13 @@ kbd {
 }
 
 .agent-panel-title {
-    font-size: 0.95rem;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-highlight);
 }
 
 .agent-panel-meta {
-    font-size: 0.78rem;
+    font-size: 11px;
     color: var(--text-muted);
 }
 
@@ -1437,7 +1439,7 @@ kbd {
     border-radius: 8px;
     background-color: rgba(7, 54, 66, 0.4);
     color: var(--text-base);
-    font-size: 0.82rem;
+    font-size: 12px;
 }
 
 .agent-permission-card {
@@ -1465,6 +1467,7 @@ kbd {
     color: var(--text-highlight);
     padding: 8px 12px;
     cursor: pointer;
+    font-size: 12px;
 }
 
 .agent-permission-option.secondary,
@@ -1498,7 +1501,7 @@ kbd {
 }
 
 .agent-message-role {
-    font-size: 0.72rem;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
@@ -1510,6 +1513,7 @@ kbd {
     white-space: pre-wrap;
     word-break: break-word;
     font: inherit;
+    font-size: 13px;
     color: var(--text-base);
 }
 
@@ -1532,6 +1536,7 @@ kbd {
     background-color: rgba(7, 54, 66, 0.45);
     color: var(--text-highlight);
     font: inherit;
+    font-size: 13px;
 }
 
 .agent-panel-actions {

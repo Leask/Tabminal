@@ -1341,8 +1341,9 @@ function openAgentDropdown(session, anchor) {
         button.type = 'button';
         button.className = 'agent-dropdown-item';
         button.disabled = definition.available === false;
+        const unavailableReason = definition.reason || 'unavailable';
         button.textContent = definition.available === false
-            ? `${definition.label} (not installed)`
+            ? `${definition.label} (${unavailableReason})`
             : definition.label;
         button.onclick = async (event) => {
             event.stopPropagation();

@@ -77,6 +77,23 @@ Reason:
 
 ### Phase 1
 
+Status:
+- Implemented on `acp` branch and usable with real browser smoke.
+- Backend ACP supervisor, API, and WS fan-out are live.
+- Frontend agent tabs, transcript rendering, prompt send/cancel, and
+  permission resolution are live.
+- Verified with:
+  - `npm run lint`
+  - `npm test`
+  - browser smoke against isolated local ACP test agent
+- Current polish fixes already applied:
+  - Codex token stream is coalesced into a single assistant message instead of
+    one message per chunk.
+  - Gemini definition availability is disabled with reason
+    `API key missing` when no key is configured.
+  - Agent panel typography has been reduced to align with the existing
+    workspace/editor density.
+
 Backend:
 - ACP supervisor module.
 - Built-in agent definitions for Gemini CLI, Codex CLI adapter, Claude adapter,
