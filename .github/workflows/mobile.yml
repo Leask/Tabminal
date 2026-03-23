@@ -47,8 +47,8 @@ jobs:
             "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
             -o /tmp/xcodegen.zip
           unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
-          mkdir -p "$HOME/.local/bin"
-          install /tmp/xcodegen/bin/xcodegen "$HOME/.local/bin/xcodegen"
+          mkdir -p "$HOME/.local"
+          /tmp/xcodegen/xcodegen/install.sh "$HOME/.local"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:$PATH"
           xcodegen --version
