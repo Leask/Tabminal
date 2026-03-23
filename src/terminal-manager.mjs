@@ -37,6 +37,25 @@ const initialRows = Number.parseInt(
     10
 ) || 30;
 
+function buildBashBootstrap({
+    env,
+    shell,
+    shellToolsPath,
+    sessionId
+}) {
+    const hookPath = path.join(shellToolsPath, 'tabminal-hooks.bash');
+    const rcfilePath = path.join(shellToolsPath, 'tabminal-bashrc');
+
+    env.TABMINAL_SESSION_ID = sessionId;
+    env.TABMINAL_SHELL_TOOLS_PATH = shellToolsPath;
+    env.TABMINAL_HOOKS_PATH = hookPath;
+
+    return {
+        shell,
+        args: ['--rcfile', rcfilePath, '-i']
+    };
+}
+
 export class TerminalManager {
     constructor() {
         this.sessions = new Map();
@@ -66,55 +85,25 @@ export class TerminalManager {
             ? `${shellToolsPath}${pathDelimiter}${existingPath}`
             : shellToolsPath;
 
+        let spawnShell = shell;
         let args = [];
-        let initFilePath = null;
         let initDirPath = null;
 
         try {
             const shellName = path.basename(shell);
             if (shellName === 'bash') {
-                initFilePath = path.join(os.tmpdir(), `tabminal-init-${id}.bashrc`);
-                const bashScript = `
-export PATH="${shellToolsPath}:$PATH"
-[ -f ~/.bashrc ] && source ~/.bashrc
-export PATH="${shellToolsPath}:$PATH"
-
-_tabminal_bash_preexec() {
-  # Prevent capturing any of our own internal or setup commands.
-  if [[ "$BASH_COMMAND" == *"_tabminal_"* || "$BASH_COMMAND" == "$PROMPT_COMMAND" ]]; then
-    return
-  fi
-  _tabminal_last_command="$BASH_COMMAND"
-}
-trap '_tabminal_bash_preexec' DEBUG
-
-_tabminal_bash_postexec() {
-  local EC="$?"
-  if [[ -n "$_tabminal_last_command" ]]; then
-    local CMD=$(echo -n "$_tabminal_last_command" | base64 | tr -d '\\n')
-    printf "\\x1b]1337;ExitCode=%s;CommandB64=%s\\x07" "$EC" "$CMD"
-    _tabminal_last_command="" # Reset after use
-  fi
-}
-_tabminal_apply_prompt_marker() {
-  local marker=$'\\[\\e]1337;TabminalPrompt\\a\\]'
-  if [[ "$PS1" != *"TabminalPrompt"* ]]; then
-    PS1="$PS1$marker"
-  fi
-}
-if [[ -n "$PROMPT_COMMAND" ]]; then
-  printf -v PROMPT_COMMAND "_tabminal_bash_postexec; %s; _tabminal_apply_prompt_marker" "$PROMPT_COMMAND"
-else
-  PROMPT_COMMAND="_tabminal_bash_postexec; _tabminal_apply_prompt_marker"
-fi
-export PROMPT_COMMAND
-`;
-                fs.writeFileSync(initFilePath, bashScript);
-                args = ['--rcfile', initFilePath, '-i'];
+                const bootstrap = buildBashBootstrap({
+                    env,
+                    shell,
+                    shellToolsPath,
+                    sessionId: id
+                });
+                spawnShell = bootstrap.shell;
+                args = bootstrap.args;
             } else if (shellName === 'zsh') {
                 initDirPath = path.join(os.tmpdir(), `tabminal-zsh-${id}`);
                 fs.mkdirSync(initDirPath, { recursive: true });
-                initFilePath = path.join(initDirPath, '.zshrc');
+                const initFilePath = path.join(initDirPath, '.zshrc');
 
                 const zshScript = `
 unset ZDOTDIR
@@ -165,10 +154,11 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             if (process.platform !== 'win32') {
                 ptyOptions.encoding = 'utf8';
             }
-            ptyProcess = pty.spawn(shell, args, ptyOptions);
+            ptyProcess = pty.spawn(spawnShell, args, ptyOptions);
         } catch (err) {
             const spawnInfo = {
-                shell,
+                shell: spawnShell,
+                requestedShell: shell,
                 args,
                 cwd: initialCwd,
                 cols,
@@ -214,7 +204,6 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             this.removeSession(id);
             // Cleanup temp files
             try {
-                if (initFilePath && fs.existsSync(initFilePath)) fs.unlinkSync(initFilePath);
                 if (initDirPath && fs.existsSync(initDirPath)) fs.rmSync(initDirPath, { recursive: true, force: true });
             } catch { /* ignore cleanup errors */ }
         });

@@ -1,0 +1,17 @@
+if [[ -n "${TABMINAL_SHELL_TOOLS_PATH:-}" ]]; then
+    export PATH="${TABMINAL_SHELL_TOOLS_PATH}:$PATH"
+fi
+
+if [[ -f ~/.bashrc ]]; then
+    source ~/.bashrc
+fi
+
+if [[ -n "${TABMINAL_SHELL_TOOLS_PATH:-}" ]]; then
+    export PATH="${TABMINAL_SHELL_TOOLS_PATH}:$PATH"
+fi
+
+if [[ -n "${TABMINAL_HOOKS_PATH:-}" ]] && [[ -f "$TABMINAL_HOOKS_PATH" ]]; then
+    source "$TABMINAL_HOOKS_PATH"
+fi
+
+TABMINAL_SHELL_READY=1

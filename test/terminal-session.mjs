@@ -239,6 +239,31 @@ ${buildExitSequence(0, 'echo hi')}`);
         assert.ok(outputMsg);
         assert.ok(outputMsg.data.includes('\nhi\n'));
     });
+
+    it('captures split shell markers across chunks', () => {
+        session = new TerminalSession(pty);
+
+        const exitSequence = buildExitSequence(
+            127,
+            'definitely_not_a_real_command_123'
+        );
+
+        pty.emitData('prompt$ ' + PROMPT_MARKER.slice(0, 8));
+        pty.emitData(PROMPT_MARKER.slice(8));
+        pty.emitData(
+            'definitely_not_a_real_command_123\nbash: command not found\n'
+        );
+        pty.emitData(exitSequence.slice(0, 10));
+        pty.emitData(exitSequence.slice(10));
+
+        assert.ok(session.lastExecution);
+        assert.strictEqual(
+            session.lastExecution.command,
+            'definitely_not_a_real_command_123'
+        );
+        assert.strictEqual(session.lastExecution.exitCode, 127);
+        assert.match(session.lastExecution.output, /command not found/);
+    });
 });
 
 class FakePty {

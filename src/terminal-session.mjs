@@ -20,10 +20,30 @@ const TITLE_POLL_INTERVAL_MS = 3000;
 
 const IGNORED_COMMANDS = [
     'export PROMPT_COMMAND',
-    '__bash_prompt'
+    '__bash_prompt',
+    'TABMINAL_SHELL_READY=1'
 ];
 
 const PROMPT_PREFIX = "You are now operating as an AI terminal assistant. Your name is `Tabminal`. You will assist users in resolving terminal or coding issues and answering other inquiries. When troubleshooting terminal errors, you will be provided with the execution history to understand the context. However, please focus primarily on the most recent runtime errors and the user's latest questions. Keep your answers concise and accurate. Resolve the issue clearly and provide the reasoning while avoiding lengthy elaborations. Most user terminal variable keys are normal under typical circumstances and do not need to be treated as security risks.\n\n";
+
+function splitTrailingPartialSequence(chunk) {
+    if (!chunk) {
+        return { complete: '', partial: '' };
+    }
+
+    const oscStart = chunk.lastIndexOf('\u001b]1337;');
+    if (oscStart >= 0) {
+        const oscTail = chunk.slice(oscStart);
+        if (!oscTail.includes('\u0007')) {
+            return {
+                complete: chunk.slice(0, oscStart),
+                partial: oscTail
+            };
+        }
+    }
+
+    return { complete: chunk, partial: '' };
+}
 
 export class TerminalSession {
     constructor(pty, options = {}) {
@@ -55,6 +75,7 @@ export class TerminalSession {
         this.captureStartedAt = null;
         this.lastExecution = null;
         this.skipNextShellLog = false;
+        this.partialSequenceBuffer = '';
 
         this.ansiParser = new AnsiParser({
             inst_o: (s) => {
@@ -83,6 +104,13 @@ export class TerminalSession {
             if (this.suppressPtyOutput) return;
 
             if (typeof chunk !== 'string') chunk = chunk.toString('utf8');
+            if (this.partialSequenceBuffer) {
+                chunk = this.partialSequenceBuffer + chunk;
+                this.partialSequenceBuffer = '';
+            }
+            const split = splitTrailingPartialSequence(chunk);
+            chunk = split.complete;
+            this.partialSequenceBuffer = split.partial;
 
             if (this.manager) {
                 this.manager.appendLog(this.id, chunk);
