@@ -8,8 +8,8 @@ on:
   pull_request:
 
 jobs:
-  apple:
-    runs-on: macos-15
+  node:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -18,13 +18,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '25'
+          node-version: '22'
 
       - name: Install Node dependencies
         run: npm ci --ignore-scripts
 
       - name: Run Node test suite
         run: npm test
+
+  apple:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install xcodegen
         run: brew install xcodegen
