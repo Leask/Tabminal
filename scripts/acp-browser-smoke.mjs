@@ -480,6 +480,99 @@ async function main() {
         );
     });
 
+    await evaluate(
+        toExpression(`
+            () => {
+                document.querySelector('.toggle-agent-btn')?.click();
+                return true;
+            }
+        `)
+    );
+    log('opened-second-agent-dropdown');
+
+    await waitFor('second-agent-dropdown-items', async () => {
+        return await evaluate(
+            toExpression(`
+                () => document.querySelectorAll('.agent-dropdown-item').length > 0
+            `),
+            15000,
+            250
+        );
+    });
+
+    await evaluate(
+        toExpression(`
+            () => {
+                const items = Array.from(
+                    document.querySelectorAll('.agent-dropdown-item')
+                );
+                const target = items.find((el) =>
+                    el.textContent.includes(
+                        ${JSON.stringify(targetAgentLabel)}
+                    )
+                ) || items.find((el) => !el.disabled);
+                if (!target) return false;
+                target.click();
+                return true;
+            }
+        `)
+    );
+    log('picked-second-agent');
+
+    await waitFor('second-agent-tab', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const tabs = document.querySelectorAll(
+                        '.agent-editor-tab'
+                    );
+                    const panel = document.querySelector('.agent-panel');
+                    return tabs.length >= 2
+                        && Boolean(panel)
+                        && getComputedStyle(panel).display !== 'none';
+                }
+            `),
+            15000,
+            250
+        );
+    });
+
+    await evaluate(
+        toExpression(`
+            () => {
+                const tabs = Array.from(document.querySelectorAll(
+                    '.agent-editor-tab'
+                ));
+                tabs[0]?.click();
+                return true;
+            }
+        `)
+    );
+    log('switched-back-first-agent');
+
+    await waitFor('first-agent-restored', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const tabs = Array.from(document.querySelectorAll(
+                        '.agent-editor-tab'
+                    ));
+                    const active = tabs.find((el) =>
+                        el.classList.contains('active')
+                    );
+                    const messages = document.querySelectorAll(
+                        '.agent-message'
+                    ).length;
+                    return Boolean(active)
+                        && tabs.indexOf(active) === 0
+                        && messages > 0;
+                }
+            `),
+            15000,
+            250
+        );
+    });
+
     const finalState = await evaluate(
         toExpression(`
             () => ({

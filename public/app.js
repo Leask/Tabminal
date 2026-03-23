@@ -1957,6 +1957,20 @@ class AgentTab {
         await syncAgentsForServer(this.server, { force: true });
     }
 
+    async #waitForSettled(timeoutMs = 5000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            await syncAgentsForServer(this.server, { force: true });
+            const current = state.agentTabs.get(this.key);
+            if (!current || !current.busy) {
+                return;
+            }
+            await new Promise((resolve) => {
+                setTimeout(resolve, 150);
+            });
+        }
+    }
+
     async cancel() {
         const response = await this.server.fetch(
             `/api/agents/tabs/${this.id}/cancel`,
@@ -1967,7 +1981,7 @@ class AgentTab {
         if (!response.ok) {
             throw new Error('Failed to cancel prompt');
         }
-        await syncAgentsForServer(this.server, { force: true });
+        await this.#waitForSettled();
     }
 
     async resolvePermission(permissionId, optionId = '') {
