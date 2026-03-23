@@ -1232,12 +1232,13 @@ class EditorManager {
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'agent-permission-option';
-                button.textContent = option.name || option.id;
+                const optionId = option.optionId || option.id || '';
+                button.textContent = option.name || optionId || 'Allow';
                 button.onclick = async () => {
                     try {
                         await agentTab.resolvePermission(
                             permission.id,
-                            option.id
+                            optionId
                         );
                     } catch (error) {
                         alert(error.message, {
@@ -1953,6 +1954,7 @@ class AgentTab {
         if (!response.ok) {
             throw new Error('Failed to send prompt');
         }
+        await syncAgentsForServer(this.server, { force: true });
     }
 
     async cancel() {
@@ -1965,6 +1967,7 @@ class AgentTab {
         if (!response.ok) {
             throw new Error('Failed to cancel prompt');
         }
+        await syncAgentsForServer(this.server, { force: true });
     }
 
     async resolvePermission(permissionId, optionId = '') {
@@ -1979,6 +1982,7 @@ class AgentTab {
         if (!response.ok) {
             throw new Error('Failed to resolve permission');
         }
+        await syncAgentsForServer(this.server, { force: true });
     }
 
     async close() {
@@ -2062,14 +2066,14 @@ function refreshWorkspaceIfSessionActive(session) {
         editorManager.switchTo(session);
         return;
     }
-    editorManager.renderEditorTabs();
     const activeKey = editorManager.getActiveWorkspaceTabKey(session);
-    if (isAgentWorkspaceTabKey(activeKey)) {
-        const agentTab = state.agentTabs.get(activeKey);
-        if (agentTab) {
-            editorManager.renderAgentPanel(agentTab);
-        }
+    editorManager.renderEditorTabs();
+    if (activeKey) {
+        editorManager.activateWorkspaceTab(activeKey, true);
+    } else {
+        editorManager.showEmptyState();
     }
+    editorManager.updateEditorPaneVisibility();
 }
 
 function upsertAgentTab(server, data) {
@@ -2170,7 +2174,15 @@ async function createAgentTab(session, agentId) {
     session.editorState.isVisible = true;
     session.workspaceState.activeTabKey = agentTab.key;
     session.saveState();
-    refreshWorkspaceIfSessionActive(session);
+    if (state.activeSessionKey === session.key) {
+        if (editorManager.currentSession?.key !== session.key) {
+            editorManager.switchTo(session);
+        }
+        editorManager.activateAgentTab(agentTab.key);
+        editorManager.updateEditorPaneVisibility();
+    } else {
+        refreshWorkspaceIfSessionActive(session);
+    }
     return agentTab;
 }
 

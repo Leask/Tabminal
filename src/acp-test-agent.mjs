@@ -101,6 +101,24 @@ class TabminalTestAgent {
             });
             await sleep(30, signal);
 
+            if (/cancel-smoke/i.test(promptText)) {
+                for (let index = 0; index < 8; index += 1) {
+                    await this.connection.sessionUpdate({
+                        sessionId: params.sessionId,
+                        update: {
+                            sessionUpdate: 'agent_message_chunk',
+                            messageId: 'cancel-smoke',
+                            content: {
+                                type: 'text',
+                                text: ` chunk-${index + 1}`
+                            }
+                        }
+                    });
+                    await sleep(120, signal);
+                }
+                return { stopReason: 'end_turn' };
+            }
+
             if (/permission/i.test(promptText)) {
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
@@ -138,6 +156,20 @@ class TabminalTestAgent {
                         status: permission.outcome.outcome === 'selected'
                             ? 'completed'
                             : 'cancelled'
+                    }
+                });
+
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'permission-result',
+                        content: {
+                            type: 'text',
+                            text: permission.outcome.outcome === 'selected'
+                                ? 'All set. Permission was granted.'
+                                : 'Permission was cancelled.'
+                        }
                     }
                 });
             }
