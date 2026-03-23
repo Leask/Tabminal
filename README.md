@@ -40,7 +40,7 @@ As a long-time terminal user who frequently needs to step away from my computer 
 
 ### 🧠 AI-Native Intelligence
 Powered by **modern AI models** (via OpenRouter or OpenAI), `t> Tabminal` understands your context.
-*(Defaults to **Gemini 3 Flash** for OpenRouter or **GPT-5.2** for OpenAI if not configured)*
+*(Defaults to **Gemini 3 Flash** for OpenRouter or **GPT-5.4** for OpenAI if not configured)*
 *   **Context-Aware Chat**: Type `# how do I...` to ask questions. The AI knows your **CWD**, **Environment**, and **Recent History**.
 *   **Auto-Fix**: Command failed? `t> Tabminal` automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
 *   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
@@ -129,7 +129,7 @@ You can configure `t> Tabminal` via command-line arguments, environment variable
 | `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | OpenRouter API Key (Mutually exclusive with OpenAI) | `null` |
 | `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API Key (Mutually exclusive with OpenRouter) | `null` |
 | `-u`, `--openai-api` | `TABMINAL_OPENAI_API` | OpenAI Base API URL (Optional) | `null` |
-| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gpt-5.2` (OpenAI) / `gemini-3-flash-preview` (OpenRouter) |
+| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gpt-5.4` (OpenAI) / `gemini-3-flash-preview` (OpenRouter) |
 | `-f`, `--cloudflare-key` | `TABMINAL_CLOUDFLARE_KEY` | Cloudflare Tunnel Token | `null` |
 | `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
 | `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
