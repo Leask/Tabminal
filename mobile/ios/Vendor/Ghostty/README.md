@@ -51,8 +51,8 @@ Current supported slice set:
 - `ios-arm64-simulator`
 - `macos-arm64_x86_64`
 - `xros-arm64`
-- `xrsimulator-arm64`
-- `xrsimulator-arm64_x86_64`
+- `xros-arm64-simulator`
+- legacy `xrsimulator-*` names are still accepted by the consumer scripts
 
 If the xcframework omits the visionOS slices, the app still builds and runs
 on visionOS, but it falls back to the text renderer there.

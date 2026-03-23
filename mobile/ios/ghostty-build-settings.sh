@@ -84,6 +84,8 @@ tabminal_ghostty_library_for_sdk() {
             ;;
         xrsimulator)
             for candidate in \
+                "${xcframework_path}/xros-arm64-simulator/libghostty-fat.a" \
+                "${xcframework_path}/xros-arm64-simulator/libghostty.a" \
                 "${xcframework_path}/xrsimulator-arm64/libghostty.a" \
                 "${xcframework_path}/xrsimulator-arm64/libghostty-fat.a" \
                 "${xcframework_path}/xrsimulator-arm64_x86_64/libghostty.a" \

@@ -97,7 +97,8 @@ What works now:
 - Drive a native Ghostty renderer through the custom-I/O bridge when the
   runtime is linked and exports the required symbols
 - Use the same Ghostty renderer path on visionOS when the linked
-  `GhosttyKit.xcframework` includes `xros/xrsimulator` slices
+  `GhosttyKit.xcframework` includes the visionOS slices
+  `xros-arm64` and `xros-arm64-simulator`
 - Fall back to the text renderer when the runtime or platform slice is
   missing
 - Send input, return, tab, escape, Ctrl-C, and arrow keys
@@ -149,4 +150,4 @@ The helper workflow for building that artifact lives in:
 - `/Users/leask/Documents/Tabminal/mobile/ghostty-vendor/README.md`
 
 That workflow now supports `ios`, `macOS`, and `visionOS`
-(`xros/xrsimulator`) slices.
+(`xros-arm64` and `xros-arm64-simulator`) slices.

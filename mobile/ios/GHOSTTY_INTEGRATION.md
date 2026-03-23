@@ -82,8 +82,9 @@ Current platform state:
   Ghostty renderer path is working.
 - `visionOS`
   The app-side bridge compiles and runs. Ghostty rendering works when the
-  linked `GhosttyKit.xcframework` includes `xros/xrsimulator` slices; text
-  fallback remains the safe path when no such artifact is linked.
+  linked `GhosttyKit.xcframework` includes the visionOS slices
+  `xros-arm64` and `xros-arm64-simulator`; text fallback remains the safe
+  path when no such artifact is linked.
 
 ## What has already been prepared in this repo
 
@@ -115,9 +116,9 @@ execution path. The correct move remains:
 1. use a Ghostty runtime that exports the custom-I/O bridge
 2. keep the Tabminal server protocol unchanged
 3. continue hardening the Apple host views around Ghostty's IOSurface model
-4. bundle or vendor a Ghostty artifact with `xros/xrsimulator` slices so
-   visionOS can use Ghostty by default instead of relying on explicit local
-   overrides
+4. bundle or vendor a Ghostty artifact with the visionOS slices
+   `xros-arm64` and `xros-arm64-simulator` so visionOS can use Ghostty by
+   default instead of relying on explicit local overrides
 
 ## Vendor workflow
 
