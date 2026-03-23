@@ -7,6 +7,9 @@ on:
       - mobile
   pull_request:
 
+env:
+  XCODEGEN_VERSION: '2.45.3'
+
 jobs:
   node:
     runs-on: ubuntu-latest
@@ -39,7 +42,16 @@ jobs:
           xcode-version: 'latest-stable'
 
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: |
+          curl -L \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            -o /tmp/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          mkdir -p "$HOME/.local/bin"
+          install /tmp/xcodegen/bin/xcodegen "$HOME/.local/bin/xcodegen"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          xcodegen --version
 
       - name: Validate mobile shell scripts
         run: bash -n mobile/ios/*.sh mobile/ghostty-vendor/scripts/*.sh
