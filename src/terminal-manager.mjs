@@ -60,9 +60,27 @@ export class TerminalManager {
     constructor() {
         this.sessions = new Map();
         this.snapshotPersistTimers = new Map();
+        this.sessionPersistenceChains = new Map();
         this.lastCols = initialCols;
         this.lastRows = initialRows;
         this.disposing = false;
+    }
+
+    queueSessionPersistence(id, operation) {
+        const previous = this.sessionPersistenceChains.get(id)
+            || Promise.resolve();
+        const next = previous
+            .catch(() => {})
+            .then(operation);
+
+        this.sessionPersistenceChains.set(id, next);
+        next.finally(() => {
+            if (this.sessionPersistenceChains.get(id) === next) {
+                this.sessionPersistenceChains.delete(id);
+            }
+        }).catch(() => {});
+
+        return next;
     }
 
     createSession(restoredData = null) {
@@ -200,24 +218,28 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             });
         }
 
+        this.sessions.set(id, session);
+
         // Initial save
-        this.saveSessionState(session);
+        void this.saveSessionState(session);
 
         ptyProcess.onExit(() => {
-            this.removeSession(id);
+            void this.removeSession(id);
             // Cleanup temp files
             try {
                 if (initDirPath && fs.existsSync(initDirPath)) fs.rmSync(initDirPath, { recursive: true, force: true });
             } catch { /* ignore cleanup errors */ }
         });
-
-        this.sessions.set(id, session);
         debugLog(`[Manager] Created session ${id}`);
         return session;
     }
 
     saveSessionState(session) {
-        persistence.saveSession(session.id, {
+        if (this.sessions.get(session.id) !== session) {
+            return Promise.resolve();
+        }
+
+        return this.queueSessionPersistence(session.id, () => persistence.saveSession(session.id, {
             id: session.id,
             title: session.title,
             cwd: session.cwd,
@@ -227,7 +249,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             createdAt: session.createdAt,
             editorState: session.editorState,
             executions: session.executions
-        });
+        }));
     }
 
     updateSessionState(id, data) {
@@ -250,13 +272,17 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             clearTimeout(existing);
         }
 
-        const timer = setTimeout(async () => {
+        const timer = setTimeout(() => {
             this.snapshotPersistTimers.delete(id);
             const currentSession = this.sessions.get(id);
             if (!currentSession) return;
 
-            const snapshot = await currentSession.serializeSnapshot();
-            await persistence.saveSessionSnapshot(id, snapshot);
+            void this.queueSessionPersistence(id, async () => {
+                if (this.sessions.get(id) !== currentSession) return;
+                const snapshot = await currentSession.serializeSnapshot();
+                if (this.sessions.get(id) !== currentSession) return;
+                await persistence.saveSessionSnapshot(id, snapshot);
+            });
         }, 250);
 
         this.snapshotPersistTimers.set(id, timer);
@@ -280,7 +306,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         this.lastRows = rows;
     }
 
-    removeSession(id) {
+    async removeSession(id) {
         const session = this.sessions.get(id);
         if (session) {
             const timer = this.snapshotPersistTimers.get(id);
@@ -288,9 +314,18 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
                 clearTimeout(timer);
                 this.snapshotPersistTimers.delete(id);
             }
+            try {
+                if (process.platform === 'win32') {
+                    session.pty.kill();
+                } else {
+                    session.pty.kill('SIGHUP');
+                }
+            } catch {
+                // ignore
+            }
             session.dispose();
             this.sessions.delete(id);
-            persistence.deleteSession(id);
+            await this.queueSessionPersistence(id, () => persistence.deleteSession(id));
             debugLog(`[Manager] Removed session ${id}`);
         }
     }

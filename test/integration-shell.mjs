@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { TerminalManager } from "../src/terminal-manager.mjs";
@@ -42,8 +45,9 @@ function assertNoPromptArtifacts(output) {
 
 test("captures real shell output without prompt noise", async () => {
     const manager = new TerminalManager();
+    let session = null;
     try {
-        const session = manager.createSession();
+        session = manager.createSession();
         await waitForInitialExecution(session);
         const entry = await runCommand(session, "echo __TABMINAL_CAPTURE__");
         assert.strictEqual(entry.command.trim(), "echo __TABMINAL_CAPTURE__");
@@ -51,14 +55,18 @@ test("captures real shell output without prompt noise", async () => {
         assert.ok(entry.output.startsWith("__TABMINAL_CAPTURE__"));
         assertNoPromptArtifacts(entry.output);
     } finally {
+        if (session) {
+            await manager.removeSession(session.id);
+        }
         manager.dispose();
     }
 });
 
 test("strips terminal escape sequences from captured IO", async () => {
     const manager = new TerminalManager();
+    let session = null;
     try {
-        const session = manager.createSession();
+        session = manager.createSession();
         await waitForInitialExecution(session);
         const entry = await runCommand(
             session,
@@ -90,6 +98,36 @@ test("strips terminal escape sequences from captured IO", async () => {
             "should trim trailing whitespace from output"
         );
     } finally {
+        if (session) {
+            await manager.removeSession(session.id);
+        }
+        manager.dispose();
+    }
+});
+
+test("removing a session deletes persisted files after pending saves", async () => {
+    const manager = new TerminalManager();
+    let session = null;
+    try {
+        session = manager.createSession();
+        await waitForInitialExecution(session);
+
+        const sessionsDir = path.join(os.homedir(), ".tabminal", "sessions");
+        const jsonPath = path.join(sessionsDir, `${session.id}.json`);
+        const logPath = path.join(sessionsDir, `${session.id}.log`);
+        const snapshotPath = path.join(sessionsDir, `${session.id}.snapshot`);
+
+        session.resize(140, 42);
+        await manager.removeSession(session.id);
+        await delay(200);
+
+        await assert.rejects(fs.stat(jsonPath), { code: "ENOENT" });
+        await assert.rejects(fs.stat(logPath), { code: "ENOENT" });
+        await assert.rejects(fs.stat(snapshotPath), { code: "ENOENT" });
+    } finally {
+        if (session) {
+            await manager.removeSession(session.id);
+        }
         manager.dispose();
     }
 });

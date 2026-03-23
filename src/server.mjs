@@ -199,9 +199,9 @@ router.post('/api/sessions', (ctx) => {
     };
 });
 
-router.delete('/api/sessions/:id', (ctx) => {
+router.delete('/api/sessions/:id', async (ctx) => {
     const { id } = ctx.params;
-    terminalManager.removeSession(id);
+    await terminalManager.removeSession(id);
     ctx.status = 204;
 });
 
