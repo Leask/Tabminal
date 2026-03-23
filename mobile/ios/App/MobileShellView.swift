@@ -435,10 +435,7 @@ struct MobileShellView: View {
             }
             .contextMenu {
                 Button("Open Editor", systemImage: "folder") {
-                    model.selectSession(session)
-                    DispatchQueue.main.async {
-                        model.toggleWorkspace(for: session)
-                    }
+                    presentWorkspace(for: session)
                 }
                 Button("Close Tab", systemImage: "xmark", role: .destructive) {
                     model.closeSession(session)
@@ -467,15 +464,9 @@ struct MobileShellView: View {
                 overlayActionButton(
                     systemImage: "folder",
                     accessibilityID: "session.editor.\(session.key)",
-                    accessibilityLabel: "Toggle Editor"
+                    accessibilityLabel: "Open Editor"
                 ) {
-                    model.selectSession(session)
-                    if isCompact {
-                        sidebarPresented = false
-                    }
-                    DispatchQueue.main.async {
-                        model.toggleWorkspace(for: session)
-                    }
+                    presentWorkspace(for: session)
                 }
                 .padding(10)
                 .frame(
@@ -768,6 +759,24 @@ struct MobileShellView: View {
         model.createSession(on: host.id)
         if isCompact {
             sidebarPresented = false
+        }
+    }
+
+    private func presentWorkspace(
+        for session: MobileAppModel.SessionRecord
+    ) {
+        model.selectSession(session)
+
+        if isCompact {
+            sidebarPresented = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                model.openWorkspace()
+            }
+            return
+        }
+
+        DispatchQueue.main.async {
+            model.openWorkspace()
         }
     }
 
