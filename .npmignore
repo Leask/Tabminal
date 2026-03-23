@@ -3,6 +3,7 @@
 .github/
 .history/
 .vscode/
+apps/
 scripts/
 test/
 tests/

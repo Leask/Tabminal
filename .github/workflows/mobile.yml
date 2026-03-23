@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - mobile
   pull_request:
 
 env:
@@ -54,21 +53,21 @@ jobs:
           xcodegen --version
 
       - name: Validate mobile shell scripts
-        run: bash -n mobile/ios/*.sh mobile/ghostty-vendor/scripts/*.sh
+        run: bash -n apps/Apple/*.sh apps/ghostty-vendor/scripts/*.sh
 
       - name: Run Swift package tests
         run: |
-          cd mobile/ios
+          cd apps/Apple
           swift test
 
       - name: Generate Apple app project
         run: |
-          cd mobile/ios
+          cd apps/Apple
           xcodegen generate
 
       - name: Build macOS app shell
         run: |
-          cd mobile/ios
+          cd apps/Apple
           xcodebuild \
             -project TabminalMobileApp.xcodeproj \
             -scheme TabminalMobileApp \

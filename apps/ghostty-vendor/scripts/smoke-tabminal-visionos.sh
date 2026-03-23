@@ -15,7 +15,7 @@ if [[ ! -d ${xcframework} ]]; then
     exit 1
 fi
 
-cd "${repo_root}/mobile/ios"
+cd "${repo_root}/apps/Apple"
 ./xcodebuild-lock.sh xcodegen generate >/dev/null
 
 tmp_root=$(mktemp -d "${TMPDIR:-/tmp}/tabminal-visionos-smoke.XXXXXX")

@@ -24,7 +24,7 @@ Recommended local workflow:
 
 ```bash
 cd /Users/leask/Documents/Tabminal
-./mobile/ghostty-vendor/scripts/build-xcframework.sh /path/to/ghostty-checkout
+./apps/ghostty-vendor/scripts/build-xcframework.sh /path/to/ghostty-checkout
 ```
 
 That emits `macos/GhosttyKit.xcframework` from the Ghostty checkout. You can

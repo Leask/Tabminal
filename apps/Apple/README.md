@@ -1,4 +1,4 @@
-# Tabminal iOS
+# Tabminal Apple App
 
 ## Scope
 
@@ -48,14 +48,14 @@ One-time prerequisites:
 Run:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./run-sim.sh
 ```
 
 To target a different simulator by name:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./run-sim.sh "iPhone 17"
 ```
 
@@ -63,7 +63,7 @@ For a full Apple Ghostty regression run using a local custom-I/O Ghostty
 checkout:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./test-apple-ghostty.sh /path/to/ghostty-checkout
 ```
 
@@ -72,7 +72,7 @@ The script will:
 1. Generate `TabminalMobileApp.xcodeproj`
 2. Pick the named simulator
 3. Boot and wait for it
-4. Build the app into `mobile/ios/build`
+4. Build the app into `apps/Apple/build`
 5. Install and launch `com.leask.tabminal.mobile`
 
 ## visionOS
@@ -86,7 +86,7 @@ xcodebuild -downloadPlatform visionOS -exportPath /tmp/tabminal-visionos-downloa
 To build and launch the app in the Apple Vision Pro simulator:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./run-visionos.sh
 ```
 
@@ -155,7 +155,7 @@ build scripts resolve the artifact from:
 
 The helper workflow for building that artifact lives in:
 
-- `/Users/leask/Documents/Tabminal/mobile/ghostty-vendor/README.md`
+- `/Users/leask/Documents/Tabminal/apps/ghostty-vendor/README.md`
 
 That workflow now supports `ios`, `macOS`, and `visionOS`
 (`xros-arm64` and `xros-arm64-simulator`) slices.

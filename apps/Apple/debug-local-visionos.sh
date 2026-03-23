@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
-IOS_DIR="${REPO_ROOT}/mobile/ios"
+APPLE_DIR="${REPO_ROOT}/apps/Apple"
 DEVICE_NAME="${1:-Apple Vision Pro}"
 DEBUG_PORT="${TABMINAL_MOBILE_DEBUG_PORT:-19846}"
 DEBUG_PASSWORD="${TABMINAL_MOBILE_DEBUG_PASSWORD:-mobile-debug}"
@@ -50,7 +50,7 @@ done
 
 curl -fsS "http://127.0.0.1:${DEBUG_PORT}/healthz" >/dev/null
 
-cd "${IOS_DIR}"
+cd "${APPLE_DIR}"
 TABMINAL_MOBILE_DEBUG_URL="http://127.0.0.1:${DEBUG_PORT}" \
 TABMINAL_MOBILE_DEBUG_PASSWORD="${DEBUG_PASSWORD}" \
 TABMINAL_MOBILE_DEBUG_HOST="${DEBUG_HOST}" \

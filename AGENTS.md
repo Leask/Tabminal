@@ -1,6 +1,6 @@
 # Tabminal Agent Notes
 
-Last updated: 2026-02-10
+Last updated: 2026-03-23
 
 This file is for future AI/code agents working in this repo.
 Goal: keep context accurate, avoid reintroducing old bugs, and preserve current UX
@@ -12,6 +12,9 @@ contracts after the multi-host refactor.
 - Backend entry: `src/server.mjs`.
 - Frontend entry: `public/app.js` (plus modules in `public/modules/`).
 - PWA shell: `public/index.html` + `public/sw.js`.
+- Native app workspace: `apps/`
+  - Apple client: `apps/Apple`
+  - Ghostty vendor tooling: `apps/ghostty-vendor`
 - Multi-host registry persistence: `~/.tabminal/cluster.json` via backend API.
 
 Core idea now:
@@ -260,6 +263,11 @@ Frontend:
 - `public/styles.css`: sidebar/tab/host control styling and responsive rules.
 - `public/index.html`: shell DOM, runtime versioned loader, SW register.
 - `public/sw.js`: runtime-versioned caching strategy.
+
+Native apps:
+- `apps/README.md`: native app architecture and rollout plan.
+- `apps/Apple`: Apple-platform app, Swift package, CLI launch scripts.
+- `apps/ghostty-vendor`: Ghostty xcframework build and verification helpers.
 
 ## 6) Logs and Debug Guidance
 

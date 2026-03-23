@@ -1,8 +1,8 @@
-# Tabminal Mobile
+# Tabminal Apps
 
 ## Goal
 
-Build native mobile clients that reuse the current Tabminal server protocol
+Build native app clients that reuse the current Tabminal server protocol
 and session model while replacing the browser runtime with native terminal
 surfaces.
 
@@ -63,11 +63,11 @@ sharing. That keeps the iOS path fast and aligned with `libghostty`.
 
 Initial layout:
 
-- `mobile/README.md`
+- `apps/README.md`
   Global architecture and rollout plan.
-- `mobile/ios`
+- `apps/Apple`
   Swift package, generated app host, and iOS shell scaffolding.
-- `mobile/android`
+- `apps/android`
   Deferred until the iOS protocol and state model stabilizes.
 
 Planned medium-term split:
@@ -119,18 +119,18 @@ Decisions:
 
 This branch is past the initial scaffold phase:
 
-- Protocol and transport models live in `mobile/ios`.
+- Protocol and transport models live in `apps/Apple`.
 - A native Apple app host exists and builds for `iOS`, `iPadOS`, `macOS`,
   and `visionOS`.
 - CLI launch paths exist via:
-  - `mobile/ios/run-sim.sh`
-  - `mobile/ios/run-macos.sh`
-  - `mobile/ios/run-visionos.sh`
+  - `apps/Apple/run-sim.sh`
+  - `apps/Apple/run-macos.sh`
+  - `apps/Apple/run-visionos.sh`
 - A serial Apple Ghostty smoke runner now exists:
-  - `mobile/ios/test-apple-ghostty.sh`
+  - `apps/Apple/test-apple-ghostty.sh`
 - A baseline GitHub Actions workflow now validates:
   - `npm test`
-  - `swift test` for `mobile/ios`
+  - `swift test` for `apps/Apple`
   - shell syntax for mobile scripts
   - a macOS app-shell build
 - The Ghostty custom-I/O renderer path is working on iPhone and iPad
@@ -148,7 +148,7 @@ This branch is past the initial scaffold phase:
 
 Current bootstrap path:
 
-1. Generate the project from `mobile/ios/project.yml` using `xcodegen`.
+1. Generate the project from `apps/Apple/project.yml` using `xcodegen`.
 2. Build the iOS app against the local package graph.
 3. Install the app into the selected simulator.
 4. Launch the app via `simctl`.
@@ -156,21 +156,21 @@ Current bootstrap path:
 Entry command:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./run-sim.sh
 ```
 
 Optional device argument:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./run-sim.sh "iPad Pro 11-inch (M5)"
 ```
 
 Full Apple Ghostty regression command:
 
 ```bash
-cd mobile/ios
+cd apps/Apple
 ./test-apple-ghostty.sh /path/to/ghostty-checkout
 ```
 

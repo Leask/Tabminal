@@ -92,13 +92,13 @@ The iOS client now has a renderer abstraction layer and a native runtime
 probe so the future Ghostty host can be swapped in without rewriting
 session, shell, or workspace UI.
 
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalRenderer.swift`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalSurfaceHost.swift`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/TerminalRenderFeed.swift`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/GhosttyRuntime.swift`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/TabminalIOSKit/GhosttyNativeTerminalSurface.swift`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Sources/CGhosttyShim/include/ghostty_loader.h`
-- `/Users/leask/Documents/Tabminal/mobile/ios/Vendor/Ghostty/README.md`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalRenderer.swift`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalSurfaceHost.swift`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalRenderFeed.swift`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/GhosttyRuntime.swift`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/GhosttyNativeTerminalSurface.swift`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/CGhosttyShim/include/ghostty_loader.h`
+- `/Users/leask/Documents/Tabminal/apps/Apple/Vendor/Ghostty/README.md`
 
 Current renderer behavior:
 
@@ -125,7 +125,7 @@ execution path. The correct move remains:
 This repo now includes a dedicated helper workflow for Ghostty vendor
 artifacts:
 
-- `/Users/leask/Documents/Tabminal/mobile/ghostty-vendor/README.md`
+- `/Users/leask/Documents/Tabminal/apps/ghostty-vendor/README.md`
 
 That workflow can build a `GhosttyKit.xcframework` from a compatible
 custom-I/O Ghostty checkout and verify the resulting Apple slices.

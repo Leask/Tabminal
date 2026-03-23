@@ -48,9 +48,9 @@ Stacked follow-up branch:
 The split branch was re-verified using the vendor scripts in this repo:
 
 ```bash
-mobile/ghostty-vendor/scripts/build-xcframework.sh /tmp/tabminal-ghostty-custom-io
-mobile/ghostty-vendor/scripts/verify-slices.sh /tmp/tabminal-ghostty-custom-io/macos/GhosttyKit.xcframework
-mobile/ghostty-vendor/scripts/smoke-tabminal-visionos.sh /tmp/tabminal-ghostty-custom-io/macos/GhosttyKit.xcframework
+apps/ghostty-vendor/scripts/build-xcframework.sh /tmp/tabminal-ghostty-custom-io
+apps/ghostty-vendor/scripts/verify-slices.sh /tmp/tabminal-ghostty-custom-io/macos/GhosttyKit.xcframework
+apps/ghostty-vendor/scripts/smoke-tabminal-visionos.sh /tmp/tabminal-ghostty-custom-io/macos/GhosttyKit.xcframework
 ```
 
 All three passed.
