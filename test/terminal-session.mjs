@@ -30,18 +30,19 @@ describe('TerminalSession', () => {
         }
     });
 
-    it('replays buffered output when a client attaches', () => {
+    it('replays buffered output when a client attaches', async () => {
         session = new TerminalSession(pty, { historyLimit: 16 });
         pty.emitData('hello ');
         pty.emitData('world');
 
         const client = new MockSocket();
         session.attach(client);
+        await client.waitForMessages(3);
 
         const payloads = client.sent.map((raw) => JSON.parse(raw));
 
         assert.strictEqual(payloads[0].type, 'snapshot');
-        assert.strictEqual(payloads[0].data, 'hello world');
+        assert.match(payloads[0].data, /hello world/);
 
         assert.strictEqual(payloads[1].type, 'meta');
 
@@ -49,10 +50,11 @@ describe('TerminalSession', () => {
         assert.strictEqual(payloads[2].status, 'ready');
     });
 
-    it('writes user input to the underlying pty', () => {
+    it('writes user input to the underlying pty', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();
         session.attach(client);
+        await client.waitForMessages(3);
 
         client.emit('message', JSON.stringify({
             type: 'input',
@@ -63,10 +65,11 @@ describe('TerminalSession', () => {
         assert.deepStrictEqual(pty.write.mock.calls[0].arguments, ['ls\n']);
     });
 
-    it('resizes using sanitized values only', () => {
+    it('resizes using sanitized values only', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();
         session.attach(client);
+        await client.waitForMessages(3);
 
         client.emit('message', JSON.stringify({
             type: 'resize',
@@ -84,10 +87,11 @@ describe('TerminalSession', () => {
         assert.deepStrictEqual(pty.resize.mock.calls[0].arguments, [200, 40]);
     });
 
-    it('stops accepting input after the pty exits', () => {
+    it('stops accepting input after the pty exits', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();
         session.attach(client);
+        await client.waitForMessages(3);
 
         pty.emitExit({ exitCode: 0 });
         client.emit('message', JSON.stringify({
@@ -109,10 +113,7 @@ describe('TerminalSession', () => {
         pty.emitData('0123456789'); // fill
         pty.emitData('abcdef'); // push over
 
-        const client = new MockSocket();
-        session.attach(client);
-        const payloads = client.sent.map((raw) => JSON.parse(raw));
-        assert.strictEqual(payloads[0].data, '6789abcdef');
+        assert.strictEqual(session.history, '6789abcdef');
     });
 
     it('captures execution output between exit markers', () => {
@@ -223,10 +224,11 @@ describe('TerminalSession', () => {
         });
     });
 
-    it('does not forward control sequences to clients', () => {
+    it('does not forward control sequences to clients', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();
         session.attach(client);
+        await client.waitForMessages(3);
         client.sent = [];
 
         pty.emitData('prompt$ ' + PROMPT_MARKER);
@@ -238,6 +240,43 @@ ${buildExitSequence(0, 'echo hi')}`);
         const outputMsg = payloads.find((p) => p.type === 'output' && p.data.includes('echo hi'));
         assert.ok(outputMsg);
         assert.ok(outputMsg.data.includes('\nhi\n'));
+    });
+
+    it('serializes terminal modes into the attach snapshot', async () => {
+        session = new TerminalSession(pty);
+        pty.emitData('\u001b[?1000h\u001b[?1006hhello');
+
+        const client = new MockSocket();
+        session.attach(client);
+        await client.waitForMessages(3);
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        assert.strictEqual(payloads[0].type, 'snapshot');
+        assert.match(payloads[0].data, /\u001b\[\?1000h/);
+        assert.match(payloads[0].data, /\u001b\[\?1006h/);
+        assert.match(payloads[0].data, /hello/);
+    });
+
+    it('restores a serialized snapshot for a replacement session', async () => {
+        session = new TerminalSession(pty);
+        pty.emitData('\u001b[?1000h\u001b[?1006hhello\r\nworld');
+        const snapshot = await session.serializeSnapshot();
+
+        const restoredSession = new TerminalSession(new FakePty());
+        await restoredSession.restoreSnapshot(snapshot);
+
+        const client = new MockSocket();
+        restoredSession.attach(client);
+        await client.waitForMessages(3);
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        assert.strictEqual(payloads[0].type, 'snapshot');
+        assert.match(payloads[0].data, /hello/);
+        assert.match(payloads[0].data, /world/);
+        assert.match(payloads[0].data, /\u001b\[\?1000h/);
+        assert.match(payloads[0].data, /\u001b\[\?1006h/);
+
+        restoredSession.dispose();
     });
 
     it('captures split shell markers across chunks', () => {
@@ -308,6 +347,7 @@ class MockSocket {
     constructor() {
         this.sent = [];
         this.readyState = 1;
+        this._waiters = [];
         this._listeners = {
             message: new Set(),
             close: new Set(),
@@ -317,6 +357,9 @@ class MockSocket {
 
     send(payload) {
         this.sent.push(payload);
+        for (const waiter of [...this._waiters]) {
+            waiter();
+        }
     }
 
     close() {
@@ -337,6 +380,22 @@ class MockSocket {
             handler(...args);
         };
         this.on(event, onceHandler);
+    }
+
+    waitForMessages(count) {
+        if (this.sent.length >= count) {
+            return Promise.resolve();
+        }
+
+        return new Promise((resolve) => {
+            const check = () => {
+                if (this.sent.length >= count) {
+                    this._waiters = this._waiters.filter((w) => w !== check);
+                    resolve();
+                }
+            };
+            this._waiters.push(check);
+        });
     }
 
     emit(event, payload) {

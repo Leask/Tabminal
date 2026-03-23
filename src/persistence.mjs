@@ -7,6 +7,7 @@ const BASE_DIR = path.join(HOME_DIR, '.tabminal');
 const SESSIONS_DIR = path.join(BASE_DIR, 'sessions');
 const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
 const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');
+const getSessionSnapshotPath = (id) => path.join(SESSIONS_DIR, `${id}.snapshot`);
 
 // Ensure directories exist
 const init = async () => {
@@ -45,6 +46,7 @@ export const saveSession = async (id, data) => {
 export const deleteSession = async (id) => {
     const jsonPath = path.join(SESSIONS_DIR, `${id}.json`);
     const logPath = path.join(SESSIONS_DIR, `${id}.log`);
+    const snapshotPath = getSessionSnapshotPath(id);
     
     try {
         await fs.unlink(jsonPath);
@@ -56,6 +58,12 @@ export const deleteSession = async (id) => {
         await fs.unlink(logPath);
     } catch (e) {
         if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to delete session log ${id}:`, e);
+    }
+
+    try {
+        await fs.unlink(snapshotPath);
+    } catch (e) {
+        if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to delete session snapshot ${id}:`, e);
     }
 };
 
@@ -197,6 +205,16 @@ export const appendSessionLog = async (id, chunk) => {
     }
 };
 
+export const saveSessionSnapshot = async (id, snapshot) => {
+    await init();
+    const filePath = getSessionSnapshotPath(id);
+    try {
+        await fs.writeFile(filePath, snapshot, 'utf8');
+    } catch (e) {
+        console.error(`[Persistence] Failed to save snapshot for ${id}:`, e);
+    }
+};
+
 export const loadSessionLog = async (id, limit = 1024 * 1024) => {
     const filePath = path.join(SESSIONS_DIR, `${id}.log`);
     try {
@@ -217,4 +235,20 @@ export const loadSessionLog = async (id, limit = 1024 * 1024) => {
         if (e.code !== 'ENOENT') console.error(`[Persistence] Failed to load log for ${id}:`, e);
         return '';
     }
+};
+
+export const loadSessionSnapshot = async (id) => {
+    const filePath = getSessionSnapshotPath(id);
+    try {
+        return await fs.readFile(filePath, 'utf8');
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            console.error(
+                `[Persistence] Failed to load snapshot for ${id}:`,
+                e
+            );
+        }
+    }
+
+    return loadSessionLog(id);
 };

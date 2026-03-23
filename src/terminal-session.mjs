@@ -6,10 +6,15 @@ import { alan } from 'utilitas';
 import { config } from './config.mjs';
 
 const execAsync = promisify(exec);
+const {
+    HeadlessTerminal,
+    SerializeAddon
+} = await loadHeadlessXtermPackages();
 const WS_STATE_OPEN = 1;
 const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
 const OSC_SEQUENCE_REGEX =
     /\u001b\]1337;(ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)|TabminalPrompt)\u0007/g;
+const EXTRA_PRIVATE_MODE_REGEX = /\u001b\[\?(1005|1006|1015)([hl])/g;
 const CSI_SEQUENCE_REGEX = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g;
 const OSC_STRIP_REGEX = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g;
 const DCS_SEQUENCE_REGEX = /\u001bP[\s\S]*?(?:\u0007|\u001b\\)/g;
@@ -25,6 +30,39 @@ const IGNORED_COMMANDS = [
 ];
 
 const PROMPT_PREFIX = "You are now operating as an AI terminal assistant. Your name is `Tabminal`. You will assist users in resolving terminal or coding issues and answering other inquiries. When troubleshooting terminal errors, you will be provided with the execution history to understand the context. However, please focus primarily on the most recent runtime errors and the user's latest questions. Keep your answers concise and accurate. Resolve the issue clearly and provide the reasoning while avoiding lengthy elaborations. Most user terminal variable keys are normal under typical circumstances and do not need to be treated as security risks.\n\n";
+
+async function loadHeadlessXtermPackages() {
+    const hadNavigator = Object.prototype.hasOwnProperty.call(
+        globalThis,
+        'navigator'
+    );
+    const navigatorDescriptor = hadNavigator
+        ? Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+        : null;
+
+    if (hadNavigator) {
+        delete globalThis.navigator;
+    }
+
+    try {
+        const headlessPackage = await import('xterm-headless');
+        const serializePackage = await import('xterm-addon-serialize');
+        const { Terminal } = headlessPackage.default ?? headlessPackage;
+        const { SerializeAddon } = serializePackage.default ?? serializePackage;
+        return {
+            HeadlessTerminal: Terminal,
+            SerializeAddon
+        };
+    } finally {
+        if (hadNavigator && navigatorDescriptor) {
+            Object.defineProperty(
+                globalThis,
+                'navigator',
+                navigatorDescriptor
+            );
+        }
+    }
+}
 
 function splitTrailingPartialSequence(chunk) {
     if (!chunk) {
@@ -43,6 +81,13 @@ function splitTrailingPartialSequence(chunk) {
     }
 
     return { complete: chunk, partial: '' };
+}
+
+function estimateSnapshotScrollback(cols, rows, historyLimit) {
+    const safeCols = Math.max(1, cols || 80);
+    const safeRows = Math.max(24, rows || 24);
+    const estimatedRows = Math.ceil(historyLimit / safeCols);
+    return Math.max(safeRows, Math.min(50000, estimatedRows));
 }
 
 export class TerminalSession {
@@ -69,6 +114,7 @@ export class TerminalSession {
         this.historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
         this.history = '';
         this.clients = new Set();
+        this.pendingClients = new Map();
         this.closed = false;
         this.pollingInterval = null;
         this.captureBuffer = '';
@@ -76,6 +122,27 @@ export class TerminalSession {
         this.lastExecution = null;
         this.skipNextShellLog = false;
         this.partialSequenceBuffer = '';
+        this.snapshotScrollback = estimateSnapshotScrollback(
+            this.pty.cols,
+            this.pty.rows,
+            this.historyLimit
+        );
+        this.snapshotTerminal = new HeadlessTerminal({
+            cols: this.pty.cols,
+            rows: this.pty.rows,
+            scrollback: this.snapshotScrollback,
+            allowProposedApi: true,
+            convertEol: true,
+            logLevel: 'off'
+        });
+        this.snapshotSerializeAddon = new SerializeAddon();
+        this.snapshotTerminal.loadAddon(this.snapshotSerializeAddon);
+        this.snapshotWritePromise = Promise.resolve();
+        this.extraPrivateModes = {
+            1005: false,
+            1006: false,
+            1015: false
+        };
 
         this.ansiParser = new AnsiParser({
             inst_o: (s) => {
@@ -112,10 +179,6 @@ export class TerminalSession {
             chunk = split.complete;
             this.partialSequenceBuffer = split.partial;
 
-            if (this.manager) {
-                this.manager.appendLog(this.id, chunk);
-            }
-
             let cleaned = '';
             let lastIndex = 0;
             OSC_SEQUENCE_REGEX.lastIndex = 0;
@@ -148,8 +211,12 @@ export class TerminalSession {
 
             if (!cleaned) return;
 
+            this._appendSnapshotData(cleaned);
             this._appendHistory(cleaned);
             this.ansiParser.parse(cleaned);
+            if (this.manager?.scheduleSnapshotPersist) {
+                this.manager.scheduleSnapshotPersist(this.id);
+            }
             this._broadcast({ type: 'output', data: cleaned });
         };
 
@@ -272,34 +339,55 @@ export class TerminalSession {
 
     attach(ws) {
         if (!ws) throw new Error('WebSocket instance required');
-        this.clients.add(ws);
-        ws.once('close', () => this.clients.delete(ws));
+        this.pendingClients.set(ws, []);
+        ws.once('close', () => {
+            this.clients.delete(ws);
+            this.pendingClients.delete(ws);
+        });
         ws.on('message', (raw) => this._routeIncoming(raw, ws));
         ws.on('error', () => ws.close());
 
-        this._send(ws, { type: 'snapshot', data: this.history });
-        this._send(ws, { type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
-        if (this.closed) {
-            this._send(ws, { type: 'status', status: 'terminated' });
-        } else {
-            this._send(ws, { type: 'status', status: 'ready' });
-        }
+        void this._sendInitialState(ws);
     }
 
     dispose() {
         this.stopTitlePolling();
         this.clients.clear();
+        this.pendingClients.clear();
         this.dataSubscription?.dispose?.();
         this.exitSubscription?.dispose?.();
+        this.snapshotTerminal?.dispose?.();
     }
 
     resize(cols, rows) {
         if (this.closed) return;
         this.pty.resize(cols, rows);
+        this._queueSnapshotMutation(() => {
+            this.snapshotTerminal.resize(cols, rows);
+        });
+        if (this.manager?.scheduleSnapshotPersist) {
+            this.manager.scheduleSnapshotPersist(this.id);
+        }
         this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols, rows });
         if (this.manager && this.manager.saveSessionState) {
             this.manager.saveSessionState(this);
         }
+    }
+
+    async restoreSnapshot(snapshot) {
+        if (typeof snapshot !== 'string' || !snapshot) return;
+        this.history = snapshot;
+        this._appendSnapshotData(snapshot);
+        await this.snapshotWritePromise;
+    }
+
+    async serializeSnapshot() {
+        await this.snapshotWritePromise;
+        let snapshot = this.snapshotSerializeAddon.serialize({
+            scrollback: this.snapshotScrollback
+        });
+        snapshot += this._serializeExtraPrivateModes();
+        return snapshot;
     }
 
     _routeIncoming(raw, ws) {
@@ -920,6 +1008,9 @@ export class TerminalSession {
         for (const client of this.clients) {
             this._send(client, message, data);
         }
+        for (const pending of this.pendingClients.values()) {
+            pending.push(data);
+        }
     }
 
     _send(ws, message, preEncoded) {
@@ -929,11 +1020,81 @@ export class TerminalSession {
 
     _writeToLogAndBroadcast(text) {
         if (!text) return;
-        if (this.manager) {
-            this.manager.appendLog(this.id, text);
-        }
+        this._appendSnapshotData(text);
         this._appendHistory(text);
+        if (this.manager?.scheduleSnapshotPersist) {
+            this.manager.scheduleSnapshotPersist(this.id);
+        }
         this._broadcast({ type: 'output', data: text });
+    }
+
+    _queueSnapshotMutation(mutate) {
+        const next = this.snapshotWritePromise.then(() => mutate());
+        this.snapshotWritePromise = next.catch(() => {});
+        return next;
+    }
+
+    _appendSnapshotData(text) {
+        if (!text) return;
+        this._trackExtraPrivateModes(text);
+        this._queueSnapshotMutation(() => new Promise((resolve) => {
+            this.snapshotTerminal.write(text, resolve);
+        }));
+    }
+
+    _trackExtraPrivateModes(text) {
+        EXTRA_PRIVATE_MODE_REGEX.lastIndex = 0;
+        let match;
+        while ((match = EXTRA_PRIVATE_MODE_REGEX.exec(text)) !== null) {
+            this.extraPrivateModes[match[1]] = match[2] === 'h';
+        }
+    }
+
+    _serializeExtraPrivateModes() {
+        let output = '';
+        for (const mode of ['1005', '1006', '1015']) {
+            if (this.extraPrivateModes[mode]) {
+                output += `\u001b[?${mode}h`;
+            }
+        }
+        return output;
+    }
+
+    async _sendInitialState(ws) {
+        const pending = this.pendingClients.get(ws);
+        if (!pending) return;
+
+        await this._queueSnapshotMutation(() => undefined);
+        if (ws.readyState !== WS_STATE_OPEN) {
+            this.pendingClients.delete(ws);
+            return;
+        }
+
+        const snapshot = await this.serializeSnapshot();
+        this._send(ws, { type: 'snapshot', data: snapshot });
+        this._send(ws, {
+            type: 'meta',
+            title: this.title,
+            cwd: this.cwd,
+            env: this.env,
+            cols: this.pty.cols,
+            rows: this.pty.rows
+        });
+        if (this.closed) {
+            this._send(ws, { type: 'status', status: 'terminated' });
+        } else {
+            this._send(ws, { type: 'status', status: 'ready' });
+        }
+
+        for (const payload of pending) {
+            if (ws.readyState !== WS_STATE_OPEN) break;
+            ws.send(payload);
+        }
+
+        this.pendingClients.delete(ws);
+        if (ws.readyState === WS_STATE_OPEN) {
+            this.clients.add(ws);
+        }
     }
 }
 

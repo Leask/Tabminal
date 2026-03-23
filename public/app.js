@@ -977,8 +977,13 @@ class Session {
         this.layoutState = {
             editorFlex: '2 1 0%'
         };
+        this.wrapperElement = null;
+        this._createTerminals();
 
-        // Preview Terminal (Always create instance to maintain logic consistency)
+        this.connect();
+    }
+
+    _createTerminals() {
         this.previewTerm = new Terminal({
             disableStdin: true,
             cursorBlink: false,
@@ -986,17 +991,18 @@ class Session {
             fontSize: 10,
             rows: this.rows,
             cols: this.cols,
-            theme: { background: '#002b36', foreground: '#839496', cursor: 'transparent', selectionBackground: 'transparent' }
+            theme: {
+                background: '#002b36',
+                foreground: '#839496',
+                cursor: 'transparent',
+                selectionBackground: 'transparent'
+            }
         });
-        
-        // Only load CanvasAddon on Desktop to save GPU memory
+
         if (window.innerWidth >= 768) {
             this.previewTerm.loadAddon(new CanvasAddon());
         }
-        
-        this.wrapperElement = null;
 
-        // Main Terminal
         this.mainTerm = new Terminal({
             allowTransparency: true,
             convertEol: true,
@@ -1005,7 +1011,13 @@ class Session {
             fontSize: IS_MOBILE ? 14 : 12,
             rows: this.rows,
             cols: this.cols,
-            theme: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', cursorAccent: '#002b36', selectionBackground: '#073642' }
+            theme: {
+                background: '#002b36',
+                foreground: '#839496',
+                cursor: '#93a1a1',
+                cursorAccent: '#002b36',
+                selectionBackground: '#073642'
+            }
         });
         this.mainFitAddon = new FitAddon();
         this.mainLinksAddon = new WebLinksAddon();
@@ -1015,21 +1027,54 @@ class Session {
         this.mainTerm.loadAddon(this.searchAddon);
         this.mainTerm.loadAddon(new CanvasAddon());
 
-        // Event Listeners
-        this.mainTerm.onData(data => {
+        this.mainTerm.onData((data) => {
             if (this.isRestoring) return;
             this.send({ type: 'input', data });
         });
 
-        this.mainTerm.onResize(size => {
+        this.mainTerm.onResize((size) => {
             this.previewTerm.resize(size.cols, size.rows);
             this.updatePreviewScale();
-            
+
             const pending = getPendingSession(this.key);
             pending.resize = { cols: size.cols, rows: size.rows };
         });
+    }
 
-        this.connect();
+    recreateTerminals() {
+        const wasActive = state.activeSessionKey === this.key;
+        const previewWrapper = this.wrapperElement;
+
+        try {
+            this.previewTerm?.dispose();
+        } catch (e) {
+            if (!e.message?.includes('onRequestRedraw')) {
+                console.warn('Error disposing preview terminal:', e);
+            }
+        }
+
+        try {
+            this.mainTerm?.dispose();
+        } catch (e) {
+            if (!e.message?.includes('onRequestRedraw')) {
+                console.warn('Error disposing main terminal:', e);
+            }
+        }
+
+        this._createTerminals();
+
+        if (previewWrapper && window.innerWidth >= 768) {
+            previewWrapper.innerHTML = '';
+            this.previewTerm.open(previewWrapper);
+            this.updatePreviewScale();
+        }
+
+        if (wasActive && terminalEl) {
+            terminalEl.innerHTML = '';
+            this.mainTerm.open(terminalEl);
+            this.mainFitAddon.fit();
+            this.mainTerm.focus();
+        }
     }
 
     update(data) {
@@ -1187,15 +1232,19 @@ class Session {
     handleMessage(message) {
         switch (message.type) {
             case 'snapshot':
-                if (this.previewTerm) this.previewTerm.reset();
-                this.mainTerm.reset();
-                this.history = message.data || '';
                 this.isRestoring = true;
-                if (this.previewTerm) this.previewTerm.write(this.history);
-                this.mainTerm.write(this.history, () => { this.isRestoring = false; });
+                this.recreateTerminals();
+                if (this.previewTerm) this.previewTerm.write(message.data || '');
+                this.mainTerm.write(message.data || '', () => {
+                    this.isRestoring = false;
+                    if (state.activeSessionKey === this.key) {
+                        this.mainFitAddon.fit();
+                        this.mainTerm.focus();
+                        this.reportResize();
+                    }
+                });
                 break;
             case 'output':
-                this.history += message.data;
                 this.writeToTerminals(message.data);
                 break;
             case 'meta':

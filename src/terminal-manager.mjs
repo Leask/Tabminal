@@ -59,6 +59,7 @@ function buildBashBootstrap({
 export class TerminalManager {
     constructor() {
         this.sessions = new Map();
+        this.snapshotPersistTimers = new Map();
         this.lastCols = initialCols;
         this.lastRows = initialRows;
         this.disposing = false;
@@ -192,8 +193,10 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         });
 
         if (restoredData) {
-            persistence.loadSessionLog(id).then(log => {
-                if (log) session.history = log;
+            persistence.loadSessionSnapshot(id).then(async (snapshot) => {
+                if (!snapshot) return;
+                await session.restoreSnapshot(snapshot);
+                this.scheduleSnapshotPersist(id);
             });
         }
 
@@ -238,8 +241,25 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         }
     }
 
-    appendLog(id, chunk) {
-        persistence.appendSessionLog(id, chunk);
+    scheduleSnapshotPersist(id) {
+        const session = this.sessions.get(id);
+        if (!session) return;
+
+        const existing = this.snapshotPersistTimers.get(id);
+        if (existing) {
+            clearTimeout(existing);
+        }
+
+        const timer = setTimeout(async () => {
+            this.snapshotPersistTimers.delete(id);
+            const currentSession = this.sessions.get(id);
+            if (!currentSession) return;
+
+            const snapshot = await currentSession.serializeSnapshot();
+            await persistence.saveSessionSnapshot(id, snapshot);
+        }, 250);
+
+        this.snapshotPersistTimers.set(id, timer);
     }
 
     getSession(id) {
@@ -263,6 +283,11 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     removeSession(id) {
         const session = this.sessions.get(id);
         if (session) {
+            const timer = this.snapshotPersistTimers.get(id);
+            if (timer) {
+                clearTimeout(timer);
+                this.snapshotPersistTimers.delete(id);
+            }
             session.dispose();
             this.sessions.delete(id);
             persistence.deleteSession(id);
@@ -289,6 +314,10 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     dispose() {
         debugLog('[Manager] Disposing all sessions.');
         this.disposing = true;
+        for (const timer of this.snapshotPersistTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.snapshotPersistTimers.clear();
         for (const session of this.sessions.values()) {
             try {
                 if (process.platform === 'win32') {
