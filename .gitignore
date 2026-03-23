@@ -126,3 +126,15 @@ dist
 
 # local helper scripts
 reploy.sh
+
+# native apps
+apps/Apple/.build/
+apps/Apple/.swiftpm/
+apps/Apple/DerivedData/
+apps/Apple/build/
+apps/Apple/build-macos/
+apps/Apple/build-visionos/
+apps/Apple/build-visionos-sdk/
+apps/Apple/TabminalMobileApp.xcodeproj/
+*.xcuserstate
+apps/Apple/.DS_Store

@@ -52,6 +52,11 @@ Built from the ground up for **iPadOS**, **iOS** and **Android**.
 *   **Responsive Layout**: Auto-adapts to landscape/portrait modes, respecting Safe Areas and Notches.
 *   **PWA Ready**: Install to Home Screen for a full-screen, native app feel.
 
+Native app work now lives under:
+
+- `apps/Apple`: Apple-platform native client
+- `apps/ghostty-vendor`: Ghostty xcframework vendor/build tooling
+
 ### 💻 Powerful Desktop Features
 *   **Persistent Sessions**: Your terminal state lives on the server. Refresh or switch devices without losing your work.
 *   **Built-in Editor**: Integrated **Monaco Editor** (VS Code core) allows you to edit files directly on the server.

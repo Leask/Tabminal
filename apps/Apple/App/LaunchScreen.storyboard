@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document
+    type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB"
+    version="3.0"
+    toolsVersion="23504"
+    targetRuntime="iOS.CocoaTouch"
+    propertyAccessControl="none"
+    useAutolayout="YES"
+    launchScreen="YES"
+    useTraitCollections="YES"
+    useSafeAreas="YES"
+    colorMatched="YES"
+    initialViewController="LaunchScreenViewController">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23506"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        <capability name="System colors in document resources" minToolsVersion="11.0"/>
+    </dependencies>
+    <scenes>
+        <scene sceneID="LaunchScreenScene">
+            <objects>
+                <viewController
+                    id="LaunchScreenViewController"
+                    sceneMemberID="viewController">
+                    <view
+                        key="view"
+                        contentMode="scaleToFill"
+                        id="LaunchScreenView">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask
+                            key="autoresizingMask"
+                            widthSizable="YES"
+                            heightSizable="YES"/>
+                        <subviews>
+                            <label
+                                opaque="NO"
+                                userInteractionEnabled="NO"
+                                contentMode="left"
+                                horizontalHuggingPriority="251"
+                                verticalHuggingPriority="251"
+                                text="Tabminal"
+                                textAlignment="center"
+                                lineBreakMode="tailTruncation"
+                                adjustsFontSizeToFit="NO"
+                                translatesAutoresizingMaskIntoConstraints="NO"
+                                id="LaunchTitleLabel">
+                                <fontDescription
+                                    key="fontDescription"
+                                    type="system"
+                                    weight="semibold"
+                                    pointSize="28"/>
+                                <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                        </subviews>
+                        <viewLayoutGuide key="safeArea" id="LaunchSafeArea"/>
+                        <color
+                            key="backgroundColor"
+                            red="0.05098039216"
+                            green="0.05882352941"
+                            blue="0.08235294118"
+                            alpha="1"
+                            colorSpace="custom"
+                            customColorSpace="sRGB"/>
+                        <constraints>
+                            <constraint
+                                firstItem="LaunchTitleLabel"
+                                firstAttribute="centerX"
+                                secondItem="LaunchSafeArea"
+                                secondAttribute="centerX"
+                                id="centerX"/>
+                            <constraint
+                                firstItem="LaunchTitleLabel"
+                                firstAttribute="centerY"
+                                secondItem="LaunchSafeArea"
+                                secondAttribute="centerY"
+                                id="centerY"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder
+                    placeholderIdentifier="IBFirstResponder"
+                    id="LaunchFirstResponder"
+                    userLabel="First Responder"
+                    sceneMemberID="firstResponder"/>
+            </objects>
+        </scene>
+    </scenes>
+</document>

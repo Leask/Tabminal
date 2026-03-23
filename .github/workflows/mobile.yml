@@ -1,0 +1,75 @@
+name: Mobile Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  XCODEGEN_VERSION: '2.45.3'
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Node test suite
+        run: npm test
+
+  apple:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Install xcodegen
+        run: |
+          curl -L \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            -o /tmp/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          mkdir -p "$HOME/.local"
+          /tmp/xcodegen/xcodegen/install.sh "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          xcodegen --version
+
+      - name: Validate mobile shell scripts
+        run: bash -n apps/Apple/*.sh apps/ghostty-vendor/scripts/*.sh
+
+      - name: Run Swift package tests
+        run: |
+          cd apps/Apple
+          swift test
+
+      - name: Generate Apple app project
+        run: |
+          cd apps/Apple
+          xcodegen generate
+
+      - name: Build macOS app shell
+        run: |
+          cd apps/Apple
+          xcodebuild \
+            -project TabminalMobileApp.xcodeproj \
+            -scheme TabminalMobileApp \
+            -destination 'platform=macOS' \
+            build

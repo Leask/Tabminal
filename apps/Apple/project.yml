@@ -1,0 +1,72 @@
+name: TabminalMobileApp
+options:
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: 2.45.0
+configs:
+  Debug: debug
+  Release: release
+packages:
+  TabminalMobile:
+    path: .
+targets:
+  TabminalMobileApp:
+    type: application
+    supportedDestinations:
+      - iOS
+      - macOS
+      - visionOS
+    deploymentTarget:
+      iOS: "18.0"
+      macOS: "15.0"
+      visionOS: "2.0"
+    sources:
+      - path: App
+        excludes:
+          - LaunchScreen.storyboard
+      - path: App/LaunchScreen.storyboard
+        buildPhase: resources
+    dependencies:
+      - package: TabminalMobile
+        product: TabminalMobileCore
+      - package: TabminalMobile
+        product: TabminalIOSKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.leask.tabminal.mobile
+        PRODUCT_NAME: Tabminal Mobile
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleDarkContent
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=iphoneos*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=iphonesimulator*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=xros*]": LaunchScreen
+        "INFOPLIST_KEY_UILaunchStoryboardName[sdk=xrsimulator*]": LaunchScreen
+        "EXCLUDED_SOURCE_FILE_NAMES[sdk=macosx*]": LaunchScreen.storyboard
+        SWIFT_VERSION: "6.0"
+        SUPPORTS_MACCATALYST: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        DEVELOPMENT_ASSET_PATHS: "\"\""
+        TARGETED_DEVICE_FAMILY: "1,2,7"
+    scheme:
+      testTargets:
+        - TabminalMobileAppUITests
+  TabminalMobileAppUITests:
+    type: bundle.ui-testing
+    supportedDestinations:
+      - iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TabminalMobileApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.leask.tabminal.mobile.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TEST_TARGET_NAME: TabminalMobileApp
