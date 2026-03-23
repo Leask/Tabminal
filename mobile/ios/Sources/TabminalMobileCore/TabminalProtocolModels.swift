@@ -1,6 +1,54 @@
 import CryptoKit
 import Foundation
 
+public enum TabminalJSONCoding {
+    private static func makeISO8601FractionalFormatter() -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        return formatter
+    }
+
+    private static func makeISO8601Formatter() -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }
+
+    public static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            let fractionalFormatter = makeISO8601FractionalFormatter()
+            let fallbackFormatter = makeISO8601Formatter()
+
+            if let date = fractionalFormatter.date(from: value) ??
+                fallbackFormatter.date(from: value) {
+                return date
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Expected date string to be ISO8601-formatted."
+            )
+        }
+        return decoder
+    }
+
+    public static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            let formatter = makeISO8601FractionalFormatter()
+            try container.encode(formatter.string(from: date))
+        }
+        return encoder
+    }
+}
+
 public struct TabminalServerEndpoint: Hashable, Codable, Sendable {
     public let id: String
     public let baseURL: URL

@@ -14,14 +14,8 @@ public actor TabminalAPIClient {
 
     public init(session: URLSession = .shared) {
         self.session = session
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        self.decoder = decoder
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        self.encoder = encoder
+        self.decoder = TabminalJSONCoding.makeDecoder()
+        self.encoder = TabminalJSONCoding.makeEncoder()
     }
 
     public func heartbeat(

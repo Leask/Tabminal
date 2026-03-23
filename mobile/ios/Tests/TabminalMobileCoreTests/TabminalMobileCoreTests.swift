@@ -104,8 +104,7 @@ func heartbeatDecodesEmptyEditorStateFromBackend() throws {
     }
     """
 
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
+    let decoder = TabminalJSONCoding.makeDecoder()
     let response = try decoder.decode(
         TabminalHeartbeatResponse.self,
         from: Data(json.utf8)
@@ -115,6 +114,31 @@ func heartbeatDecodesEmptyEditorStateFromBackend() throws {
     #expect(response.sessions[0].editorState?.isVisible == false)
     #expect(response.sessions[0].editorState?.root == "")
     #expect(response.sessions[0].editorState?.openFiles == [])
+}
+
+@Test
+func heartbeatDecodesNonFractionalISO8601DatesFromBackend() throws {
+    let json = """
+    {
+        "sessions": [
+            {
+                "id": "session-1",
+                "createdAt": "1970-01-01T00:00:00Z",
+                "shell": "/bin/bash",
+                "editorState": {}
+            }
+        ]
+    }
+    """
+
+    let decoder = TabminalJSONCoding.makeDecoder()
+    let response = try decoder.decode(
+        TabminalHeartbeatResponse.self,
+        from: Data(json.utf8)
+    )
+
+    #expect(response.sessions.count == 1)
+    #expect(response.sessions[0].createdAt != nil)
 }
 
 @Test
