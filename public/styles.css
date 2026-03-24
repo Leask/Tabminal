@@ -1659,6 +1659,45 @@ kbd {
     gap: 8px;
 }
 
+.agent-empty-state {
+    border: 1px dashed rgba(131, 148, 150, 0.22);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background-color: rgba(7, 54, 66, 0.24);
+    color: var(--text-base);
+}
+
+.agent-empty-state-title {
+    color: var(--text-highlight);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.agent-empty-state-body {
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.agent-empty-state-actions {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.agent-empty-state-action {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: rgba(38, 139, 210, 0.1);
+    color: var(--text-highlight);
+    padding: 8px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+}
+
 .agent-message {
     border: 1px solid var(--border-color);
     border-radius: 10px;

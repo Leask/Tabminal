@@ -1369,17 +1369,27 @@ class EditorManager {
         }
 
         this.agentTranscript.innerHTML = '';
-        for (const entry of getAgentTimelineItems(agentTab)) {
-            let node = null;
-            if (entry.type === 'message') {
-                node = this.buildAgentMessageNode(agentTab, entry.value);
-            } else if (entry.type === 'tool') {
-                node = this.buildAgentToolNode(agentTab, entry.value);
-            } else if (entry.type === 'permission') {
-                node = this.buildAgentPermissionNode(agentTab, entry.value);
-            }
-            if (node) {
-                this.agentTranscript.appendChild(node);
+        const timeline = getAgentTimelineItems(agentTab);
+        if (timeline.length === 0) {
+            this.agentTranscript.appendChild(
+                this.buildAgentEmptyState(agentTab)
+            );
+        } else {
+            for (const entry of timeline) {
+                let node = null;
+                if (entry.type === 'message') {
+                    node = this.buildAgentMessageNode(agentTab, entry.value);
+                } else if (entry.type === 'tool') {
+                    node = this.buildAgentToolNode(agentTab, entry.value);
+                } else if (entry.type === 'permission') {
+                    node = this.buildAgentPermissionNode(
+                        agentTab,
+                        entry.value
+                    );
+                }
+                if (node) {
+                    this.agentTranscript.appendChild(node);
+                }
             }
         }
         this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
@@ -1391,6 +1401,49 @@ class EditorManager {
         this.agentPrompt.disabled = false;
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
         this.updateAgentComposerActions(agentTab);
+    }
+
+    buildAgentEmptyState(agentTab) {
+        const card = document.createElement('div');
+        card.className = 'agent-empty-state';
+
+        const title = document.createElement('div');
+        title.className = 'agent-empty-state-title';
+        title.textContent = agentTab.busy
+            ? `${getAgentBaseName(agentTab)} is thinking`
+            : `${getAgentBaseName(agentTab)} is ready`;
+        card.appendChild(title);
+
+        const body = document.createElement('div');
+        body.className = 'agent-empty-state-body';
+        body.textContent = agentTab.busy
+            ? 'Waiting for the current run to produce output.'
+            : 'Ask for code review, implementation, debugging, or '
+                + 'explanations in this workspace.';
+        card.appendChild(body);
+
+        if (!agentTab.busy) {
+            const prompts = getAgentStarterPrompts(agentTab);
+            if (prompts.length > 0) {
+                const actions = document.createElement('div');
+                actions.className = 'agent-empty-state-actions';
+                for (const prompt of prompts) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'agent-empty-state-action';
+                    button.textContent = prompt;
+                    button.onclick = () => {
+                        this.agentPrompt.focus();
+                        this.agentPrompt.value = prompt;
+                        this.updateAgentComposerActions(agentTab);
+                    };
+                    actions.appendChild(button);
+                }
+                card.appendChild(actions);
+            }
+        }
+
+        return card;
     }
 
     buildAgentMessageNode(agentTab, message) {
@@ -2689,6 +2742,35 @@ function getAgentBaseName(agentTab) {
         ''
     ).trim();
     return cleaned || rawLabel || 'Agent';
+}
+
+function getAgentStarterPrompts(agentTab) {
+    switch (String(agentTab?.agentId || '')) {
+        case 'codex':
+            return [
+                'Review this workspace for issues.',
+                'Explain how auth works here.',
+                'Fix the ACP smoke flow.'
+            ];
+        case 'claude':
+            return [
+                'Summarize this codebase.',
+                'Find the riskiest regression here.',
+                'Propose a small refactor.'
+            ];
+        case 'gemini':
+            return [
+                'Explain this repository structure.',
+                'Review this code for bugs.',
+                'Suggest a minimal implementation plan.'
+            ];
+        default:
+            return [
+                'Inspect this workspace.',
+                'Explain the current architecture.',
+                'Suggest the next implementation step.'
+            ];
+    }
 }
 
 function buildAgentPromptPlaceholder(agentTab) {
