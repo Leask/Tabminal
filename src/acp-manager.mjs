@@ -147,6 +147,27 @@ function truncateUtf8(text, byteLimit) {
     return '';
 }
 
+export function mergeAgentMessageText(previousText, chunkText) {
+    const previous = String(previousText || '');
+    const chunk = String(chunkText || '');
+    if (!previous) return chunk;
+    if (!chunk) return previous;
+    if (/\s$/.test(previous) || /^\s/.test(chunk)) {
+        return `${previous}${chunk}`;
+    }
+
+    const previousLast = previous.slice(-1);
+    const chunkFirst = chunk[0] || '';
+    if (
+        /[.!?`'")\]]/.test(previousLast)
+        && /[A-Z`"'[(]/.test(chunkFirst)
+    ) {
+        return `${previous}\n\n${chunk}`;
+    }
+
+    return `${previous}${chunk}`;
+}
+
 class LocalExecTerminal {
     constructor(request) {
         this.id = crypto.randomUUID();
@@ -800,13 +821,15 @@ class AcpRuntime extends EventEmitter {
             && last.role === role
             && last.kind === kind
         ) {
-            last.text += text;
+            const nextText = mergeAgentMessageText(last.text, text);
+            const appendedText = nextText.slice(last.text.length);
+            last.text = nextText;
             this.#broadcast(tab, {
                 type: 'message_chunk',
                 streamKey,
                 role,
                 kind,
-                text
+                text: appendedText
             });
             return;
         }

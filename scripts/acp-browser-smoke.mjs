@@ -8,6 +8,9 @@ const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
 const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
     || 'Inspect this project briefly and request permission to edit a sample file.';
+const finalMessageMode = process.env.TABMINAL_FINAL_MESSAGE_MODE || 'pattern';
+const finalMessagePattern = process.env.TABMINAL_FINAL_MESSAGE_PATTERN
+    || 'all set';
 const screenshotPath = process.env.TABMINAL_SMOKE_SCREENSHOT
     || '/tmp/tabminal-acp-ui-smoke.png';
 
@@ -123,6 +126,43 @@ async function main() {
             throw new Error(JSON.stringify(result.exceptionDetails));
         }
         return result.result.value;
+    }
+
+    async function hasFinalMessage() {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const bodies = Array.from(
+                        document.querySelectorAll('.agent-message-body')
+                    ).map((el) => el.textContent);
+                    const idle = !Array.from(
+                        document.querySelectorAll('.agent-panel-button')
+                    ).some((el) => /stop/i.test(el.textContent || ''));
+                    if (${
+                        JSON.stringify(finalMessageMode)
+                    } === 'idle') {
+                        return idle && bodies.some((text) =>
+                            (text || '').trim().length > 0
+                        );
+                    }
+                    const matcher = new RegExp(
+                        ${JSON.stringify(finalMessagePattern)},
+                        'i'
+                    );
+                    return bodies.some((text) => matcher.test(text));
+                }
+            `)
+        );
+    }
+
+    async function hasPermissionRequest() {
+        return await evaluate(
+            toExpression(`
+                () => document.querySelectorAll(
+                    '.agent-permission-card .agent-permission-option'
+                ).length > 0
+            `)
+        );
     }
 
     await evaluate(
@@ -285,6 +325,16 @@ async function main() {
     );
     log('agent-options', JSON.stringify(labels));
 
+    const existingAgentTabCount = await evaluate(
+        toExpression(`
+            () => Array.from(
+                document.querySelectorAll('.agent-editor-tab')
+            ).filter((tab) => (tab.textContent || '').includes(
+                ${JSON.stringify(targetAgentLabel)}
+            )).length
+        `)
+    );
+
     const picked = await evaluate(
         toExpression(`
             () => {
@@ -307,6 +357,36 @@ async function main() {
         throw new Error('No selectable ACP agent was found in the dropdown');
     }
     log('picked-agent', picked);
+
+    const expectedAgentLabel = `${targetAgentLabel} #${
+        existingAgentTabCount + 1
+    }`;
+    await waitFor('agent-tab-created', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const tabs = Array.from(
+                        document.querySelectorAll('.agent-editor-tab')
+                    );
+                    const active = tabs.find((tab) =>
+                        tab.classList.contains('active')
+                    );
+                    const count = tabs.filter((tab) =>
+                        (tab.textContent || '').includes(
+                            ${JSON.stringify(targetAgentLabel)}
+                        )
+                    ).length;
+                    return count >= ${
+                        existingAgentTabCount + 1
+                    } && Boolean(active) && (
+                        active.textContent || ''
+                    ).includes(${JSON.stringify(expectedAgentLabel)});
+                }
+            `),
+            15000,
+            250
+        );
+    });
 
     await waitFor('agent-panel', async () => {
         return await evaluate(
@@ -473,54 +553,40 @@ async function main() {
     );
     log('fetch-log-after-prompt', JSON.stringify(fetchLogAfterPrompt));
 
-    await waitFor('permission-request', async () => {
-        return await evaluate(
-            toExpression(`
-                () => document.querySelectorAll(
-                    '.agent-permission-card .agent-permission-option'
-                ).length > 0
-            `),
-            15000,
-            250
-        );
+    await waitFor('permission-or-final', async () => {
+        return await hasPermissionRequest() || await hasFinalMessage();
     });
 
-    const permissionOptions = await evaluate(
-        toExpression(`
-            () => Array.from(document.querySelectorAll(
-                '.agent-permission-card .agent-permission-option'
-            )).map((el) => el.textContent.trim())
-        `)
-    );
-    log('permission-options', JSON.stringify(permissionOptions));
-
-    await evaluate(
-        toExpression(`
-            () => {
-                const button = Array.from(document.querySelectorAll(
+    if (await hasPermissionRequest()) {
+        const permissionOptions = await evaluate(
+            toExpression(`
+                () => Array.from(document.querySelectorAll(
                     '.agent-permission-card .agent-permission-option'
-                )).find((el) => !/cancel/i.test(el.textContent));
-                if (!button) return false;
-                button.click();
-                return true;
-            }
-        `)
-    );
-    log('resolved-permission');
+                )).map((el) => el.textContent.trim())
+            `)
+        );
+        log('permission-options', JSON.stringify(permissionOptions));
 
-    await waitFor('final-message', async () => {
-        return await evaluate(
+        await evaluate(
             toExpression(`
                 () => {
-                    const bodies = Array.from(
-                        document.querySelectorAll('.agent-message-body')
-                    ).map((el) => el.textContent);
-                    return bodies.some((text) => /all set/i.test(text));
+                    const button = Array.from(document.querySelectorAll(
+                        '.agent-permission-card .agent-permission-option'
+                    )).find((el) => !/cancel/i.test(el.textContent));
+                    if (!button) return false;
+                    button.click();
+                    return true;
                 }
-            `),
-            15000,
-            250
+            `)
         );
+        log('resolved-permission');
+    } else {
+        log('permission-options', '[]');
+        log('resolved-permission', 'not-required');
+    }
+
+    await waitFor('final-message', async () => {
+        return await hasFinalMessage();
     });
 
     await evaluate(

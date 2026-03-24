@@ -1551,10 +1551,27 @@ kbd {
     color: var(--text-muted);
     font-size: 10px;
     user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .agent-tool-call-section > summary::-webkit-details-marker {
     display: none;
+}
+
+.agent-tool-call-summary-label {
+    color: var(--text-muted);
+    flex: 0 0 auto;
+}
+
+.agent-tool-call-summary-preview {
+    color: var(--text-base);
+    opacity: 0.75;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .agent-tool-call-section[open] > summary {

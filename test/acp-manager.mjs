@@ -3,7 +3,10 @@ import process from 'node:process';
 import { describe, it } from 'node:test';
 import { EventEmitter } from 'node:events';
 
-import { AcpManager } from '../src/acp-manager.mjs';
+import {
+    AcpManager,
+    mergeAgentMessageText
+} from '../src/acp-manager.mjs';
 
 class FakeRuntime extends EventEmitter {
     constructor(definition, options = {}) {
@@ -372,5 +375,26 @@ describe('AcpManager', () => {
         assert.ok(runtime);
         assert.equal(runtime.disposed, true);
         assert.equal(manager.runtimes.size, 0);
+    });
+
+    it('merges sentence chunks into separate paragraphs', () => {
+        assert.equal(
+            mergeAgentMessageText(
+                'Creating the file now.',
+                'Created `file.txt` with hello.'
+            ),
+            'Creating the file now.\n\nCreated `file.txt` with hello.'
+        );
+    });
+
+    it('does not inject spacing into normal token streams', () => {
+        assert.equal(
+            mergeAgentMessageText('hel', 'lo'),
+            'hello'
+        );
+        assert.equal(
+            mergeAgentMessageText('hello', ' world'),
+            'hello world'
+        );
     });
 });

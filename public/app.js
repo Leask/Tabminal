@@ -1458,7 +1458,15 @@ class EditorManager {
                 const details = document.createElement('details');
                 details.className = 'agent-tool-call-section';
                 const summary = document.createElement('summary');
-                summary.textContent = section.label;
+                summary.appendChild(
+                    buildAgentSectionSummaryLabel(section.label)
+                );
+                const preview = buildAgentSectionSummaryPreview(section.text);
+                if (preview) {
+                    summary.appendChild(
+                        buildAgentSectionSummaryPreviewNode(preview)
+                    );
+                }
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
                 body.textContent = section.text;
@@ -1526,7 +1534,15 @@ class EditorManager {
                 const details = document.createElement('details');
                 details.className = 'agent-tool-call-section';
                 const summary = document.createElement('summary');
-                summary.textContent = section.label;
+                summary.appendChild(
+                    buildAgentSectionSummaryLabel(section.label)
+                );
+                const preview = buildAgentSectionSummaryPreview(section.text);
+                if (preview) {
+                    summary.appendChild(
+                        buildAgentSectionSummaryPreviewNode(preview)
+                    );
+                }
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
                 body.textContent = section.text;
@@ -2878,8 +2894,14 @@ function renderAgentInlineMarkdown(text) {
     return result;
 }
 
+function normalizeAgentMessageText(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/([.!?`'")])([A-Z[`"])/g, '$1\n\n$2');
+}
+
 function renderAgentMessageMarkdown(text) {
-    const source = String(text || '').replace(/\r\n/g, '\n');
+    const source = normalizeAgentMessageText(text);
     if (!source) return '';
 
     const lines = source.split('\n');
@@ -2970,6 +2992,30 @@ function truncateAgentDetail(text, limit = AGENT_MESSAGE_MAX_RENDER_BYTES) {
     return `${value.slice(0, limit)}\n\n…truncated…`;
 }
 
+function buildAgentSectionSummaryLabel(label) {
+    const node = document.createElement('span');
+    node.className = 'agent-tool-call-summary-label';
+    node.textContent = label;
+    return node;
+}
+
+function buildAgentSectionSummaryPreview(text) {
+    const value = String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!value) return '';
+    return value.length > 96
+        ? `${value.slice(0, 93)}…`
+        : value;
+}
+
+function buildAgentSectionSummaryPreviewNode(text) {
+    const node = document.createElement('span');
+    node.className = 'agent-tool-call-summary-preview';
+    node.textContent = text;
+    return node;
+}
+
 function extractToolPaths(toolLike) {
     if (!Array.isArray(toolLike?.locations)) return [];
     return toolLike.locations
@@ -2977,10 +3023,50 @@ function extractToolPaths(toolLike) {
         .filter(Boolean);
 }
 
+function normalizeToolPathLabel(path) {
+    if (!path) return '';
+    const value = String(path);
+    const basename = value.split('/').filter(Boolean).pop();
+    return basename ? `${basename} · ${value}` : value;
+}
+
+function toolTitleIncludesPath(title, path) {
+    const titleValue = String(title || '').toLowerCase();
+    const pathValue = String(path || '').toLowerCase();
+    if (!titleValue || !pathValue) return false;
+    if (titleValue.includes(pathValue)) return true;
+    const basename = pathValue.split('/').filter(Boolean).pop() || '';
+    return basename ? titleValue.includes(basename) : false;
+}
+
+function summarizeToolChanges(rawInput) {
+    if (!rawInput || typeof rawInput !== 'object') return '';
+    if (!rawInput.changes || typeof rawInput.changes !== 'object') return '';
+    const lines = Object.entries(rawInput.changes)
+        .slice(0, 5)
+        .map(([path, change]) => {
+            const kind = change?.type || 'change';
+            return `${kind}: ${path}`;
+        });
+    if (lines.length === 0) return '';
+    const extra = Object.keys(rawInput.changes).length - lines.length;
+    if (extra > 0) {
+        lines.push(`…and ${extra} more change${extra === 1 ? '' : 's'}`);
+    }
+    return lines.join('\n');
+}
+
 function summarizeAgentRawInput(rawInput) {
     if (!rawInput || typeof rawInput !== 'object') return '';
+    const changeSummary = summarizeToolChanges(rawInput);
+    if (changeSummary) {
+        return changeSummary;
+    }
     if (typeof rawInput.command === 'string' && rawInput.command) {
         return rawInput.command;
+    }
+    if (Array.isArray(rawInput.command) && rawInput.command.length > 0) {
+        return rawInput.command.join(' ');
     }
     if (typeof rawInput.path === 'string' && rawInput.path) {
         return rawInput.path;
@@ -3028,7 +3114,7 @@ function summarizeToolCallContent(toolCall) {
             continue;
         }
         if (item?.type === 'diff' && item.path) {
-            lines.push(`Diff: ${item.path}`);
+            lines.push(`Diff: ${normalizeToolPathLabel(item.path)}`);
         }
     }
     return truncateAgentDetail(lines.join('\n\n'));
@@ -3058,7 +3144,12 @@ function buildAgentToolMeta(toolCall) {
     if (toolCall?.rawInput?.cwd) parts.push(toolCall.rawInput.cwd);
     const paths = extractToolPaths(toolCall);
     if (paths.length > 0) {
-        parts.push(paths.length === 1 ? paths[0] : `${paths.length} paths`);
+        const title = getAgentToolTitle(toolCall);
+        if (paths.length > 1) {
+            parts.push(`${paths.length} paths`);
+        } else if (!toolTitleIncludesPath(title, paths[0])) {
+            parts.push(normalizeToolPathLabel(paths[0]));
+        }
     }
     return parts.join(' · ');
 }
@@ -3066,10 +3157,15 @@ function buildAgentToolMeta(toolCall) {
 function buildAgentToolSections(toolCall) {
     const sections = [];
     const paths = extractToolPaths(toolCall);
-    if (paths.length > 0) {
+    const title = getAgentToolTitle(toolCall);
+    if (paths.length > 0 && !(
+        paths.length === 1 && toolTitleIncludesPath(title, paths[0])
+    )) {
         sections.push({
             label: paths.length === 1 ? 'Path' : 'Paths',
-            text: truncateAgentDetail(paths.join('\n'))
+            text: truncateAgentDetail(
+                paths.map((path) => normalizeToolPathLabel(path)).join('\n')
+            )
         });
     }
     const rawInput = summarizeAgentRawInput(toolCall?.rawInput);
@@ -3102,6 +3198,18 @@ function buildAgentPermissionMeta(permission) {
 
 function buildAgentPermissionSummary(permission) {
     const content = summarizeToolCallContent(permission?.toolCall || {});
+    const paths = extractToolPaths(permission?.toolCall || {});
+    const lines = String(content || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const expectedDiffLines = paths.map((path) =>
+        `Diff: ${normalizeToolPathLabel(path)}`
+    );
+    const hasOnlyPathDiffs = lines.length > 0
+        && lines.length === expectedDiffLines.length
+        && lines.every((line) => expectedDiffLines.includes(line));
+    if (hasOnlyPathDiffs) return '';
     if (content) return content;
     return '';
 }
