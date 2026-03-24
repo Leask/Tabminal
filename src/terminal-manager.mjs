@@ -56,6 +56,18 @@ function buildBashBootstrap({
     };
 }
 
+function clearBashPromptEnv(env) {
+    for (const key of [
+        'PROMPT_COMMAND',
+        'PS0',
+        'PS1',
+        'PS2',
+        'PS4'
+    ]) {
+        delete env[key];
+    }
+}
+
 export class TerminalManager {
     constructor() {
         this.sessions = new Map();
@@ -111,6 +123,7 @@ export class TerminalManager {
         try {
             const shellName = path.basename(shell);
             if (shellName === 'bash') {
+                clearBashPromptEnv(env);
                 const bootstrap = buildBashBootstrap({
                     env,
                     shell,
