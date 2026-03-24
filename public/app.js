@@ -1864,7 +1864,10 @@ function openAgentDropdown(session, anchor) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'agent-dropdown-item';
-        button.disabled = definition.available === false;
+        if (definition.available === false) {
+            button.classList.add('unavailable');
+            button.setAttribute('aria-disabled', 'true');
+        }
         const label = document.createElement('span');
         label.className = 'agent-dropdown-label';
         label.textContent = definition.label;
@@ -1877,6 +1880,13 @@ function openAgentDropdown(session, anchor) {
         button.appendChild(meta);
         button.onclick = async (event) => {
             event.stopPropagation();
+            if (definition.available === false) {
+                alert(buildAgentSetupMessage(definition), {
+                    type: 'warning',
+                    title: 'Agent setup'
+                });
+                return;
+            }
             button.disabled = true;
             try {
                 await createAgentTab(session, definition.id);
@@ -3368,6 +3378,26 @@ function buildAgentDefinitionMeta(definition) {
         return 'Claude Code ACP adapter · requires Claude auth on this host';
     }
     return definition.description || definition.commandLabel || '';
+}
+
+function buildAgentSetupMessage(definition) {
+    if (!definition) {
+        return 'This agent is not ready on the current host.';
+    }
+    if (
+        definition.id === 'gemini'
+        && definition.reason === 'API key missing'
+    ) {
+        return 'Gemini CLI is installed on this host, but Tabminal was '
+            + 'started without GEMINI_API_KEY or GOOGLE_API_KEY. Export one '
+            + 'of those variables in the service environment, then restart '
+            + 'this host.';
+    }
+    if (definition.reason === 'not installed') {
+        return `Install or expose ${definition.commandLabel} on the current `
+            + 'host, then restart Tabminal.';
+    }
+    return definition.reason || 'This agent is not ready on the current host.';
 }
 
 async function throwResponseError(response, fallbackMessage) {

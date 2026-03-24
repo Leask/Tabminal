@@ -1883,9 +1883,10 @@ kbd {
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
-.agent-dropdown-item:disabled {
+.agent-dropdown-item:disabled,
+.agent-dropdown-item.unavailable {
     opacity: 0.55;
-    cursor: not-allowed;
+    cursor: help;
 }
 
 .agent-dropdown-item {
