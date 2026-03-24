@@ -3093,10 +3093,26 @@ function summarizeAgentRawOutput(rawOutput) {
     ) {
         parts.push(`OUTPUT\n${rawOutput.aggregated_output}`);
     }
+    if (
+        typeof rawOutput.formatted_output === 'string'
+        && rawOutput.formatted_output
+        && parts.length === 0
+    ) {
+        parts.push(`OUTPUT\n${rawOutput.formatted_output}`);
+    }
     if (parts.length > 0) {
         return truncateAgentDetail(parts.join('\n\n'));
     }
-    return truncateAgentDetail(JSON.stringify(rawOutput, null, 2));
+    if (rawOutput.success === false) {
+        return 'Tool call failed.';
+    }
+    if (
+        typeof rawOutput.exit_code === 'number'
+        && rawOutput.exit_code !== 0
+    ) {
+        return `Exit code ${rawOutput.exit_code}`;
+    }
+    return '';
 }
 
 function summarizeToolCallContent(toolCall) {
