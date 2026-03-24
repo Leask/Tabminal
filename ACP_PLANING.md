@@ -55,9 +55,10 @@ Behavior:
 
 MVP UI:
 - Agent tabs render in the editor workspace.
-- Transcript area with message stream.
-- Prompt textarea + send button + cancel button.
-- Status row with host, agent label, and runtime/session status.
+- Transcript area with coalesced message stream.
+- Prompt textarea + single send/stop button.
+- Mode picker, new chat action, and slash-command chips when available.
+- Status row with host, cwd, mode, and runtime/session status.
 
 ## Reuse Strategy
 
@@ -84,11 +85,18 @@ Status:
   permission resolution are live.
 - Agent tab metadata now persists on the backend and restores across backend
   restart for ACP runtimes that support `loadSession`.
+- Agent panel interaction polish is live:
+  - duplicate agent tabs auto-number as `#1`, `#2`, ...
+  - `Enter` sends
+  - `Esc` stops active runs
+  - `Ctrl+J` and `Shift+Enter` insert newlines
+  - mode switching and new-chat flows are available in-panel
+  - tool calls and permission requests render as structured cards
 - Verified with:
   - `npm run lint`
   - `npm test`
   - browser smoke against isolated local ACP test agent
-  - browser restart-restore validation against real Codex ACP runtime
+  - browser restart-restore validation against backend-persisted ACP tabs
 - Current polish fixes already applied:
   - Codex token stream is coalesced into a single assistant message instead of
     one message per chunk.
@@ -105,10 +113,11 @@ Backend:
   and Copilot CLI ACP server descriptor.
 - REST endpoints:
   - `GET /api/agents`
-  - `POST /api/agents/runtimes`
-  - `POST /api/agents/runtimes/:runtimeId/sessions`
-  - `POST /api/agents/sessions/:sessionId/prompt`
-  - `POST /api/agents/sessions/:sessionId/cancel`
+  - `POST /api/agents/tabs`
+  - `POST /api/agents/tabs/:tabId/prompt`
+  - `POST /api/agents/tabs/:tabId/cancel`
+  - `POST /api/agents/tabs/:tabId/mode`
+  - `POST /api/agents/tabs/:tabId/permissions/:permissionId`
   - `DELETE /api/agents/tabs/:tabId`
 - WebSocket endpoint for live event fan-out.
 
@@ -116,16 +125,21 @@ Frontend:
 - Agent dropdown button.
 - Agent tab state model.
 - Agent transcript rendering.
-- Prompt send/cancel.
+- Prompt send/stop.
+- Mode picker.
+- New chat action.
+- Slash-command starter chips.
+- Structured tool call / permission cards.
 - Host-scoped tabs in editor pane.
 
 ### Deferred
 
 - File attachments.
-- Full ACP permission approval UI.
-- Terminal/tool call visualization.
+- Rich diff/resource rendering in tool outputs.
+- Terminal execution transcript UI for ACP tool calls.
 - Registry-driven install UX.
 - TCP ACP runtime support in UI.
+- Dedicated conversation history browser independent of terminal sessions.
 
 ## Safety and Isolation
 

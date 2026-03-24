@@ -18,6 +18,7 @@ import {
 } from './modules/url-auth.js';
 import {
     shortenPath,
+    getEnvValue,
     getDisplayHost,
     renderSessionHostMeta
 } from './modules/session-meta.js';
@@ -465,11 +466,17 @@ class EditorManager {
         this.agentContainer = null;
         this.agentHeader = null;
         this.agentMeta = null;
+        this.agentToolbar = null;
+        this.agentModeSelect = null;
+        this.agentNewChatButton = null;
+        this.agentCommands = null;
         this.agentTranscript = null;
         this.agentTools = null;
         this.agentPermissions = null;
         this.agentPrompt = null;
         this.agentSendButton = null;
+        this.agentHint = null;
+        this.agentFixedActions = null;
 
         this.initResizer();
         this.initAgentPanel();
@@ -484,6 +491,13 @@ class EditorManager {
 
         const header = document.createElement('div');
         header.className = 'agent-panel-header';
+        header.style.display = 'none';
+
+        const headerTop = document.createElement('div');
+        headerTop.className = 'agent-panel-header-top';
+
+        const headerMain = document.createElement('div');
+        headerMain.className = 'agent-panel-header-main';
 
         this.agentHeader = document.createElement('div');
         this.agentHeader.className = 'agent-panel-title';
@@ -491,8 +505,29 @@ class EditorManager {
         this.agentMeta = document.createElement('div');
         this.agentMeta.className = 'agent-panel-meta';
 
-        header.appendChild(this.agentHeader);
-        header.appendChild(this.agentMeta);
+        headerMain.appendChild(this.agentHeader);
+        headerMain.appendChild(this.agentMeta);
+
+        this.agentModeSelect = document.createElement('select');
+        this.agentModeSelect.className = 'agent-panel-mode-select';
+        this.agentModeSelect.addEventListener('change', async () => {
+            const modeId = this.agentModeSelect.value;
+            if (!modeId) return;
+            await this.setActiveAgentMode(modeId);
+        });
+
+        this.agentNewChatButton = document.createElement('button');
+        this.agentNewChatButton.type = 'button';
+        this.agentNewChatButton.className = 'agent-panel-button secondary';
+        this.agentNewChatButton.textContent = 'New Chat';
+        this.agentNewChatButton.addEventListener('click', async () => {
+            const agentTab = getActiveAgentTab();
+            if (!agentTab) return;
+            await this.createSiblingAgentTab(agentTab);
+        });
+
+        headerTop.appendChild(headerMain);
+        header.appendChild(headerTop);
 
         this.agentTools = document.createElement('div');
         this.agentTools.className = 'agent-panel-tools';
@@ -508,7 +543,7 @@ class EditorManager {
 
         this.agentPrompt = document.createElement('textarea');
         this.agentPrompt.className = 'agent-panel-input';
-        this.agentPrompt.placeholder = 'Ask the agent to inspect or change code';
+        this.agentPrompt.placeholder = AGENT_PROMPT_PLACEHOLDER;
         this.agentPrompt.rows = 3;
         this.agentPrompt.addEventListener('input', () => {
             this.updateAgentComposerActions();
@@ -561,6 +596,12 @@ class EditorManager {
         const actions = document.createElement('div');
         actions.className = 'agent-panel-actions';
 
+        this.agentCommands = document.createElement('div');
+        this.agentCommands.className = 'agent-panel-commands';
+
+        this.agentFixedActions = document.createElement('div');
+        this.agentFixedActions.className = 'agent-panel-fixed-actions';
+
         this.agentSendButton = document.createElement('button');
         this.agentSendButton.type = 'button';
         this.agentSendButton.className = 'agent-panel-button';
@@ -577,9 +618,18 @@ class EditorManager {
             void this.submitActiveAgentPrompt();
         });
 
-        actions.appendChild(this.agentSendButton);
+        this.agentFixedActions.appendChild(this.agentModeSelect);
+        this.agentFixedActions.appendChild(this.agentNewChatButton);
+        this.agentFixedActions.appendChild(this.agentSendButton);
+
+        actions.appendChild(this.agentCommands);
+        actions.appendChild(this.agentFixedActions);
         composer.appendChild(this.agentPrompt);
         composer.appendChild(actions);
+
+        this.agentHint = document.createElement('div');
+        this.agentHint.className = 'agent-panel-hint';
+        composer.appendChild(this.agentHint);
 
         this.agentContainer.appendChild(header);
         this.agentContainer.appendChild(this.agentTools);
@@ -1217,11 +1267,47 @@ class EditorManager {
 
     renderAgentPanel(agentTab) {
         this.agentHeader.textContent = '';
-        this.agentMeta.textContent = [
-            `HOST ${getDisplayHost(agentTab.server)}`,
-            agentTab.cwd ? `CWD ${agentTab.cwd}` : '',
-            `STATUS ${agentTab.status}${agentTab.busy ? ' (running)' : ''}`
-        ].filter(Boolean).join(' · ');
+        this.agentMeta.textContent = '';
+
+        this.agentModeSelect.innerHTML = '';
+        const modeOptions = normalizeAgentModes(agentTab.availableModes);
+        if (modeOptions.length > 1) {
+            for (const mode of modeOptions) {
+                const option = document.createElement('option');
+                option.value = mode.id;
+                option.textContent = mode.name;
+                option.title = mode.description || mode.name;
+                option.selected = mode.id === agentTab.currentModeId;
+                this.agentModeSelect.appendChild(option);
+            }
+            this.agentModeSelect.style.display = '';
+        } else {
+            this.agentModeSelect.style.display = 'none';
+        }
+
+        this.agentCommands.innerHTML = '';
+        const commands = normalizeAgentCommands(agentTab.availableCommands);
+        if (commands.length > 0) {
+            for (const command of commands.slice(0, 6)) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'agent-command-chip';
+                button.textContent = `/${command.name}`;
+                button.title = command.description || '';
+                button.onclick = () => {
+                    const suffix = command.inputHint
+                        ? ` ${command.inputHint}`
+                        : ' ';
+                    this.agentPrompt.focus();
+                    this.agentPrompt.value = `/${command.name}${suffix}`;
+                    this.updateAgentComposerActions(agentTab);
+                };
+                this.agentCommands.appendChild(button);
+            }
+            this.agentCommands.style.display = 'flex';
+        } else {
+            this.agentCommands.style.display = 'none';
+        }
 
         this.agentTranscript.innerHTML = '';
         for (const message of agentTab.messages) {
@@ -1230,7 +1316,10 @@ class EditorManager {
 
             const role = document.createElement('div');
             role.className = 'agent-message-role';
-            role.textContent = `${message.role} · ${message.kind}`;
+            role.textContent = getAgentMessageRoleLabel(
+                agentTab,
+                message
+            );
 
             const body = document.createElement('pre');
             body.className = 'agent-message-body';
@@ -1246,12 +1335,41 @@ class EditorManager {
         for (const toolCall of agentTab.toolCalls.values()) {
             const node = document.createElement('div');
             node.className = 'agent-tool-call';
-            node.textContent = [
-                toolCall.title || toolCall.toolCallId,
-                toolCall.status || 'pending'
-            ].join(' · ');
+
+            const header = document.createElement('div');
+            header.className = 'agent-tool-call-header';
+
+            const title = document.createElement('div');
+            title.className = 'agent-tool-call-title';
+            title.textContent = toolCall.title || toolCall.toolCallId;
+
+            const status = document.createElement('span');
+            status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
+            status.textContent = toolCall.status || 'pending';
+
+            header.appendChild(title);
+            header.appendChild(status);
+            node.appendChild(header);
+
+            const meta = document.createElement('div');
+            meta.className = 'agent-tool-call-meta';
+            meta.textContent = buildAgentToolMeta(toolCall);
+            if (meta.textContent) {
+                node.appendChild(meta);
+            }
+
+            const details = buildAgentToolDetails(toolCall);
+            if (details) {
+                const body = document.createElement('pre');
+                body.className = 'agent-tool-call-body';
+                body.textContent = details;
+                node.appendChild(body);
+            }
             this.agentTools.appendChild(node);
         }
+        this.agentTools.style.display = this.agentTools.children.length > 0
+            ? 'flex'
+            : 'none';
 
         this.agentPermissions.innerHTML = '';
         for (const permission of agentTab.permissions.values()) {
@@ -1259,10 +1377,35 @@ class EditorManager {
             const card = document.createElement('div');
             card.className = 'agent-permission-card';
 
+            const titleRow = document.createElement('div');
+            titleRow.className = 'agent-tool-call-header';
+
             const title = document.createElement('div');
             title.className = 'agent-permission-title';
             title.textContent = permission.toolCall?.title || 'Permission required';
-            card.appendChild(title);
+
+            const status = document.createElement('span');
+            status.className = 'agent-status-pill pending';
+            status.textContent = 'pending';
+
+            titleRow.appendChild(title);
+            titleRow.appendChild(status);
+            card.appendChild(titleRow);
+
+            const meta = document.createElement('div');
+            meta.className = 'agent-tool-call-meta';
+            meta.textContent = buildAgentPermissionMeta(permission);
+            if (meta.textContent) {
+                card.appendChild(meta);
+            }
+
+            const details = buildAgentPermissionDetails(permission);
+            if (details) {
+                const body = document.createElement('pre');
+                body.className = 'agent-tool-call-body';
+                body.textContent = details;
+                card.appendChild(body);
+            }
 
             const options = document.createElement('div');
             options.className = 'agent-permission-options';
@@ -1307,8 +1450,14 @@ class EditorManager {
             card.appendChild(options);
             this.agentPermissions.appendChild(card);
         }
+        this.agentPermissions.style.display = this.agentPermissions.children.length > 0
+            ? 'flex'
+            : 'none';
 
         this.agentPrompt.disabled = false;
+        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
+        this.agentHint.textContent = '';
+        this.agentHint.style.display = 'none';
         this.updateAgentComposerActions(agentTab);
     }
 
@@ -1349,6 +1498,38 @@ class EditorManager {
         }
     }
 
+    async setActiveAgentMode(modeId) {
+        const activeTabKey = this.getActiveWorkspaceTabKey();
+        const agentTab = isAgentWorkspaceTabKey(activeTabKey)
+            ? state.agentTabs.get(activeTabKey) || null
+            : null;
+        if (!agentTab || !modeId || modeId === agentTab.currentModeId) return;
+        try {
+            await agentTab.setMode(modeId);
+        } catch (error) {
+            alert(error.message, {
+                type: 'error',
+                title: 'Agent'
+            });
+        }
+    }
+
+    async createSiblingAgentTab(agentTab) {
+        const session = agentTab?.getLinkedSession?.() || null;
+        if (!session) return;
+        try {
+            await createAgentTab(session, agentTab.agentId, {
+                cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
+                modeId: agentTab.currentModeId || ''
+            });
+        } catch (error) {
+            alert(error.message, {
+                type: 'error',
+                title: 'Agent'
+            });
+        }
+    }
+
     updateAgentComposerActions(agentTab = null) {
         const activeTabKey = this.getActiveWorkspaceTabKey();
         const activeAgentTab = agentTab || (
@@ -1368,6 +1549,12 @@ class EditorManager {
         this.emptyState.style.display = 'flex';
     }
 }
+
+const AGENT_PROMPT_PLACEHOLDER = [
+    'Answer to the Ultimate Question of Life, the Universe, '
+        + 'and Everything',
+    '// Enter sends. Shift+Enter or Ctrl+J inserts a newline.'
+];
 
 const editorManager = new EditorManager();
 // #endregion
@@ -1392,10 +1579,18 @@ function openAgentDropdown(session, anchor) {
         button.type = 'button';
         button.className = 'agent-dropdown-item';
         button.disabled = definition.available === false;
-        const unavailableReason = definition.reason || 'unavailable';
-        button.textContent = definition.available === false
-            ? `${definition.label} (${unavailableReason})`
-            : definition.label;
+        const label = document.createElement('span');
+        label.className = 'agent-dropdown-label';
+        label.textContent = definition.label;
+
+        const meta = document.createElement('span');
+        meta.className = 'agent-dropdown-meta';
+        meta.textContent = definition.available === false
+            ? (definition.reason || 'Unavailable')
+            : (definition.description || definition.commandLabel || '');
+
+        button.appendChild(label);
+        button.appendChild(meta);
         button.onclick = async (event) => {
             event.stopPropagation();
             closeAgentDropdown();
@@ -1855,6 +2050,9 @@ class AgentTab {
         this.availableModes = Array.isArray(data.availableModes)
             ? data.availableModes
             : [];
+        this.availableCommands = Array.isArray(data.availableCommands)
+            ? data.availableCommands
+            : [];
         this.messages = Array.isArray(data.messages)
             ? data.messages.map((message) => ({ ...message }))
             : [];
@@ -1919,8 +2117,15 @@ class AgentTab {
                 break;
             case 'session_update':
                 this.#applySessionUpdate(message.update || {});
-                if (message.tab?.currentModeId) {
-                    this.currentModeId = message.tab.currentModeId;
+                if (message.tab?.currentModeId || message.tab?.modeId) {
+                    this.currentModeId = message.tab.currentModeId
+                        || message.tab.modeId;
+                }
+                if (Array.isArray(message.tab?.availableModes)) {
+                    this.availableModes = message.tab.availableModes;
+                }
+                if (Array.isArray(message.tab?.availableCommands)) {
+                    this.availableCommands = message.tab.availableCommands;
                 }
                 break;
             case 'permission_request':
@@ -1989,7 +2194,12 @@ class AgentTab {
                 break;
             }
             case 'current_mode_update':
-                this.currentModeId = update.currentModeId || '';
+                this.currentModeId = update.currentModeId || update.modeId || '';
+                break;
+            case 'available_commands_update':
+                this.availableCommands = Array.isArray(update.availableCommands)
+                    ? update.availableCommands
+                    : [];
                 break;
             default:
                 break;
@@ -2006,7 +2216,7 @@ class AgentTab {
             }
         );
         if (!response.ok) {
-            throw new Error('Failed to send prompt');
+            await throwResponseError(response, 'Failed to send prompt');
         }
         await syncAgentsForServer(this.server, { force: true });
     }
@@ -2033,7 +2243,7 @@ class AgentTab {
             }
         );
         if (!response.ok) {
-            throw new Error('Failed to cancel prompt');
+            await throwResponseError(response, 'Failed to stop prompt');
         }
         await this.#waitForSettled();
     }
@@ -2048,9 +2258,26 @@ class AgentTab {
             }
         );
         if (!response.ok) {
-            throw new Error('Failed to resolve permission');
+            await throwResponseError(response, 'Failed to resolve permission');
         }
         await syncAgentsForServer(this.server, { force: true });
+    }
+
+    async setMode(modeId) {
+        const response = await this.server.fetch(
+            `/api/agents/tabs/${this.id}/mode`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ modeId })
+            }
+        );
+        if (!response.ok) {
+            await throwResponseError(response, 'Failed to switch mode');
+        }
+        const data = await response.json();
+        this.update(data);
+        this.notifyUi();
     }
 
     async close() {
@@ -2135,6 +2362,105 @@ function getActiveAgentTab() {
     return state.agentTabs.get(activeKey) || null;
 }
 
+function normalizeAgentModes(modes) {
+    if (!Array.isArray(modes)) return [];
+    return modes
+        .map((mode) => {
+            const id = mode?.id || mode?.modeId || '';
+            if (!id) return null;
+            return {
+                id,
+                name: mode?.name || id,
+                description: mode?.description || ''
+            };
+        })
+        .filter(Boolean);
+}
+
+function normalizeAgentCommands(commands) {
+    if (!Array.isArray(commands)) return [];
+    return commands
+        .map((command) => {
+            const name = typeof command?.name === 'string'
+                ? command.name.trim()
+                : '';
+            if (!name) return null;
+            return {
+                name,
+                description: command?.description || '',
+                inputHint: command?.input?.hint || ''
+            };
+        })
+        .filter(Boolean);
+}
+
+function getCurrentAgentModeLabel(agentTab) {
+    const currentModeId = agentTab?.currentModeId || '';
+    if (!currentModeId) return '';
+    return normalizeAgentModes(agentTab?.availableModes).find(
+        (mode) => mode.id === currentModeId
+    )?.name || currentModeId;
+}
+
+function getAgentSessionUser(agentTab) {
+    const session = agentTab?.getLinkedSession?.() || null;
+    if (!session) return 'user';
+    return getEnvValue(session.env, 'USER')
+        || getEnvValue(session.env, 'LOGNAME')
+        || getEnvValue(session.env, 'USERNAME')
+        || 'user';
+}
+
+function getAgentBaseName(agentTab) {
+    const rawLabel = String(agentTab?.agentLabel || 'Agent').trim();
+    const cleaned = rawLabel.replace(
+        /\s+(CLI|Agent|Adapter)$/i,
+        ''
+    ).trim();
+    return cleaned || rawLabel || 'Agent';
+}
+
+function buildAgentPromptPlaceholder(agentTab) {
+    if (!agentTab) {
+        return AGENT_PROMPT_PLACEHOLDER.join('\n');
+    }
+    const session = agentTab.getLinkedSession();
+    const modeLabel = getCurrentAgentModeLabel(agentTab);
+    const cwd = agentTab.cwd
+        ? shortenPath(
+            agentTab.cwd,
+            session?.env || ''
+        )
+        : '';
+    const metaLine = [
+        `Host ${getDisplayHost(agentTab.server)}`,
+        cwd ? `CWD ${cwd}` : '',
+        modeLabel ? `Mode ${modeLabel}` : '',
+        `Status ${agentTab.status}${agentTab.busy ? ' (running)' : ''}`
+    ].filter(Boolean).join(' · ');
+    return [
+        ...AGENT_PROMPT_PLACEHOLDER,
+        `// ${metaLine}`
+    ].join('\n');
+}
+
+function getAgentMessageRoleLabel(agentTab, message) {
+    const role = String(message?.role || 'assistant').toLowerCase();
+    const kind = String(message?.kind || 'message').toLowerCase();
+
+    let roleLabel = message?.role || 'assistant';
+    if (role === 'user') {
+        roleLabel = getAgentSessionUser(agentTab);
+    } else if (role === 'assistant') {
+        roleLabel = getAgentBaseName(agentTab);
+    }
+
+    if (kind === 'message') {
+        return roleLabel;
+    }
+    return `${roleLabel} · ${message.kind || kind}`;
+}
+
 function getAgentDisplayLabel(agentTab) {
     if (!agentTab) return 'Agent';
     const session = agentTab.getLinkedSession();
@@ -2157,6 +2483,100 @@ function getAgentDisplayLabel(agentTab) {
     const index = siblings.findIndex((tab) => tab.key === agentTab.key);
     const suffix = index >= 0 ? index + 1 : siblings.length;
     return `${agentTab.agentLabel || 'Agent'} #${suffix}`;
+}
+
+function normalizeStatusClass(status = '') {
+    const value = String(status || 'pending').toLowerCase();
+    if (value.includes('complete') || value.includes('success')) {
+        return 'completed';
+    }
+    if (value.includes('cancel')) {
+        return 'cancelled';
+    }
+    if (value.includes('error') || value.includes('fail')) {
+        return 'error';
+    }
+    if (value.includes('run') || value.includes('progress')) {
+        return 'running';
+    }
+    return 'pending';
+}
+
+function extractToolPaths(toolLike) {
+    if (!Array.isArray(toolLike?.locations)) return [];
+    return toolLike.locations
+        .map((item) => item?.path || '')
+        .filter(Boolean);
+}
+
+function summarizeAgentRawInput(rawInput) {
+    if (!rawInput || typeof rawInput !== 'object') return '';
+    if (typeof rawInput.command === 'string' && rawInput.command) {
+        return rawInput.command;
+    }
+    if (typeof rawInput.path === 'string' && rawInput.path) {
+        return rawInput.path;
+    }
+    if (Array.isArray(rawInput.paths) && rawInput.paths.length > 0) {
+        return rawInput.paths.join('\n');
+    }
+    return JSON.stringify(rawInput, null, 2);
+}
+
+function buildAgentToolMeta(toolCall) {
+    const parts = [];
+    if (toolCall?.kind) parts.push(toolCall.kind);
+    const paths = extractToolPaths(toolCall);
+    if (paths.length > 0) {
+        parts.push(paths.length === 1 ? paths[0] : `${paths.length} paths`);
+    }
+    return parts.join(' · ');
+}
+
+function buildAgentToolDetails(toolCall) {
+    const lines = [];
+    const paths = extractToolPaths(toolCall);
+    if (paths.length > 0) {
+        lines.push(paths.join('\n'));
+    }
+    const rawInput = summarizeAgentRawInput(toolCall?.rawInput);
+    if (rawInput) {
+        lines.push(rawInput);
+    }
+    return lines.join('\n\n');
+}
+
+function buildAgentPermissionMeta(permission) {
+    return buildAgentToolMeta(permission?.toolCall || {});
+}
+
+function buildAgentPermissionDetails(permission) {
+    const toolDetails = buildAgentToolDetails(permission?.toolCall || {});
+    const optionLines = Array.isArray(permission?.options)
+        ? permission.options
+            .map((option) => option?.name || option?.optionId || '')
+            .filter(Boolean)
+        : [];
+    if (toolDetails && optionLines.length > 0) {
+        return `${toolDetails}\n\nOptions:\n${optionLines.join('\n')}`;
+    }
+    if (optionLines.length > 0) {
+        return `Options:\n${optionLines.join('\n')}`;
+    }
+    return toolDetails;
+}
+
+async function throwResponseError(response, fallbackMessage) {
+    let message = fallbackMessage;
+    try {
+        const payload = await response.json();
+        if (payload?.error) {
+            message = payload.error;
+        }
+    } catch {
+        // Ignore invalid JSON error bodies.
+    }
+    throw new Error(message);
 }
 
 function insertTextareaText(textarea, text) {
@@ -2190,6 +2610,7 @@ function upsertAgentTab(server, data) {
     if (existing) {
         existing.update(data);
         existing.connect();
+        existing.notifyUi();
         return existing;
     }
     const agentTab = new AgentTab(data, server);
@@ -2300,19 +2721,20 @@ async function syncAgentsForServer(server, { force = false } = {}) {
     }
 }
 
-async function createAgentTab(session, agentId) {
+async function createAgentTab(session, agentId, options = {}) {
     if (!session || !agentId) return null;
     const response = await session.server.fetch('/api/agents/tabs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             agentId,
-            cwd: session.cwd || session.initialCwd || '/',
-            terminalSessionId: session.id
+            cwd: options.cwd || session.cwd || session.initialCwd || '/',
+            terminalSessionId: session.id,
+            modeId: options.modeId || ''
         })
     });
     if (!response.ok) {
-        throw new Error('Failed to create agent tab');
+        await throwResponseError(response, 'Failed to create agent tab');
     }
     const data = await response.json();
     const agentTab = upsertAgentTab(session.server, data);

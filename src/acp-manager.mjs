@@ -241,7 +241,8 @@ class AcpRuntime extends EventEmitter {
         cwd,
         createdAt,
         currentModeId = '',
-        availableModes = []
+        availableModes = [],
+        availableCommands = []
     }) {
         return {
             id,
@@ -265,6 +266,7 @@ class AcpRuntime extends EventEmitter {
             pendingUserEcho: null,
             currentModeId,
             availableModes,
+            availableCommands,
             clients: new Set(),
             messageCounter: 0
         };
@@ -380,8 +382,25 @@ class AcpRuntime extends EventEmitter {
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
             currentModeId: response.modes?.currentModeId || '',
-            availableModes: response.modes?.availableModes || []
+            availableModes: response.modes?.availableModes || [],
+            availableCommands: response.availableCommands || []
         });
+        if (meta.modeId && typeof this.connection.setSessionMode === 'function') {
+            try {
+                const modeResponse = await this.connection.setSessionMode({
+                    sessionId: tab.acpSessionId,
+                    modeId: meta.modeId
+                });
+                tab.currentModeId = modeResponse?.currentModeId
+                    || modeResponse?.modeId
+                    || meta.modeId;
+                if (Array.isArray(modeResponse?.availableModes)) {
+                    tab.availableModes = modeResponse.availableModes;
+                }
+            } catch {
+                // Ignore unsupported mode changes during initial tab creation.
+            }
+        }
         this.tabs.set(tab.id, tab);
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
         return this.serializeTab(tab);
@@ -427,6 +446,7 @@ class AcpRuntime extends EventEmitter {
             }
             tab.currentModeId = response?.modes?.currentModeId || '';
             tab.availableModes = response?.modes?.availableModes || [];
+            tab.availableCommands = response?.availableCommands || [];
             tab.status = 'ready';
             tab.busy = false;
             tab.errorMessage = '';
@@ -455,6 +475,7 @@ class AcpRuntime extends EventEmitter {
             errorMessage: tab.errorMessage,
             currentModeId: tab.currentModeId,
             availableModes: tab.availableModes,
+            availableCommands: tab.availableCommands,
             messages: tab.messages,
             toolCalls: Array.from(tab.toolCalls.values()),
             permissions: Array.from(tab.permissions.values()).map((item) => ({
@@ -598,6 +619,42 @@ class AcpRuntime extends EventEmitter {
         });
     }
 
+    async setMode(tabId, modeId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        if (!modeId || typeof modeId !== 'string') {
+            throw new Error('Mode ID is required');
+        }
+        if (typeof this.connection.setSessionMode !== 'function') {
+            throw new Error('Agent does not support mode switching');
+        }
+
+        const response = await this.connection.setSessionMode({
+            sessionId: tab.acpSessionId,
+            modeId
+        });
+        tab.currentModeId = response?.currentModeId
+            || response?.modeId
+            || modeId;
+        if (Array.isArray(response?.availableModes)) {
+            tab.availableModes = response.availableModes;
+        }
+        this.#broadcast(tab, {
+            type: 'session_update',
+            update: {
+                sessionUpdate: 'current_mode_update',
+                currentModeId: tab.currentModeId
+            },
+            tab: {
+                currentModeId: tab.currentModeId,
+                availableModes: tab.availableModes
+            }
+        });
+        return this.serializeTab(tab);
+    }
+
     async closeTab(tabId) {
         const tab = this.tabs.get(tabId);
         if (!tab) return;
@@ -682,7 +739,12 @@ class AcpRuntime extends EventEmitter {
                 break;
             }
             case 'current_mode_update':
-                tab.currentModeId = update.currentModeId;
+                tab.currentModeId = update.currentModeId || update.modeId || '';
+                break;
+            case 'available_commands_update':
+                tab.availableCommands = Array.isArray(update.availableCommands)
+                    ? update.availableCommands
+                    : [];
                 break;
             default:
                 break;
@@ -692,7 +754,9 @@ class AcpRuntime extends EventEmitter {
             type: 'session_update',
             update,
             tab: {
-                currentModeId: tab.currentModeId
+                currentModeId: tab.currentModeId,
+                availableModes: tab.availableModes,
+                availableCommands: tab.availableCommands
             }
         });
     }
@@ -963,7 +1027,8 @@ export class AcpManager {
         const serialized = await runtimeEntry.runtime.createTab({
             id: tabId,
             cwd,
-            terminalSessionId: options.terminalSessionId || ''
+            terminalSessionId: options.terminalSessionId || '',
+            modeId: options.modeId || ''
         });
         const tabEntry = {
             runtime: runtimeEntry.runtime,
@@ -1080,6 +1145,14 @@ export class AcpManager {
             throw new Error('Agent tab not found');
         }
         await tabEntry.runtime.cancel(tabId);
+    }
+
+    async setMode(tabId, modeId) {
+        const tabEntry = this.tabs.get(tabId);
+        if (!tabEntry) {
+            throw new Error('Agent tab not found');
+        }
+        return await tabEntry.runtime.setMode(tabId, modeId);
     }
 
     async resolvePermission(tabId, permissionId, optionId) {

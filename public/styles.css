@@ -1400,21 +1400,35 @@ kbd {
     display: flex;
     flex-direction: column;
     background-color: var(--bg-base);
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 .agent-panel-header {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 12px 14px;
+    gap: 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border-color);
     background-color: rgba(7, 54, 66, 0.55);
 }
 
+.agent-panel-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.agent-panel-header-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
 .agent-panel-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-highlight);
 }
@@ -1424,26 +1438,62 @@ kbd {
 }
 
 .agent-panel-meta {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
+}
+
+.agent-panel-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.agent-panel-mode-select {
+    min-width: 112px;
+    max-width: 180px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: rgba(7, 54, 66, 0.45);
+    color: var(--text-highlight);
+    font: inherit;
+    font-size: 11px;
 }
 
 .agent-panel-tools,
 .agent-panel-permissions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
-    padding: 10px 14px 0;
+    padding: 8px 12px 0;
+}
+
+.agent-panel-commands {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
 }
 
 .agent-tool-call,
 .agent-permission-card {
+    width: 100%;
+    box-sizing: border-box;
     padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background-color: rgba(7, 54, 66, 0.4);
     color: var(--text-base);
-    font-size: 12px;
+    font-size: 11px;
+}
+
+.agent-tool-call {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .agent-permission-card {
@@ -1452,8 +1502,64 @@ kbd {
     gap: 8px;
 }
 
+.agent-tool-call-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.agent-tool-call-title,
 .agent-permission-title {
     color: var(--text-highlight);
+    font-weight: 600;
+}
+
+.agent-tool-call-meta {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-top: 4px;
+}
+
+.agent-tool-call-body {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-base);
+    font: inherit;
+    font-size: 11px;
+    opacity: 0.92;
+}
+
+.agent-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    font-size: 10px;
+    text-transform: lowercase;
+    color: var(--text-muted);
+    background-color: rgba(88, 110, 117, 0.18);
+}
+
+.agent-status-pill.running {
+    color: var(--accent-primary);
+    border-color: rgba(38, 139, 210, 0.5);
+    background-color: rgba(38, 139, 210, 0.14);
+}
+
+.agent-status-pill.completed {
+    color: #6ed36e;
+    border-color: rgba(110, 211, 110, 0.45);
+    background-color: rgba(80, 170, 80, 0.14);
+}
+
+.agent-status-pill.cancelled,
+.agent-status-pill.error {
+    color: #ff9b9b;
+    border-color: rgba(220, 80, 80, 0.45);
+    background-color: rgba(220, 80, 80, 0.12);
 }
 
 .agent-permission-options {
@@ -1464,14 +1570,15 @@ kbd {
 
 .agent-permission-option,
 .agent-panel-button,
-.agent-dropdown-item {
+.agent-dropdown-item,
+.agent-command-chip {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background-color: rgba(38, 139, 210, 0.12);
     color: var(--text-highlight);
     padding: 8px 12px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
 }
 
 .agent-permission-option.secondary,
@@ -1483,16 +1590,16 @@ kbd {
 .agent-panel-transcript {
     flex: 1 1 auto;
     overflow: auto;
-    padding: 14px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
 .agent-message {
     border: 1px solid var(--border-color);
     border-radius: 10px;
-    padding: 10px 12px;
+    padding: 9px 11px;
     background-color: rgba(7, 54, 66, 0.35);
 }
 
@@ -1505,11 +1612,10 @@ kbd {
 }
 
 .agent-message-role {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: 9px;
+    letter-spacing: 0.02em;
     color: var(--text-muted);
-    margin-bottom: 6px;
+    margin-bottom: 5px;
 }
 
 .agent-message-body {
@@ -1517,36 +1623,51 @@ kbd {
     white-space: pre-wrap;
     word-break: break-word;
     font: inherit;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--text-base);
 }
 
 .agent-panel-composer {
-    padding: 12px 14px 14px;
-    border-top: 1px solid var(--border-color);
+    padding: 10px 12px 12px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    background-color: rgba(0, 43, 54, 0.7);
+    gap: 8px;
 }
 
 .agent-panel-input {
     width: 100%;
     resize: vertical;
-    min-height: 72px;
-    padding: 10px 12px;
+    min-height: 68px;
+    padding: 9px 11px;
     border-radius: 10px;
     border: 1px solid var(--border-color);
     background-color: rgba(7, 54, 66, 0.45);
     color: var(--text-highlight);
     font: inherit;
-    font-size: 13px;
+    font-size: 12px;
 }
 
 .agent-panel-actions {
     display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.agent-panel-fixed-actions {
+    display: flex;
+    align-items: center;
     justify-content: flex-end;
-    gap: 10px;
+    gap: 8px;
+    flex: 0 0 auto;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+.agent-panel-hint {
+    font-size: 10px;
+    color: var(--text-muted);
 }
 
 .agent-dropdown {
@@ -1566,6 +1687,24 @@ kbd {
 .agent-dropdown-item:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+}
+
+.agent-dropdown-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    text-align: left;
+}
+
+.agent-dropdown-label {
+    font-size: 12px;
+    color: var(--text-highlight);
+}
+
+.agent-dropdown-meta {
+    font-size: 10px;
+    color: var(--text-muted);
 }
 
 .agent-dropdown-empty {

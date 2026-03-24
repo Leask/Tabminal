@@ -18,6 +18,7 @@ class FakeRuntime extends EventEmitter {
         this.prompts = [];
         this.cancelled = [];
         this.permissions = [];
+        this.modeChanges = [];
         this.disposed = false;
         this.idleScheduled = false;
         this.restoredTabs = [];
@@ -39,11 +40,20 @@ class FakeRuntime extends EventEmitter {
             busy: false,
             errorMessage: '',
             currentModeId: '',
-            availableModes: [],
+            availableModes: [
+                { id: 'default', name: 'Default' },
+                { id: 'review', name: 'Review' }
+            ],
+            availableCommands: [
+                { name: 'review', description: 'Review code' }
+            ],
             messages: [],
             toolCalls: [],
             permissions: []
         };
+        if (meta.modeId) {
+            tab.currentModeId = meta.modeId;
+        }
         this.tabs.set(tab.id, tab);
         this.createdTabs.push(tab.id);
         return { ...tab };
@@ -69,7 +79,13 @@ class FakeRuntime extends EventEmitter {
             busy: false,
             errorMessage: '',
             currentModeId: '',
-            availableModes: [],
+            availableModes: [
+                { id: 'default', name: 'Default' },
+                { id: 'review', name: 'Review' }
+            ],
+            availableCommands: [
+                { name: 'review', description: 'Review code' }
+            ],
             messages: [{
                 id: 'restored-message',
                 streamKey: 'restored',
@@ -99,6 +115,21 @@ class FakeRuntime extends EventEmitter {
 
     async resolvePermission(tabId, permissionId, optionId) {
         this.permissions.push({ tabId, permissionId, optionId });
+    }
+
+    async setMode(tabId, modeId) {
+        this.modeChanges.push({ tabId, modeId });
+        const tab = this.tabs.get(tabId);
+        if (tab) {
+            tab.currentModeId = modeId;
+        }
+        return {
+            currentModeId: modeId,
+            availableModes: [
+                { id: 'default', name: 'Default' },
+                { id: 'review', name: 'Review' }
+            ]
+        };
     }
 
     async closeTab(tabId) {
@@ -271,6 +302,36 @@ describe('AcpManager', () => {
             acpSessionId: `acp-${tab.id}`,
             terminalSessionId: 'term-1',
             createdAt: '2026-03-23T00:00:00.000Z'
+        }]);
+    });
+
+    it('creates tabs with an initial mode when requested', async () => {
+        const { manager } = createManager();
+        const tab = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1',
+            modeId: 'review'
+        });
+
+        assert.equal(tab.currentModeId, 'review');
+    });
+
+    it('switches modes for an existing agent tab', async () => {
+        const { manager } = createManager();
+        const tab = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+
+        const updated = await manager.setMode(tab.id, 'review');
+
+        assert.equal(updated.currentModeId, 'review');
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.modeChanges, [{
+            tabId: tab.id,
+            modeId: 'review'
         }]);
     });
 });

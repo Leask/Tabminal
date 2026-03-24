@@ -301,15 +301,60 @@ async function main() {
         );
     });
 
+    const panelDetails = await evaluate(
+        toExpression(`
+            () => ({
+                modeOptions: Array.from(
+                    document.querySelectorAll('.agent-panel-mode-select option')
+                ).map((option) => option.textContent.trim()),
+                commandChips: Array.from(
+                    document.querySelectorAll('.agent-command-chip')
+                ).map((button) => button.textContent.trim())
+            })
+        `)
+    );
+    log('panel-details', JSON.stringify(panelDetails));
+
+    await evaluate(
+        toExpression(`
+            () => {
+                const select = document.querySelector('.agent-panel-mode-select');
+                if (!select || select.options.length < 2) return false;
+                select.value = select.options[1].value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+        `)
+    );
+    log('switched-mode');
+
+    await waitFor('mode-updated', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    return Array.isArray(window.__fetchLog)
+                        && window.__fetchLog.some((entry) =>
+                            /\\/api\\/agents\\/tabs\\/[^/]+\\/mode$/.test(
+                                entry.url || ''
+                            )
+                        );
+                }
+            `),
+            15000,
+            250
+        );
+    });
+
     await evaluate(
         toExpression(`
             () => {
                 const input = document.querySelector('.agent-panel-input');
                 input.value = ${JSON.stringify(agentPrompt)};
                 input.dispatchEvent(new Event('input', { bubbles: true }));
-                document.querySelector(
-                    '.agent-panel-button:not(.secondary)'
-                )?.click();
+                const sendButton = Array.from(
+                    document.querySelectorAll('.agent-panel-button')
+                ).find((el) => /send/i.test(el.textContent || ''));
+                sendButton?.click();
                 return true;
             }
         `)
@@ -318,7 +363,9 @@ async function main() {
 
     const fetchLogAfterPrompt = await evaluate(
         toExpression(`
-            () => window.__fetchLog.slice()
+            () => Array.isArray(window.__fetchLog)
+                ? window.__fetchLog.slice()
+                : []
         `)
     );
     log('fetch-log-after-prompt', JSON.stringify(fetchLogAfterPrompt));
@@ -379,23 +426,26 @@ async function main() {
                 const input = document.querySelector('.agent-panel-input');
                 input.value = 'cancel-smoke';
                 input.dispatchEvent(new Event('input', { bubbles: true }));
-                document.querySelector(
-                    '.agent-panel-button:not(.secondary)'
-                )?.click();
+                const sendButton = Array.from(
+                    document.querySelectorAll('.agent-panel-button')
+                ).find((el) => /send/i.test(el.textContent || ''));
+                sendButton?.click();
                 return true;
             }
         `)
     );
     log('submitted-cancel-smoke');
 
-    await waitFor('cancel-enabled', async () => {
+    await waitFor('stop-enabled', async () => {
         return await evaluate(
             toExpression(`
                 () => {
-                    const button = document.querySelector(
-                        '.agent-panel-button.secondary'
-                    );
-                    return Boolean(button) && button.disabled === false;
+                    const button = Array.from(
+                        document.querySelectorAll('.agent-panel-button')
+                    ).find((el) => /stop/i.test(el.textContent || ''));
+                    return Boolean(button)
+                        && button.disabled === false
+                        && /stop/i.test(button.textContent || '');
                 }
             `),
             15000,
@@ -406,33 +456,29 @@ async function main() {
     await evaluate(
         toExpression(`
             () => {
-                document.querySelector(
-                    '.agent-panel-button.secondary'
-                )?.click();
+                const stopButton = Array.from(
+                    document.querySelectorAll('.agent-panel-button')
+                ).find((el) => /stop/i.test(el.textContent || ''));
+                stopButton?.click();
                 return true;
             }
         `)
     );
-    log('clicked-cancel');
+    log('clicked-stop');
 
     await waitFor('cancel-settled', async () => {
         return await evaluate(
             toExpression(`
                 () => {
-                    const cancelButton = document.querySelector(
-                        '.agent-panel-button.secondary'
-                    );
-                    const sendButton = document.querySelector(
-                        '.agent-panel-button:not(.secondary)'
-                    );
-                    const meta = document.querySelector(
-                        '.agent-panel-meta'
-                    )?.textContent || '';
-                    return Boolean(cancelButton)
-                        && Boolean(sendButton)
-                        && cancelButton.disabled === true
-                        && sendButton.disabled === false
-                        && /STATUS ready/i.test(meta);
+                    const sendButton = Array.from(
+                        document.querySelectorAll('.agent-panel-button')
+                    ).find((el) => /send/i.test(el.textContent || ''));
+                    const placeholder = document.querySelector(
+                        '.agent-panel-input'
+                    )?.getAttribute('placeholder') || '';
+                    return Boolean(sendButton)
+                        && /send/i.test(sendButton.textContent || '')
+                        && /Status ready/i.test(placeholder);
                 }
             `),
             15000,
@@ -483,41 +529,28 @@ async function main() {
     await evaluate(
         toExpression(`
             () => {
-                document.querySelector('.toggle-agent-btn')?.click();
+                const button = Array.from(
+                    document.querySelectorAll('.agent-panel-button.secondary')
+                ).find((el) => /new chat/i.test(el.textContent || ''));
+                if (!button) return false;
+                button.click();
                 return true;
             }
         `)
     );
-    log('opened-second-agent-dropdown');
+    log('created-second-agent');
 
-    await waitFor('second-agent-dropdown-items', async () => {
+    await waitFor('second-agent-restored', async () => {
         return await evaluate(
             toExpression(`
-                () => document.querySelectorAll('.agent-dropdown-item').length > 0
+                () => Array.from(
+                    document.querySelectorAll('.agent-editor-tab')
+                ).some((tab) => /#2/.test(tab.textContent || ''))
             `),
             15000,
             250
         );
     });
-
-    await evaluate(
-        toExpression(`
-            () => {
-                const items = Array.from(
-                    document.querySelectorAll('.agent-dropdown-item')
-                );
-                const target = items.find((el) =>
-                    el.textContent.includes(
-                        ${JSON.stringify(targetAgentLabel)}
-                    )
-                ) || items.find((el) => !el.disabled);
-                if (!target) return false;
-                target.click();
-                return true;
-            }
-        `)
-    );
-    log('picked-second-agent');
 
     await waitFor('second-agent-tab', async () => {
         return await evaluate(
@@ -560,12 +593,14 @@ async function main() {
                     const active = tabs.find((el) =>
                         el.classList.contains('active')
                     );
-                    const messages = document.querySelectorAll(
-                        '.agent-message'
-                    ).length;
+                    const transcript = Array.from(
+                        document.querySelectorAll('.agent-message')
+                    ).map((el) => el.textContent || '');
                     return Boolean(active)
-                        && tabs.indexOf(active) === 0
-                        && messages > 0;
+                        && /#1/.test(active.textContent || '')
+                        && transcript.some((text) =>
+                            /permission please/i.test(text)
+                        );
                 }
             `),
             15000,

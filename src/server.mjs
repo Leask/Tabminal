@@ -278,7 +278,7 @@ router.get('/api/agents', async (ctx) => {
 });
 
 router.post('/api/agents/tabs', async (ctx) => {
-    const { agentId, cwd, terminalSessionId } = ctx.request.body || {};
+    const { agentId, cwd, terminalSessionId, modeId } = ctx.request.body || {};
     if (!agentId || typeof agentId !== 'string') {
         ctx.status = 400;
         ctx.body = { error: 'agentId is required' };
@@ -297,7 +297,8 @@ router.post('/api/agents/tabs', async (ctx) => {
             cwd,
             terminalSessionId: typeof terminalSessionId === 'string'
                 ? terminalSessionId
-                : ''
+                : '',
+            modeId: typeof modeId === 'string' ? modeId : ''
         });
     } catch (error) {
         ctx.status = 500;
@@ -356,6 +357,22 @@ router.post(
         }
     }
 );
+
+router.post('/api/agents/tabs/:tabId/mode', async (ctx) => {
+    const { tabId } = ctx.params;
+    const { modeId } = ctx.request.body || {};
+    if (!modeId || typeof modeId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'modeId is required' };
+        return;
+    }
+    try {
+        ctx.body = await acpManager.setMode(tabId, modeId);
+    } catch (error) {
+        ctx.status = 500;
+        ctx.body = { error: error?.message || 'Failed to switch mode' };
+    }
+});
 
 router.delete('/api/agents/tabs/:tabId', async (ctx) => {
     const { tabId } = ctx.params;

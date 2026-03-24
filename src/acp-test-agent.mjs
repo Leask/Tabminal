@@ -47,21 +47,60 @@ class TabminalTestAgent {
 
     async newSession() {
         const sessionId = crypto.randomUUID();
-        this.sessions.set(sessionId, { controller: null });
+        this.sessions.set(sessionId, {
+            controller: null,
+            modeId: 'default'
+        });
         return {
             sessionId,
             modes: {
                 currentModeId: 'default',
-                availableModes: [{
-                    modeId: 'default',
-                    name: 'Default'
-                }]
-            }
+                availableModes: [
+                    {
+                        modeId: 'default',
+                        id: 'default',
+                        name: 'Default',
+                        description: 'Balanced test mode'
+                    },
+                    {
+                        modeId: 'review',
+                        id: 'review',
+                        name: 'Review',
+                        description: 'Focus on analysis and review-style output'
+                    }
+                ]
+            },
+            availableCommands: [
+                {
+                    name: 'review',
+                    description: 'Review the current project',
+                    input: { hint: 'What should be reviewed?' }
+                },
+                {
+                    name: 'explain',
+                    description: 'Explain a file or concept',
+                    input: { hint: 'What should be explained?' }
+                }
+            ]
         };
     }
 
-    async setSessionMode() {
-        return {};
+    async setSessionMode(params) {
+        const session = this.sessions.get(params.sessionId);
+        if (!session) {
+            throw new Error('Session not found');
+        }
+        session.modeId = params.modeId;
+        await this.connection.sessionUpdate({
+            sessionId: params.sessionId,
+            update: {
+                sessionUpdate: 'current_mode_update',
+                currentModeId: params.modeId
+            }
+        });
+        return {
+            currentModeId: params.modeId
+        };
     }
 
     async prompt(params) {
@@ -74,6 +113,9 @@ class TabminalTestAgent {
         session.controller = new AbortController();
         const signal = session.controller.signal;
         const promptText = extractPromptText(params.prompt);
+        const modePrefix = session.modeId === 'review'
+            ? '[review] '
+            : '';
 
         try {
             await this.connection.sessionUpdate({
@@ -83,7 +125,7 @@ class TabminalTestAgent {
                     messageId: 'intro',
                     content: {
                         type: 'text',
-                        text: 'Tabminal ACP smoke agent online. '
+                        text: `${modePrefix}Tabminal ACP smoke agent online. `
                     }
                 }
             });
