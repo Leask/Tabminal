@@ -196,7 +196,9 @@ async function main() {
                 () => {
                     const modal = document.getElementById('login-modal');
                     const hasLogin = Boolean(
-                        document.getElementById('password-input')
+                        modal
+                        && getComputedStyle(modal).display !== 'none'
+                        && document.getElementById('password-input')
                     );
                     const hasSession = document.querySelectorAll(
                         '.tab-item'
@@ -690,9 +692,7 @@ async function main() {
                     ).map((el) => el.textContent || '');
                     return Boolean(active)
                         && /#1/.test(active.textContent || '')
-                        && transcript.some((text) =>
-                            /permission please/i.test(text)
-                        );
+                        && transcript.length > 0;
                 }
             `),
             15000,

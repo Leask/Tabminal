@@ -1308,6 +1308,7 @@ class EditorManager {
         }
 
         this.currentSession.workspaceState.activeTabKey = agentTabKey;
+        this.currentSession.saveState();
         this.renderEditorTabs();
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
