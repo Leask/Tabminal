@@ -470,7 +470,6 @@ class EditorManager {
         this.agentPermissions = null;
         this.agentPrompt = null;
         this.agentSendButton = null;
-        this.agentCancelButton = null;
 
         this.initResizer();
         this.initAgentPanel();
@@ -511,33 +510,73 @@ class EditorManager {
         this.agentPrompt.className = 'agent-panel-input';
         this.agentPrompt.placeholder = 'Ask the agent to inspect or change code';
         this.agentPrompt.rows = 3;
+        this.agentPrompt.addEventListener('input', () => {
+            this.updateAgentComposerActions();
+        });
         this.agentPrompt.addEventListener('keydown', (event) => {
+            const activeTabKey = this.getActiveWorkspaceTabKey();
+            const agentTab = isAgentWorkspaceTabKey(activeTabKey)
+                ? state.agentTabs.get(activeTabKey)
+                : null;
+
+            if (
+                event.ctrlKey
+                && !event.metaKey
+                && !event.altKey
+                && event.key.toLowerCase() === 'j'
+            ) {
+                event.preventDefault();
+                insertTextareaText(this.agentPrompt, '\n');
+                return;
+            }
+
+            if (event.key === 'Escape' && agentTab?.busy) {
+                event.preventDefault();
+                void this.cancelActiveAgentPrompt();
+                return;
+            }
+
+            if (
+                event.key === 'Enter'
+                && !event.shiftKey
+                && !event.altKey
+                && !event.ctrlKey
+                && !event.metaKey
+            ) {
+                event.preventDefault();
+                if (!agentTab?.busy) {
+                    void this.submitActiveAgentPrompt();
+                }
+                return;
+            }
+
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
-                void this.submitActiveAgentPrompt();
+                if (!agentTab?.busy) {
+                    void this.submitActiveAgentPrompt();
+                }
             }
         });
 
         const actions = document.createElement('div');
         actions.className = 'agent-panel-actions';
 
-        this.agentCancelButton = document.createElement('button');
-        this.agentCancelButton.type = 'button';
-        this.agentCancelButton.className = 'agent-panel-button secondary';
-        this.agentCancelButton.textContent = 'Cancel';
-        this.agentCancelButton.addEventListener('click', () => {
-            void this.cancelActiveAgentPrompt();
-        });
-
         this.agentSendButton = document.createElement('button');
         this.agentSendButton.type = 'button';
         this.agentSendButton.className = 'agent-panel-button';
         this.agentSendButton.textContent = 'Send';
         this.agentSendButton.addEventListener('click', () => {
+            const activeTabKey = this.getActiveWorkspaceTabKey();
+            const agentTab = isAgentWorkspaceTabKey(activeTabKey)
+                ? state.agentTabs.get(activeTabKey)
+                : null;
+            if (agentTab?.busy) {
+                void this.cancelActiveAgentPrompt();
+                return;
+            }
             void this.submitActiveAgentPrompt();
         });
 
-        actions.appendChild(this.agentCancelButton);
         actions.appendChild(this.agentSendButton);
         composer.appendChild(this.agentPrompt);
         composer.appendChild(actions);
@@ -1041,7 +1080,7 @@ class EditorManager {
             icon.innerHTML = AGENT_ICON_SVG;
 
             const label = document.createElement('span');
-            label.textContent = agentTab.agentLabel;
+            label.textContent = getAgentDisplayLabel(agentTab);
 
             const closeBtn = document.createElement('span');
             closeBtn.className = 'close-btn';
@@ -1177,7 +1216,7 @@ class EditorManager {
     }
 
     renderAgentPanel(agentTab) {
-        this.agentHeader.textContent = agentTab.agentLabel;
+        this.agentHeader.textContent = '';
         this.agentMeta.textContent = [
             `HOST ${getDisplayHost(agentTab.server)}`,
             agentTab.cwd ? `CWD ${agentTab.cwd}` : '',
@@ -1270,8 +1309,7 @@ class EditorManager {
         }
 
         this.agentPrompt.disabled = false;
-        this.agentSendButton.disabled = agentTab.busy;
-        this.agentCancelButton.disabled = !agentTab.busy;
+        this.updateAgentComposerActions(agentTab);
     }
 
     async submitActiveAgentPrompt() {
@@ -1279,6 +1317,7 @@ class EditorManager {
         if (!isAgentWorkspaceTabKey(activeTabKey)) return;
         const agentTab = state.agentTabs.get(activeTabKey);
         if (!agentTab) return;
+        if (agentTab.busy) return;
         const text = this.agentPrompt.value.trim();
         if (!text) return;
         this.agentPrompt.value = '';
@@ -1308,6 +1347,18 @@ class EditorManager {
                 title: 'Agent'
             });
         }
+    }
+
+    updateAgentComposerActions(agentTab = null) {
+        const activeTabKey = this.getActiveWorkspaceTabKey();
+        const activeAgentTab = agentTab || (
+            isAgentWorkspaceTabKey(activeTabKey)
+                ? state.agentTabs.get(activeTabKey) || null
+                : null
+        );
+        const busy = !!activeAgentTab?.busy;
+        this.agentSendButton.textContent = busy ? 'Stop' : 'Send';
+        this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
     }
 
     showEmptyState() {
@@ -2074,6 +2125,46 @@ function getAgentTabsForSession(session) {
     return getAgentTabsForServer(session.serverId).filter(
         (tab) => tab.terminalSessionId === session.id
     );
+}
+
+function getActiveAgentTab() {
+    const activeSession = getActiveSession();
+    if (!activeSession) return null;
+    const activeKey = activeSession.workspaceState?.activeTabKey || '';
+    if (!isAgentWorkspaceTabKey(activeKey)) return null;
+    return state.agentTabs.get(activeKey) || null;
+}
+
+function getAgentDisplayLabel(agentTab) {
+    if (!agentTab) return 'Agent';
+    const session = agentTab.getLinkedSession();
+    if (!session) {
+        return agentTab.agentLabel || 'Agent';
+    }
+
+    const siblings = getAgentTabsForSession(session)
+        .filter((tab) => tab.agentLabel === agentTab.agentLabel)
+        .sort((left, right) => {
+            const created = (left.createdAt || '').localeCompare(
+                right.createdAt || ''
+            );
+            if (created !== 0) return created;
+            return left.id.localeCompare(right.id);
+        });
+    if (siblings.length <= 1) {
+        return agentTab.agentLabel || 'Agent';
+    }
+    const index = siblings.findIndex((tab) => tab.key === agentTab.key);
+    const suffix = index >= 0 ? index + 1 : siblings.length;
+    return `${agentTab.agentLabel || 'Agent'} #${suffix}`;
+}
+
+function insertTextareaText(textarea, text) {
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? textarea.value.length;
+    textarea.setRangeText(text, start, end, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function refreshWorkspaceIfSessionActive(session) {
@@ -4299,6 +4390,28 @@ document.addEventListener('keydown', (e) => {
     ) {
         e.preventDefault();
         closeShortcutsModal();
+        return;
+    }
+
+    const activeAgentTab = getActiveAgentTab();
+    const activeElement = document.activeElement;
+    const agentPanelHasFocus = !!(
+        activeAgentTab
+        && editorManager?.agentContainer
+        && editorManager.agentContainer.style.display !== 'none'
+        && activeElement
+        && editorManager.agentContainer.contains(activeElement)
+    );
+    if (
+        e.key === 'Escape'
+        && !e.ctrlKey
+        && !e.metaKey
+        && !e.altKey
+        && activeAgentTab?.busy
+        && agentPanelHasFocus
+    ) {
+        e.preventDefault();
+        void editorManager.cancelActiveAgentPrompt();
         return;
     }
 

@@ -1419,6 +1419,10 @@ kbd {
     color: var(--text-highlight);
 }
 
+.agent-panel-title:empty {
+    display: none;
+}
+
 .agent-panel-meta {
     font-size: 11px;
     color: var(--text-muted);
