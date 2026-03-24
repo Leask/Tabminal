@@ -1540,6 +1540,7 @@ kbd {
     box-sizing: border-box;
     padding: 8px 10px;
     border: 1px solid var(--border-color);
+    border-left-width: 3px;
     border-radius: 8px;
     background-color: rgba(7, 54, 66, 0.4);
     color: var(--text-base);
@@ -1567,13 +1568,15 @@ kbd {
 .agent-tool-call {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
+    border-left-color: rgba(38, 139, 210, 0.46);
 }
 
 .agent-permission-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    border-left-color: rgba(181, 137, 0, 0.52);
 }
 
 .agent-tool-call-header {
@@ -1581,12 +1584,14 @@ kbd {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+    flex-wrap: wrap;
 }
 
 .agent-tool-call-title,
 .agent-permission-title {
     color: var(--text-highlight);
     font-weight: 600;
+    font-size: 12px;
 }
 
 .agent-tool-call-meta {

@@ -20,6 +20,11 @@ const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
     !== '0';
 const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
+const expectToolCount = Math.max(
+    0,
+    Number.parseInt(process.env.TABMINAL_EXPECT_TOOL_COUNT || '0', 10) || 0
+);
+const skipRestoreTail = process.env.TABMINAL_SKIP_RESTORE_TAIL === '1';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -688,6 +693,16 @@ async function main() {
         }, 20000, 250);
     }
 
+    if (expectToolCount > 0) {
+        await waitFor('tool-call-count', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll('.agent-tool-call').length
+                `)
+            ) >= expectToolCount;
+        }, 20000, 250);
+    }
+
     if (expectPathLink) {
         await waitFor('path-link', async () => {
             return await evaluate(
@@ -785,128 +800,132 @@ async function main() {
         );
     });
 
-    await page.send('Page.reload', { ignoreCache: true });
-    log('reloaded-page');
+    if (!skipRestoreTail) {
+        await page.send('Page.reload', { ignoreCache: true });
+        log('reloaded-page');
 
-    await waitFor('document-ready-after-reload', async () => {
-        const readyState = await evaluate('document.readyState');
-        return readyState === 'complete';
-    });
+        await waitFor('document-ready-after-reload', async () => {
+            const readyState = await evaluate('document.readyState');
+            return readyState === 'complete';
+        });
 
-    await waitFor('restored-session', async () => {
-        return await evaluate(
-            toExpression(`
-                () => document.querySelectorAll('.tab-item').length > 0
-            `),
-            15000,
-            250
-        );
-    });
+        await waitFor('restored-session', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll('.tab-item').length > 0
+                `),
+                15000,
+                250
+            );
+        });
 
-    await waitFor('restored-agent-tab', async () => {
-        return await evaluate(
-            toExpression(`
-                () => {
-                    const tab = document.querySelector(
-                        '.agent-editor-tab.active'
-                    );
-                    const panel = document.querySelector('.agent-panel');
-                    const messages = document.querySelectorAll(
-                        '.agent-message'
-                    ).length;
-                    return Boolean(tab)
-                        && Boolean(panel)
-                        && getComputedStyle(panel).display !== 'none'
-                        && messages > 0;
-                }
-            `),
-            15000,
-            250
-        );
-    });
+        await waitFor('restored-agent-tab', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const tab = document.querySelector(
+                            '.agent-editor-tab.active'
+                        );
+                        const panel = document.querySelector('.agent-panel');
+                        const messages = document.querySelectorAll(
+                            '.agent-message'
+                        ).length;
+                        return Boolean(tab)
+                            && Boolean(panel)
+                            && getComputedStyle(panel).display !== 'none'
+                            && messages > 0;
+                    }
+                `),
+                15000,
+                250
+            );
+        });
 
-    await evaluate(
-        toExpression(`
-            () => {
-                const button = Array.from(
-                    document.querySelectorAll('.agent-panel-button.secondary')
-                ).find((el) => /new chat/i.test(el.textContent || ''));
-                if (!button) return false;
-                button.click();
-                return true;
-            }
-        `)
-    );
-    log('created-second-agent');
-
-    await waitFor('second-agent-restored', async () => {
-        return await evaluate(
-            toExpression(`
-                () => Array.from(
-                    document.querySelectorAll('.agent-editor-tab')
-                ).some((tab) => /#2/.test(tab.textContent || ''))
-            `),
-            15000,
-            250
-        );
-    });
-
-    await waitFor('second-agent-tab', async () => {
-        return await evaluate(
+        await evaluate(
             toExpression(`
                 () => {
-                    const tabs = document.querySelectorAll(
-                        '.agent-editor-tab'
-                    );
-                    const panel = document.querySelector('.agent-panel');
-                    return tabs.length >= 2
-                        && Boolean(panel)
-                        && getComputedStyle(panel).display !== 'none';
+                    const button = Array.from(
+                        document.querySelectorAll('.agent-panel-button.secondary')
+                    ).find((el) => /new chat/i.test(el.textContent || ''));
+                    if (!button) return false;
+                    button.click();
+                    return true;
                 }
-            `),
-            15000,
-            250
+            `)
         );
-    });
+        log('created-second-agent');
 
-    await evaluate(
-        toExpression(`
-            () => {
-                const tabs = Array.from(document.querySelectorAll(
-                    '.agent-editor-tab'
-                ));
-                const target = tabs.find((tab) =>
-                    /#1/.test(tab.textContent || '')
-                ) || tabs[0];
-                target?.click();
-                return Boolean(target);
-            }
-        `)
-    );
-    log('switched-back-first-agent');
+        await waitFor('second-agent-restored', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => Array.from(
+                        document.querySelectorAll('.agent-editor-tab')
+                    ).some((tab) => /#2/.test(tab.textContent || ''))
+                `),
+                15000,
+                250
+            );
+        });
 
-    await waitFor('first-agent-restored', async () => {
-        return await evaluate(
+        await waitFor('second-agent-tab', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const tabs = document.querySelectorAll(
+                            '.agent-editor-tab'
+                        );
+                        const panel = document.querySelector('.agent-panel');
+                        return tabs.length >= 2
+                            && Boolean(panel)
+                            && getComputedStyle(panel).display !== 'none';
+                    }
+                `),
+                15000,
+                250
+            );
+        });
+
+        await evaluate(
             toExpression(`
                 () => {
                     const tabs = Array.from(document.querySelectorAll(
                         '.agent-editor-tab'
                     ));
-                    const active = tabs.find((el) =>
-                        el.classList.contains('active')
-                    );
-                    const transcript = Array.from(
-                        document.querySelectorAll('.agent-message')
-                    ).map((el) => el.textContent || '');
-                    return Boolean(active)
-                        && /#1/.test(active.textContent || '')
-                        && transcript.length > 0;
+                    const target = tabs.find((tab) =>
+                        /#1/.test(tab.textContent || '')
+                    ) || tabs[0];
+                    target?.click();
+                    return Boolean(target);
                 }
-            `),
-            15000,
-            250
+            `)
         );
-    });
+        log('switched-back-first-agent');
+
+        await waitFor('first-agent-restored', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const tabs = Array.from(document.querySelectorAll(
+                            '.agent-editor-tab'
+                        ));
+                        const active = tabs.find((el) =>
+                            el.classList.contains('active')
+                        );
+                        const transcript = Array.from(
+                            document.querySelectorAll('.agent-message')
+                        ).map((el) => el.textContent || '');
+                        return Boolean(active)
+                            && /#1/.test(active.textContent || '')
+                            && transcript.length > 0;
+                    }
+                `),
+                15000,
+                250
+            );
+        });
+    } else {
+        log('restore-tail', 'skipped');
+    }
 
     const finalState = await evaluate(
         toExpression(`
