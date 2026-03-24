@@ -157,6 +157,24 @@ class FailingRuntime extends FakeRuntime {
     }
 }
 
+class SparseCommandsRuntime extends FakeRuntime {
+    constructor(definition, options = {}) {
+        super(definition, options);
+        this.createCount = 0;
+    }
+
+    async createTab(meta) {
+        this.createCount += 1;
+        const tab = await super.createTab(meta);
+        if (this.createCount > 1) {
+            tab.availableCommands = [];
+            tab.availableModes = [];
+        }
+        this.tabs.set(tab.id, { ...tab });
+        return tab;
+    }
+}
+
 function createSocketRecorder() {
     const events = [];
     return {
@@ -360,6 +378,37 @@ describe('AcpManager', () => {
         });
 
         assert.equal(tab.currentModeId, 'review');
+    });
+
+    it('reuses cached runtime commands and modes when a later tab omits them', async () => {
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new SparseCommandsRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const first = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+        const second = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-2'
+        });
+
+        assert.deepEqual(second.availableCommands, first.availableCommands);
+        assert.deepEqual(second.availableModes, first.availableModes);
     });
 
     it('switches modes for an existing agent tab', async () => {

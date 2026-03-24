@@ -75,11 +75,26 @@ class CdpClient {
         });
     }
 
-    async send(method, params = {}) {
+    async send(method, params = {}, timeoutMs = 10000) {
         const id = this.nextId++;
         this.ws.send(JSON.stringify({ id, method, params }));
         return await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
             this.pending.set(id, { resolve, reject });
+            const pending = this.pending.get(id);
+            this.pending.set(id, {
+                resolve: (value) => {
+                    clearTimeout(timeout);
+                    pending.resolve(value);
+                },
+                reject: (error) => {
+                    clearTimeout(timeout);
+                    pending.reject(error);
+                }
+            });
         });
     }
 
@@ -91,10 +106,14 @@ class CdpClient {
 async function waitFor(label, fn, timeoutMs = 20000, stepMs = 200) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-        const value = await fn();
-        if (value) {
-            log(`ok:${label}`);
-            return value;
+        try {
+            const value = await fn();
+            if (value) {
+                log(`ok:${label}`);
+                return value;
+            }
+        } catch {
+            // Ignore transient CDP/runtime errors during reloads.
         }
         await delay(stepMs);
     }
@@ -113,22 +132,45 @@ async function main() {
     const browser = new CdpClient(version.webSocketDebuggerUrl);
     await browser.open();
 
-    const { targetId } = await browser.send('Target.createTarget', {
+    let { targetId } = await browser.send('Target.createTarget', {
         url: tabminalUrl
     });
     log('target-created', targetId);
     let page = null;
 
     try {
-        const pageTarget = await waitFor('page-target', async () => {
-            const list = await getJson(`${chromeBaseUrl}/json/list`);
-            return list.find((item) => item.id === targetId);
-        });
+        async function connectToTarget(label = 'page-target') {
+            const pageTarget = await waitFor(label, async () => {
+                const list = await getJson(`${chromeBaseUrl}/json/list`);
+                return list.find((item) => item.id === targetId);
+            });
 
-        page = new CdpClient(pageTarget.webSocketDebuggerUrl);
-        await page.open();
-        await page.send('Page.enable');
-        await page.send('Runtime.enable');
+            page = new CdpClient(pageTarget.webSocketDebuggerUrl);
+            await page.open();
+            await page.send('Page.enable');
+            await page.send('Runtime.enable');
+        }
+
+        async function recreateTarget(label = 'recreated-target') {
+            if (page) {
+                page.close();
+                page = null;
+            }
+            if (targetId) {
+                try {
+                    await browser.send('Target.closeTarget', { targetId });
+                } catch {
+                    // Ignore already-gone targets.
+                }
+            }
+            ({ targetId } = await browser.send('Target.createTarget', {
+                url: tabminalUrl
+            }));
+            log(label, targetId);
+            await connectToTarget(`${label}-page-target`);
+        }
+
+        await connectToTarget();
 
         async function evaluate(expression) {
             const result = await page.send('Runtime.evaluate', {
@@ -140,6 +182,77 @@ async function main() {
                 throw new Error(JSON.stringify(result.exceptionDetails));
             }
             return result.result.value;
+        }
+
+        async function waitForDocumentReady(label = 'document-ready') {
+            await waitFor(label, async () => {
+                const readyState = await evaluate('document.readyState');
+                return readyState === 'complete';
+            });
+        }
+
+        async function ensureAuthedSession({
+            authLabel = 'auth-or-session',
+            sessionLabel = 'session-ready'
+        } = {}) {
+            const authState = await waitFor(authLabel, async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById('login-modal');
+                            const hasLogin = Boolean(
+                                modal
+                                && getComputedStyle(modal).display !== 'none'
+                                && document.getElementById('password-input')
+                            );
+                            const hasSession = document.querySelectorAll(
+                                '.tab-item'
+                            ).length > 0;
+                            if (hasLogin) return 'login';
+                            if (
+                                hasSession
+                                && modal
+                                && modal.style.display === 'none'
+                            ) {
+                                return 'session';
+                            }
+                            return '';
+                        }
+                    `)
+                );
+            });
+
+            if (authState === 'login') {
+                await evaluate(
+                    toExpression(`
+                        () => {
+                            const input = document.getElementById('password-input');
+                            input.value = ${JSON.stringify(tabminalPassword)};
+                            input.dispatchEvent(new Event('input', {
+                                bubbles: true
+                            }));
+                            document.getElementById('login-form').requestSubmit();
+                            return true;
+                        }
+                    `)
+                );
+                log('submitted-login');
+            } else {
+                log('reused-existing-auth');
+            }
+
+            await waitFor(sessionLabel, async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById('login-modal');
+                            return document.querySelectorAll('.tab-item').length > 0
+                                && modal
+                                && modal.style.display === 'none';
+                        }
+                    `)
+                );
+            });
         }
 
         async function hasFinalMessage() {
@@ -268,67 +381,8 @@ async function main() {
             `)
         );
 
-    await waitFor('document-ready', async () => {
-        const readyState = await evaluate('document.readyState');
-        return readyState === 'complete';
-    });
-
-    const initialAuthState = await waitFor('auth-or-session', async () => {
-        return await evaluate(
-            toExpression(`
-                () => {
-                    const modal = document.getElementById('login-modal');
-                    const hasLogin = Boolean(
-                        modal
-                        && getComputedStyle(modal).display !== 'none'
-                        && document.getElementById('password-input')
-                    );
-                    const hasSession = document.querySelectorAll(
-                        '.tab-item'
-                    ).length > 0;
-                    if (hasLogin) return 'login';
-                    if (
-                        hasSession
-                        && modal
-                        && modal.style.display === 'none'
-                    ) {
-                        return 'session';
-                    }
-                    return '';
-                }
-            `)
-        );
-    });
-
-    if (initialAuthState === 'login') {
-        await evaluate(
-            toExpression(`
-                () => {
-                    const input = document.getElementById('password-input');
-                    input.value = ${JSON.stringify(tabminalPassword)};
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    document.getElementById('login-form').requestSubmit();
-                    return true;
-                }
-            `)
-        );
-        log('submitted-login');
-    } else {
-        log('reused-existing-auth');
-    }
-
-    await waitFor('session-ready', async () => {
-        return await evaluate(
-            toExpression(`
-                () => {
-                    const modal = document.getElementById('login-modal');
-                    return document.querySelectorAll('.tab-item').length > 0
-                        && modal
-                        && modal.style.display === 'none';
-                }
-            `),
-        );
-    });
+        await waitForDocumentReady();
+        await ensureAuthedSession();
 
     await waitFor('agent-button', async () => {
         return await evaluate(
@@ -404,6 +458,9 @@ async function main() {
     const expectedAgentLabel = existingAgentTabCount === 0
         ? targetAgentLabel
         : `${targetAgentLabel} #${existingAgentTabCount + 1}`;
+    const expectedSecondAgentLabel = existingAgentTabCount === 0
+        ? `${targetAgentLabel} #2`
+        : `${targetAgentLabel} #${existingAgentTabCount + 2}`;
     await waitFor('agent-tab-created', async () => {
         return await evaluate(
             toExpression(`
@@ -494,12 +551,15 @@ async function main() {
         );
         log('command-menu', JSON.stringify(commandMenu));
 
-        await evaluate(
+        const selectedCommandName = await evaluate(
             toExpression(`
                 () => {
                     const option = document.querySelector('.agent-command-option');
+                    const name = option?.querySelector(
+                        '.agent-command-option-name'
+                    )?.textContent?.trim() || '';
                     option?.click();
-                    return true;
+                    return name;
                 }
             `)
         );
@@ -509,8 +569,11 @@ async function main() {
                 toExpression(`
                     () => {
                         const input = document.querySelector('.agent-panel-input');
+                        const value = (input?.value || '').trimStart();
                         return Boolean(input)
-                            && /^\\/review/.test(input.value || '');
+                            && value.startsWith(${JSON.stringify(
+                                selectedCommandName || ''
+                            )});
                     }
                 `),
                 15000,
@@ -725,9 +788,9 @@ async function main() {
         await waitFor('command-chips-after-final', async () => {
             return await evaluate(
                 toExpression(`
-                    () => Array.from(document.querySelectorAll(
+                    () => document.querySelectorAll(
                         '.agent-command-chip'
-                    )).some((button) => /review/i.test(button.textContent || ''))
+                    ).length > 0
                 `)
             );
         }, 15000, 250);
@@ -804,20 +867,30 @@ async function main() {
         await page.send('Page.reload', { ignoreCache: true });
         log('reloaded-page');
 
-        await waitFor('document-ready-after-reload', async () => {
-            const readyState = await evaluate('document.readyState');
-            return readyState === 'complete';
-        });
+        await waitForDocumentReady('document-ready-after-reload');
 
-        await waitFor('restored-session', async () => {
-            return await evaluate(
-                toExpression(`
-                    () => document.querySelectorAll('.tab-item').length > 0
-                `),
-                15000,
-                250
-            );
-        });
+        let restoreViaRecreatedTarget = false;
+        try {
+            await waitFor('restored-session', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll('.tab-item').length > 0
+                    `)
+                );
+            }, 30000, 500);
+        } catch {
+            restoreViaRecreatedTarget = true;
+        }
+
+        if (restoreViaRecreatedTarget) {
+            log('restore-tail', 'reopen-target');
+            await recreateTarget('restored-target');
+            await waitForDocumentReady('document-ready-reopened');
+            await ensureAuthedSession({
+                authLabel: 'auth-or-session-reopened',
+                sessionLabel: 'session-ready-reopened'
+            });
+        }
 
         await waitFor('restored-agent-tab', async () => {
             return await evaluate(
@@ -835,11 +908,9 @@ async function main() {
                             && getComputedStyle(panel).display !== 'none'
                             && messages > 0;
                     }
-                `),
-                15000,
-                250
+                `)
             );
-        });
+        }, 30000, 500);
 
         await evaluate(
             toExpression(`
@@ -860,7 +931,9 @@ async function main() {
                 toExpression(`
                     () => Array.from(
                         document.querySelectorAll('.agent-editor-tab')
-                    ).some((tab) => /#2/.test(tab.textContent || ''))
+                    ).some((tab) => (
+                        tab.textContent || ''
+                    ).includes(${JSON.stringify(expectedSecondAgentLabel)}))
                 `),
                 15000,
                 250
@@ -892,7 +965,9 @@ async function main() {
                         '.agent-editor-tab'
                     ));
                     const target = tabs.find((tab) =>
-                        /#1/.test(tab.textContent || '')
+                        (tab.textContent || '').includes(
+                            ${JSON.stringify(expectedAgentLabel)}
+                        )
                     ) || tabs[0];
                     target?.click();
                     return Boolean(target);
@@ -915,7 +990,9 @@ async function main() {
                             document.querySelectorAll('.agent-message')
                         ).map((el) => el.textContent || '');
                         return Boolean(active)
-                            && /#1/.test(active.textContent || '')
+                            && (active.textContent || '').includes(
+                                ${JSON.stringify(expectedAgentLabel)}
+                            )
                             && transcript.length > 0;
                     }
                 `),

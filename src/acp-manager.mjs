@@ -266,6 +266,36 @@ class AcpRuntime extends EventEmitter {
         this.tabs = new Map();
         this.sessionToTabId = new Map();
         this.terminals = new Map();
+        this.cachedAvailableModes = [];
+        this.cachedAvailableCommands = [];
+    }
+
+    #resolveAvailableModes(availableModes, existingModes = []) {
+        if (Array.isArray(availableModes) && availableModes.length > 0) {
+            this.cachedAvailableModes = availableModes;
+            return availableModes;
+        }
+        if (Array.isArray(existingModes) && existingModes.length > 0) {
+            return existingModes;
+        }
+        return this.cachedAvailableModes;
+    }
+
+    #resolveAvailableCommands(availableCommands, existingCommands = []) {
+        if (
+            Array.isArray(availableCommands)
+            && availableCommands.length > 0
+        ) {
+            this.cachedAvailableCommands = availableCommands;
+            return availableCommands;
+        }
+        if (
+            Array.isArray(existingCommands)
+            && existingCommands.length > 0
+        ) {
+            return existingCommands;
+        }
+        return this.cachedAvailableCommands;
     }
 
     #buildTab({
@@ -411,14 +441,20 @@ class AcpRuntime extends EventEmitter {
             cwd: meta.cwd,
             mcpServers: []
         });
+        const availableModes = this.#resolveAvailableModes(
+            response.modes?.availableModes
+        );
+        const availableCommands = this.#resolveAvailableCommands(
+            response.availableCommands
+        );
         const tab = this.#buildTab({
             id: meta.id,
             acpSessionId: response.sessionId,
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
             currentModeId: response.modes?.currentModeId || '',
-            availableModes: response.modes?.availableModes || [],
-            availableCommands: response.availableCommands || []
+            availableModes,
+            availableCommands
         });
         if (meta.modeId && typeof this.connection.setSessionMode === 'function') {
             try {
@@ -481,8 +517,14 @@ class AcpRuntime extends EventEmitter {
                 this.sessionToTabId.set(tab.acpSessionId, tab.id);
             }
             tab.currentModeId = response?.modes?.currentModeId || '';
-            tab.availableModes = response?.modes?.availableModes || [];
-            tab.availableCommands = response?.availableCommands || [];
+            tab.availableModes = this.#resolveAvailableModes(
+                response?.modes?.availableModes,
+                tab.availableModes
+            );
+            tab.availableCommands = this.#resolveAvailableCommands(
+                response?.availableCommands,
+                tab.availableCommands
+            );
             tab.status = 'ready';
             tab.busy = false;
             tab.errorMessage = '';
@@ -699,9 +741,10 @@ class AcpRuntime extends EventEmitter {
         tab.currentModeId = response?.currentModeId
             || response?.modeId
             || modeId;
-        if (Array.isArray(response?.availableModes)) {
-            tab.availableModes = response.availableModes;
-        }
+        tab.availableModes = this.#resolveAvailableModes(
+            response?.availableModes,
+            tab.availableModes
+        );
         this.#broadcast(tab, {
             type: 'session_update',
             update: {
@@ -807,9 +850,10 @@ class AcpRuntime extends EventEmitter {
                 tab.currentModeId = update.currentModeId || update.modeId || '';
                 break;
             case 'available_commands_update':
-                tab.availableCommands = Array.isArray(update.availableCommands)
-                    ? update.availableCommands
-                    : [];
+                tab.availableCommands = this.#resolveAvailableCommands(
+                    update.availableCommands,
+                    tab.availableCommands
+                );
                 break;
             default:
                 break;
@@ -978,12 +1022,14 @@ class AcpRuntime extends EventEmitter {
             if (response?.modes?.currentModeId) {
                 tab.currentModeId = response.modes.currentModeId;
             }
-            if (Array.isArray(response?.modes?.availableModes)) {
-                tab.availableModes = response.modes.availableModes;
-            }
-            if (Array.isArray(response?.availableCommands)) {
-                tab.availableCommands = response.availableCommands;
-            }
+            tab.availableModes = this.#resolveAvailableModes(
+                response?.modes?.availableModes,
+                tab.availableModes
+            );
+            tab.availableCommands = this.#resolveAvailableCommands(
+                response?.availableCommands,
+                tab.availableCommands
+            );
         } catch {
             // Ignore metadata hydration failures for fresh sessions.
         }
@@ -1060,6 +1106,60 @@ export class AcpManager {
         this.persistenceChain = Promise.resolve();
         this.disposing = false;
         this.restoring = false;
+    }
+
+    #applyRuntimeMetadataFallback(runtime, serialized) {
+        if (!serialized || typeof serialized !== 'object') {
+            return serialized;
+        }
+
+        let availableModes = Array.isArray(serialized.availableModes)
+            ? serialized.availableModes
+            : [];
+        let availableCommands = Array.isArray(serialized.availableCommands)
+            ? serialized.availableCommands
+            : [];
+
+        if (
+            (availableModes.length > 0 && availableCommands.length > 0)
+            || !(runtime?.tabs instanceof Map)
+        ) {
+            return serialized;
+        }
+
+        for (const runtimeTab of runtime.tabs.values()) {
+            if (!runtimeTab || typeof runtimeTab !== 'object') continue;
+            if (
+                availableModes.length === 0
+                && Array.isArray(runtimeTab.availableModes)
+                && runtimeTab.availableModes.length > 0
+            ) {
+                availableModes = runtimeTab.availableModes;
+            }
+            if (
+                availableCommands.length === 0
+                && Array.isArray(runtimeTab.availableCommands)
+                && runtimeTab.availableCommands.length > 0
+            ) {
+                availableCommands = runtimeTab.availableCommands;
+            }
+            if (availableModes.length > 0 && availableCommands.length > 0) {
+                break;
+            }
+        }
+
+        if (
+            availableModes === serialized.availableModes
+            && availableCommands === serialized.availableCommands
+        ) {
+            return serialized;
+        }
+
+        return {
+            ...serialized,
+            availableModes,
+            availableCommands
+        };
     }
 
     queuePersistence(operation) {
@@ -1146,19 +1246,27 @@ export class AcpManager {
 
         const tabId = crypto.randomUUID();
         try {
-            const serialized = await runtimeEntry.runtime.createTab({
+            const rawSerialized = await runtimeEntry.runtime.createTab({
                 id: tabId,
                 cwd,
                 terminalSessionId: options.terminalSessionId || '',
                 modeId: options.modeId || ''
             });
+            const serialized = this.#applyRuntimeMetadataFallback(
+                runtimeEntry.runtime,
+                rawSerialized
+            );
             const tabEntry = {
                 runtime: runtimeEntry.runtime,
                 serialize: () => {
                     const tab = runtimeEntry.runtime.tabs.get(tabId);
-                    return tab
+                    const nextSerialized = tab
                         ? runtimeEntry.runtime.serializeTab(tab)
                         : serialized;
+                    return this.#applyRuntimeMetadataFallback(
+                        runtimeEntry.runtime,
+                        nextSerialized
+                    );
                 }
             };
             this.tabs.set(tabId, tabEntry);
@@ -1228,17 +1336,25 @@ export class AcpManager {
             }
 
             try {
-                const serialized = await runtimeEntry.runtime.restoreTab({
+                const rawSerialized = await runtimeEntry.runtime.restoreTab({
                     ...meta,
                     cwd
                 });
+                const serialized = this.#applyRuntimeMetadataFallback(
+                    runtimeEntry.runtime,
+                    rawSerialized
+                );
                 this.tabs.set(meta.id, {
                     runtime: runtimeEntry.runtime,
                     serialize: () => {
                         const tab = runtimeEntry.runtime.tabs.get(meta.id);
-                        return tab
+                        const nextSerialized = tab
                             ? runtimeEntry.runtime.serializeTab(tab)
                             : serialized;
+                        return this.#applyRuntimeMetadataFallback(
+                            runtimeEntry.runtime,
+                            nextSerialized
+                        );
                     }
                 });
             } catch (error) {
