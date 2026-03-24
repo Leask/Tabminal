@@ -147,6 +147,12 @@ class FakeRuntime extends EventEmitter {
     }
 }
 
+class FailingRuntime extends FakeRuntime {
+    async createTab() {
+        throw new Error('Authentication required');
+    }
+}
+
 describe('AcpManager', () => {
     function createManager() {
         let persistedTabs = [];
@@ -333,5 +339,38 @@ describe('AcpManager', () => {
             tabId: tab.id,
             modeId: 'review'
         }]);
+    });
+
+    it('disposes a runtime that fails during initial tab creation', async () => {
+        let runtime = null;
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) => {
+                runtime = new FailingRuntime(definition, options);
+                return runtime;
+            },
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        await assert.rejects(
+            manager.createTab({
+                agentId: 'codex',
+                cwd: '/tmp/project',
+                terminalSessionId: 'term-1'
+            }),
+            /Codex is not authenticated on this host/
+        );
+
+        assert.ok(runtime);
+        assert.equal(runtime.disposed, true);
+        assert.equal(manager.runtimes.size, 0);
     });
 });

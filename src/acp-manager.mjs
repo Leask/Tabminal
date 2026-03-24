@@ -104,6 +104,19 @@ function getDefinitionAvailability(definition) {
     };
 }
 
+function formatAgentStartupError(definition, error) {
+    const rawMessage = error?.message || 'Failed to start agent';
+    if (
+        definition?.id === 'codex'
+        && /authentication required/i.test(rawMessage)
+    ) {
+        return 'Codex is not authenticated on this host. Run `codex login` '
+            + 'for the user running Tabminal, or start Tabminal with a HOME '
+            + 'that already contains Codex auth.';
+    }
+    return rawMessage;
+}
+
 function makeRuntimeKey(agentId, cwd) {
     return `${agentId}::${path.resolve(cwd)}`;
 }
@@ -485,7 +498,8 @@ class AcpRuntime extends EventEmitter {
                 toolCall: item.toolCall,
                 options: item.options,
                 status: item.status,
-                order: item.order
+                order: item.order,
+                selectedOptionId: item.selectedOptionId || ''
             }))
         };
     }
@@ -606,6 +620,7 @@ class AcpRuntime extends EventEmitter {
             throw new Error('Permission request not found');
         }
         permission.status = optionId ? 'selected' : 'cancelled';
+        permission.selectedOptionId = optionId || '';
         if (permission.resolve) {
             permission.resolve({
                 outcome: optionId
@@ -617,7 +632,8 @@ class AcpRuntime extends EventEmitter {
         this.#broadcast(tab, {
             type: 'permission_resolved',
             permissionId,
-            status: permission.status
+            status: permission.status,
+            selectedOptionId: permission.selectedOptionId
         });
     }
 
@@ -866,6 +882,7 @@ class AcpRuntime extends EventEmitter {
             options: params.options,
             status: 'pending',
             order: this.#nextTimelineOrder(tab),
+            selectedOptionId: '',
             resolve: null
         };
         tab.permissions.set(permissionId, request);
@@ -878,7 +895,8 @@ class AcpRuntime extends EventEmitter {
                 toolCall: request.toolCall,
                 options: request.options,
                 status: request.status,
-                order: request.order
+                order: request.order,
+                selectedOptionId: request.selectedOptionId
             }
         });
 
@@ -1016,6 +1034,7 @@ export class AcpManager {
         const cwd = path.resolve(options.cwd || process.cwd());
         const runtimeKey = makeRuntimeKey(definition.id, cwd);
         let runtimeEntry = this.runtimes.get(runtimeKey);
+        let createdRuntime = false;
         if (!runtimeEntry) {
             const runtime = this.runtimeFactory(definition, {
                 cwd,
@@ -1027,6 +1046,7 @@ export class AcpManager {
                 runtimeKey
             };
             this.runtimes.set(runtimeKey, runtimeEntry);
+            createdRuntime = true;
             runtime.on('runtime_exit', () => {
                 if (this.disposing) return;
                 for (const [tabId, tabEntry] of this.tabs.entries()) {
@@ -1039,22 +1059,34 @@ export class AcpManager {
         }
 
         const tabId = crypto.randomUUID();
-        const serialized = await runtimeEntry.runtime.createTab({
-            id: tabId,
-            cwd,
-            terminalSessionId: options.terminalSessionId || '',
-            modeId: options.modeId || ''
-        });
-        const tabEntry = {
-            runtime: runtimeEntry.runtime,
-            serialize: () => {
-                const tab = runtimeEntry.runtime.tabs.get(tabId);
-                return tab ? runtimeEntry.runtime.serializeTab(tab) : serialized;
+        try {
+            const serialized = await runtimeEntry.runtime.createTab({
+                id: tabId,
+                cwd,
+                terminalSessionId: options.terminalSessionId || '',
+                modeId: options.modeId || ''
+            });
+            const tabEntry = {
+                runtime: runtimeEntry.runtime,
+                serialize: () => {
+                    const tab = runtimeEntry.runtime.tabs.get(tabId);
+                    return tab
+                        ? runtimeEntry.runtime.serializeTab(tab)
+                        : serialized;
+                }
+            };
+            this.tabs.set(tabId, tabEntry);
+            await this.persistTabs();
+            return tabEntry.serialize();
+        } catch (error) {
+            const shouldDisposeRuntime = createdRuntime
+                || runtimeEntry.runtime.tabs.size === 0;
+            if (shouldDisposeRuntime) {
+                this.runtimes.delete(runtimeKey);
+                await runtimeEntry.runtime.dispose().catch(() => {});
             }
-        };
-        this.tabs.set(tabId, tabEntry);
-        await this.persistTabs();
-        return tabEntry.serialize();
+            throw new Error(formatAgentStartupError(definition, error));
+        }
     }
 
     async restoreTabs(validTerminalSessionIds = new Set()) {

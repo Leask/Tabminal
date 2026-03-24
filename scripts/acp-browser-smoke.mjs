@@ -679,8 +679,11 @@ async function main() {
                 const tabs = Array.from(document.querySelectorAll(
                     '.agent-editor-tab'
                 ));
-                tabs[0]?.click();
-                return true;
+                const target = tabs.find((tab) =>
+                    /#1/.test(tab.textContent || '')
+                ) || tabs[0];
+                target?.click();
+                return Boolean(target);
             }
         `)
     );

@@ -1374,7 +1374,7 @@ class EditorManager {
             if (entry.type === 'message') {
                 node = this.buildAgentMessageNode(agentTab, entry.value);
             } else if (entry.type === 'tool') {
-                node = this.buildAgentToolNode(entry.value);
+                node = this.buildAgentToolNode(agentTab, entry.value);
             } else if (entry.type === 'permission') {
                 node = this.buildAgentPermissionNode(agentTab, entry.value);
             }
@@ -1419,9 +1419,14 @@ class EditorManager {
         return item;
     }
 
-    buildAgentToolNode(toolCall) {
+    buildAgentToolNode(agentTab, toolCall) {
         const node = document.createElement('div');
         node.className = 'agent-tool-call';
+
+        const role = document.createElement('div');
+        role.className = 'agent-message-role';
+        role.textContent = buildAgentTimelineRoleLabel(agentTab, 'tool');
+        node.appendChild(role);
 
         const header = document.createElement('div');
         header.className = 'agent-tool-call-header';
@@ -1432,7 +1437,7 @@ class EditorManager {
 
         const status = document.createElement('span');
         status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
-        status.textContent = toolCall.status || 'pending';
+        status.textContent = getAgentStatusLabel(toolCall.status);
 
         header.appendChild(title);
         header.appendChild(status);
@@ -1471,6 +1476,16 @@ class EditorManager {
         const card = document.createElement('div');
         card.className = 'agent-permission-card';
 
+        const role = document.createElement('div');
+        role.className = 'agent-message-role';
+        role.textContent = buildAgentTimelineRoleLabel(
+            agentTab,
+            permission.status === 'pending'
+                ? 'permission request'
+                : 'permission'
+        );
+        card.appendChild(role);
+
         const titleRow = document.createElement('div');
         titleRow.className = 'agent-tool-call-header';
 
@@ -1482,7 +1497,7 @@ class EditorManager {
         status.className = `agent-status-pill ${normalizeStatusClass(
             permission.status || 'pending'
         )}`;
-        status.textContent = permission.status || 'pending';
+        status.textContent = getAgentPermissionStatusLabel(permission);
 
         titleRow.appendChild(title);
         titleRow.appendChild(status);
@@ -1793,9 +1808,10 @@ function openAgentDropdown(session, anchor) {
         button.appendChild(meta);
         button.onclick = async (event) => {
             event.stopPropagation();
-            closeAgentDropdown();
+            button.disabled = true;
             try {
                 await createAgentTab(session, definition.id);
+                closeAgentDropdown();
                 if (state.activeSessionKey !== session.key) {
                     await switchToSession(session.key);
                 } else {
@@ -1806,6 +1822,8 @@ function openAgentDropdown(session, anchor) {
                     type: 'error',
                     title: 'Agent'
                 });
+            } finally {
+                button.disabled = definition.available === false;
             }
         };
         agentDropdownEl.appendChild(button);
@@ -2344,6 +2362,9 @@ class AgentTab {
                 const permission = this.permissions.get(message.permissionId);
                 if (permission) {
                     permission.status = message.status || permission.status;
+                    permission.selectedOptionId = message.selectedOptionId
+                        || permission.selectedOptionId
+                        || '';
                 }
                 break;
             }
@@ -2762,6 +2783,10 @@ function getAgentDisplayLabel(agentTab) {
     return `${agentTab.agentLabel || 'Agent'} #${suffix}`;
 }
 
+function buildAgentTimelineRoleLabel(agentTab, kind) {
+    return `${getAgentBaseName(agentTab)} · ${kind}`;
+}
+
 function normalizeStatusClass(status = '') {
     const value = String(status || 'pending').toLowerCase();
     if (
@@ -2782,6 +2807,45 @@ function normalizeStatusClass(status = '') {
         return 'running';
     }
     return 'pending';
+}
+
+function getAgentStatusLabel(status = '') {
+    const value = String(status || 'pending').toLowerCase();
+    if (value.includes('approve')) return 'allowed';
+    if (value.includes('select')) return 'allowed';
+    if (value.includes('abort')) return 'denied';
+    if (value.includes('complete') || value.includes('success')) {
+        return 'completed';
+    }
+    if (value.includes('cancel')) return 'cancelled';
+    if (value.includes('error') || value.includes('fail')) return 'error';
+    if (value.includes('run') || value.includes('progress')) return 'running';
+    return 'pending';
+}
+
+function getPermissionOptionById(permission, optionId) {
+    if (!optionId) return null;
+    return Array.isArray(permission?.options)
+        ? permission.options.find(
+            (option) => (option.optionId || option.id || '') === optionId
+        ) || null
+        : null;
+}
+
+function getAgentPermissionStatusLabel(permission) {
+    const status = String(permission?.status || 'pending').toLowerCase();
+    const selected = getPermissionOptionById(
+        permission,
+        permission?.selectedOptionId || ''
+    );
+    const kind = String(selected?.kind || '').toLowerCase();
+
+    if (kind === 'allow_always') return 'allowed always';
+    if (kind === 'allow_once') return 'allowed once';
+    if (kind === 'reject_always') return 'denied always';
+    if (kind === 'reject_once') return 'denied';
+    if (status.includes('abort')) return 'denied';
+    return getAgentStatusLabel(status);
 }
 
 function escapeHtml(text) {
@@ -2991,7 +3055,6 @@ function getAgentToolTitle(toolCall) {
 function buildAgentToolMeta(toolCall) {
     const parts = [];
     if (toolCall?.kind) parts.push(toolCall.kind);
-    if (toolCall?.status) parts.push(toolCall.status);
     if (toolCall?.rawInput?.cwd) parts.push(toolCall.rawInput.cwd);
     const paths = extractToolPaths(toolCall);
     if (paths.length > 0) {
@@ -3045,7 +3108,21 @@ function buildAgentPermissionSummary(permission) {
 
 function buildAgentPermissionSections(permission) {
     const sections = buildAgentToolSections(permission?.toolCall || {});
-    const optionLines = Array.isArray(permission?.options)
+    const selectedOption = getPermissionOptionById(
+        permission,
+        permission?.selectedOptionId || ''
+    );
+    if (selectedOption) {
+        sections.push({
+            label: 'Decision',
+            text: selectedOption.name
+                || selectedOption.optionId
+                || selectedOption.kind
+                || 'Selected option'
+        });
+    }
+    const optionLines = permission?.status === 'pending'
+        && Array.isArray(permission?.options)
         ? permission.options.map((option) => {
             const label = option?.name || option?.optionId || '';
             const kind = option?.kind ? ` (${option.kind})` : '';
@@ -3077,6 +3154,12 @@ function buildAgentDefinitionMeta(definition) {
             return `Install or expose: ${definition.commandLabel}`;
         }
         return definition.reason || 'Unavailable';
+    }
+    if (definition.id === 'codex') {
+        return 'Codex ACP adapter · requires codex login on this host';
+    }
+    if (definition.id === 'claude') {
+        return 'Claude Code ACP adapter · requires Claude auth on this host';
     }
     return definition.description || definition.commandLabel || '';
 }
