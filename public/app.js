@@ -1369,142 +1369,160 @@ class EditorManager {
         }
 
         this.agentTranscript.innerHTML = '';
-        for (const message of agentTab.messages) {
-            const item = document.createElement('div');
-            item.className = `agent-message ${message.role} ${message.kind}`;
-
-            const role = document.createElement('div');
-            role.className = 'agent-message-role';
-            role.textContent = getAgentMessageRoleLabel(
-                agentTab,
-                message
-            );
-
-            const body = document.createElement('div');
-            body.className = 'agent-message-body';
-            if (
-                message.role === 'assistant'
-                && message.kind === 'message'
-            ) {
-                body.classList.add('markdown');
-                body.innerHTML = renderAgentMessageMarkdown(message.text || '');
-            } else {
-                body.classList.add('plain');
-                body.textContent = message.text || '';
+        for (const entry of getAgentTimelineItems(agentTab)) {
+            let node = null;
+            if (entry.type === 'message') {
+                node = this.buildAgentMessageNode(agentTab, entry.value);
+            } else if (entry.type === 'tool') {
+                node = this.buildAgentToolNode(entry.value);
+            } else if (entry.type === 'permission') {
+                node = this.buildAgentPermissionNode(agentTab, entry.value);
             }
-
-            item.appendChild(role);
-            item.appendChild(body);
-            this.agentTranscript.appendChild(item);
+            if (node) {
+                this.agentTranscript.appendChild(node);
+            }
         }
         this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
-
         this.agentTools.innerHTML = '';
-        for (const toolCall of agentTab.toolCalls.values()) {
-            const node = document.createElement('div');
-            node.className = 'agent-tool-call';
-
-            const header = document.createElement('div');
-            header.className = 'agent-tool-call-header';
-
-            const title = document.createElement('div');
-            title.className = 'agent-tool-call-title';
-            title.textContent = getAgentToolTitle(toolCall);
-
-            const status = document.createElement('span');
-            status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
-            status.textContent = toolCall.status || 'pending';
-
-            header.appendChild(title);
-            header.appendChild(status);
-            node.appendChild(header);
-
-            const meta = document.createElement('div');
-            meta.className = 'agent-tool-call-meta';
-            meta.textContent = buildAgentToolMeta(toolCall);
-            if (meta.textContent) {
-                node.appendChild(meta);
-            }
-
-            const sections = buildAgentToolSections(toolCall);
-            if (sections.length > 0) {
-                const sectionContainer = document.createElement('div');
-                sectionContainer.className = 'agent-tool-call-sections';
-                for (const section of sections) {
-                    const details = document.createElement('details');
-                    details.className = 'agent-tool-call-section';
-                    const summary = document.createElement('summary');
-                    summary.textContent = section.label;
-                    const body = document.createElement('pre');
-                    body.className = 'agent-tool-call-body';
-                    body.textContent = section.text;
-                    details.appendChild(summary);
-                    details.appendChild(body);
-                    sectionContainer.appendChild(details);
-                }
-                node.appendChild(sectionContainer);
-            }
-            this.agentTools.appendChild(node);
-        }
-        this.agentTools.style.display = this.agentTools.children.length > 0
-            ? 'flex'
-            : 'none';
-
+        this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
-        for (const permission of agentTab.permissions.values()) {
-            if (permission.status !== 'pending') continue;
-            const card = document.createElement('div');
-            card.className = 'agent-permission-card';
+        this.agentPermissions.style.display = 'none';
 
-            const titleRow = document.createElement('div');
-            titleRow.className = 'agent-tool-call-header';
+        this.agentPrompt.disabled = false;
+        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
+        this.updateAgentComposerActions(agentTab);
+    }
 
-            const title = document.createElement('div');
-            title.className = 'agent-permission-title';
-            title.textContent = getAgentPermissionTitle(permission);
+    buildAgentMessageNode(agentTab, message) {
+        const item = document.createElement('div');
+        item.className = `agent-message ${message.role} ${message.kind}`;
 
-            const status = document.createElement('span');
-            status.className = 'agent-status-pill pending';
-            status.textContent = 'pending';
+        const role = document.createElement('div');
+        role.className = 'agent-message-role';
+        role.textContent = getAgentMessageRoleLabel(agentTab, message);
 
-            titleRow.appendChild(title);
-            titleRow.appendChild(status);
-            card.appendChild(titleRow);
+        const body = document.createElement('div');
+        body.className = 'agent-message-body';
+        if (
+            message.role === 'assistant'
+            && message.kind === 'message'
+        ) {
+            body.classList.add('markdown');
+            body.innerHTML = renderAgentMessageMarkdown(message.text || '');
+        } else {
+            body.classList.add('plain');
+            body.textContent = message.text || '';
+        }
 
-            const meta = document.createElement('div');
-            meta.className = 'agent-tool-call-meta';
-            meta.textContent = buildAgentPermissionMeta(permission);
-            if (meta.textContent) {
-                card.appendChild(meta);
-            }
+        item.appendChild(role);
+        item.appendChild(body);
+        return item;
+    }
 
-            const summaryText = buildAgentPermissionSummary(permission);
-            if (summaryText) {
+    buildAgentToolNode(toolCall) {
+        const node = document.createElement('div');
+        node.className = 'agent-tool-call';
+
+        const header = document.createElement('div');
+        header.className = 'agent-tool-call-header';
+
+        const title = document.createElement('div');
+        title.className = 'agent-tool-call-title';
+        title.textContent = getAgentToolTitle(toolCall);
+
+        const status = document.createElement('span');
+        status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
+        status.textContent = toolCall.status || 'pending';
+
+        header.appendChild(title);
+        header.appendChild(status);
+        node.appendChild(header);
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-tool-call-meta';
+        meta.textContent = buildAgentToolMeta(toolCall);
+        if (meta.textContent) {
+            node.appendChild(meta);
+        }
+
+        const sections = buildAgentToolSections(toolCall);
+        if (sections.length > 0) {
+            const sectionContainer = document.createElement('div');
+            sectionContainer.className = 'agent-tool-call-sections';
+            for (const section of sections) {
+                const details = document.createElement('details');
+                details.className = 'agent-tool-call-section';
+                const summary = document.createElement('summary');
+                summary.textContent = section.label;
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
-                body.textContent = summaryText;
-                card.appendChild(body);
+                body.textContent = section.text;
+                details.appendChild(summary);
+                details.appendChild(body);
+                sectionContainer.appendChild(details);
             }
+            node.appendChild(sectionContainer);
+        }
 
-            const sections = buildAgentPermissionSections(permission);
-            if (sections.length > 0) {
-                const sectionContainer = document.createElement('div');
-                sectionContainer.className = 'agent-tool-call-sections';
-                for (const section of sections) {
-                    const details = document.createElement('details');
-                    details.className = 'agent-tool-call-section';
-                    const summary = document.createElement('summary');
-                    summary.textContent = section.label;
-                    const body = document.createElement('pre');
-                    body.className = 'agent-tool-call-body';
-                    body.textContent = section.text;
-                    details.appendChild(summary);
-                    details.appendChild(body);
-                    sectionContainer.appendChild(details);
-                }
-                card.appendChild(sectionContainer);
+        return node;
+    }
+
+    buildAgentPermissionNode(agentTab, permission) {
+        const card = document.createElement('div');
+        card.className = 'agent-permission-card';
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'agent-tool-call-header';
+
+        const title = document.createElement('div');
+        title.className = 'agent-permission-title';
+        title.textContent = getAgentPermissionTitle(permission);
+
+        const status = document.createElement('span');
+        status.className = `agent-status-pill ${normalizeStatusClass(
+            permission.status || 'pending'
+        )}`;
+        status.textContent = permission.status || 'pending';
+
+        titleRow.appendChild(title);
+        titleRow.appendChild(status);
+        card.appendChild(titleRow);
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-tool-call-meta';
+        meta.textContent = buildAgentPermissionMeta(permission);
+        if (meta.textContent) {
+            card.appendChild(meta);
+        }
+
+        const summaryText = buildAgentPermissionSummary(permission);
+        if (summaryText) {
+            const body = document.createElement('pre');
+            body.className = 'agent-tool-call-body';
+            body.textContent = summaryText;
+            card.appendChild(body);
+        }
+
+        const sections = buildAgentPermissionSections(permission);
+        if (sections.length > 0) {
+            const sectionContainer = document.createElement('div');
+            sectionContainer.className = 'agent-tool-call-sections';
+            for (const section of sections) {
+                const details = document.createElement('details');
+                details.className = 'agent-tool-call-section';
+                const summary = document.createElement('summary');
+                summary.textContent = section.label;
+                const body = document.createElement('pre');
+                body.className = 'agent-tool-call-body';
+                body.textContent = section.text;
+                details.appendChild(summary);
+                details.appendChild(body);
+                sectionContainer.appendChild(details);
             }
+            card.appendChild(sectionContainer);
+        }
 
+        if (permission.status === 'pending') {
             const options = document.createElement('div');
             options.className = 'agent-permission-options';
 
@@ -1514,8 +1532,10 @@ class EditorManager {
                 button.className = 'agent-permission-option';
                 if (option.kind === 'allow_once') {
                     button.classList.add('primary');
-                } else if (option.kind === 'reject_once'
-                    || option.kind === 'reject_always') {
+                } else if (
+                    option.kind === 'reject_once'
+                    || option.kind === 'reject_always'
+                ) {
                     button.classList.add('danger');
                 }
                 const optionId = option.optionId || option.id || '';
@@ -1552,15 +1572,9 @@ class EditorManager {
             };
             options.appendChild(cancelButton);
             card.appendChild(options);
-            this.agentPermissions.appendChild(card);
         }
-        this.agentPermissions.style.display = this.agentPermissions.children.length > 0
-            ? 'flex'
-            : 'none';
 
-        this.agentPrompt.disabled = false;
-        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
-        this.updateAgentComposerActions(agentTab);
+        return card;
     }
 
     async submitActiveAgentPrompt() {
@@ -2681,6 +2695,49 @@ function getAgentMessageRoleLabel(agentTab, message) {
     return `${roleLabel} · ${message.kind || kind}`;
 }
 
+function getAgentTimelineItems(agentTab) {
+    if (!agentTab) return [];
+    const items = [];
+
+    for (const message of agentTab.messages || []) {
+        items.push({
+            type: 'message',
+            order: Number.isFinite(message?.order) ? message.order : 0,
+            value: message
+        });
+    }
+
+    for (const toolCall of agentTab.toolCalls?.values?.() || []) {
+        items.push({
+            type: 'tool',
+            order: Number.isFinite(toolCall?.order) ? toolCall.order : 0,
+            value: toolCall
+        });
+    }
+
+    for (const permission of agentTab.permissions?.values?.() || []) {
+        items.push({
+            type: 'permission',
+            order: Number.isFinite(permission?.order) ? permission.order : 0,
+            value: permission
+        });
+    }
+
+    items.sort((left, right) => {
+        if (left.order !== right.order) {
+            return left.order - right.order;
+        }
+        const typeOrder = {
+            message: 0,
+            tool: 1,
+            permission: 2
+        };
+        return (typeOrder[left.type] || 0) - (typeOrder[right.type] || 0);
+    });
+
+    return items;
+}
+
 function getAgentDisplayLabel(agentTab) {
     if (!agentTab) return 'Agent';
     const session = agentTab.getLinkedSession();
@@ -2707,7 +2764,12 @@ function getAgentDisplayLabel(agentTab) {
 
 function normalizeStatusClass(status = '') {
     const value = String(status || 'pending').toLowerCase();
-    if (value.includes('complete') || value.includes('success')) {
+    if (
+        value.includes('complete')
+        || value.includes('success')
+        || value.includes('select')
+        || value.includes('approve')
+    ) {
         return 'completed';
     }
     if (value.includes('cancel')) {

@@ -268,7 +268,8 @@ class AcpRuntime extends EventEmitter {
             availableModes,
             availableCommands,
             clients: new Set(),
-            messageCounter: 0
+            messageCounter: 0,
+            timelineCounter: 0
         };
     }
 
@@ -483,7 +484,8 @@ class AcpRuntime extends EventEmitter {
                 sessionId: item.sessionId,
                 toolCall: item.toolCall,
                 options: item.options,
-                status: item.status
+                status: item.status,
+                order: item.order
             }))
         };
     }
@@ -724,13 +726,17 @@ class AcpRuntime extends EventEmitter {
                 this.#appendContentChunk(tab, update, 'user', 'message');
                 break;
             case 'tool_call':
-                tab.toolCalls.set(update.toolCallId, { ...update });
+                tab.toolCalls.set(update.toolCallId, {
+                    ...update,
+                    order: this.#nextTimelineOrder(tab)
+                });
                 break;
             case 'tool_call_update': {
                 const previous = tab.toolCalls.get(update.toolCallId) || {
                     toolCallId: update.toolCallId,
                     title: '',
-                    status: 'pending'
+                    status: 'pending',
+                    order: this.#nextTimelineOrder(tab)
                 };
                 tab.toolCalls.set(update.toolCallId, {
                     ...previous,
@@ -797,7 +803,8 @@ class AcpRuntime extends EventEmitter {
             streamKey,
             role,
             kind,
-            text
+            text,
+            order: this.#nextTimelineOrder(tab)
         };
         tab.messages.push(message);
         this.#broadcast(tab, {
@@ -831,7 +838,8 @@ class AcpRuntime extends EventEmitter {
             role: message.role,
             kind: message.kind,
             text: message.text,
-            streamKey: message.streamKey || crypto.randomUUID()
+            streamKey: message.streamKey || crypto.randomUUID(),
+            order: this.#nextTimelineOrder(tab)
         };
         tab.messages.push(entry);
         this.#broadcast(tab, {
@@ -857,6 +865,7 @@ class AcpRuntime extends EventEmitter {
             toolCall: params.toolCall,
             options: params.options,
             status: 'pending',
+            order: this.#nextTimelineOrder(tab),
             resolve: null
         };
         tab.permissions.set(permissionId, request);
@@ -868,7 +877,8 @@ class AcpRuntime extends EventEmitter {
                 sessionId: request.sessionId,
                 toolCall: request.toolCall,
                 options: request.options,
-                status: request.status
+                status: request.status,
+                order: request.order
             }
         });
 
@@ -925,6 +935,11 @@ class AcpRuntime extends EventEmitter {
             tab.syntheticStreams.set(bucketKey, streamKey);
         }
         return streamKey;
+    }
+
+    #nextTimelineOrder(tab) {
+        tab.timelineCounter += 1;
+        return tab.timelineCounter;
     }
 }
 

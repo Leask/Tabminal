@@ -405,18 +405,18 @@ async function main() {
         `)
     );
 
-    await evaluate(
+    const switchedMode = await evaluate(
         toExpression(`
             () => {
                 const select = document.querySelector('.agent-panel-mode-select');
-                if (!select || select.options.length < 2) return false;
+                if (!select || select.options.length < 2) return '';
                 const next = Array.from(select.options).find(
                     (option) => option.value !== select.value
                 );
-                if (!next) return false;
+                if (!next) return '';
                 select.value = next.value;
                 select.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
+                return next.textContent.trim();
             }
         `)
     );
@@ -426,11 +426,20 @@ async function main() {
         return await evaluate(
             toExpression(`
                 () => {
+                    const placeholder = document.querySelector(
+                        '.agent-panel-input'
+                    )?.getAttribute('placeholder') || '';
                     return Array.isArray(window.__fetchLog)
                         && window.__fetchLog.some((entry) =>
                             /\\/api\\/agents\\/tabs\\/[^/]+\\/mode$/.test(
                                 entry.url || ''
                             )
+                        )
+                        || ${
+                            JSON.stringify(switchedMode || '')
+                        }
+                        && placeholder.includes(
+                            ${JSON.stringify(`Mode ${switchedMode || ''}`)}
                         );
                 }
             `),
