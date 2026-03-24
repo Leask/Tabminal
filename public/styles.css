@@ -1531,6 +1531,41 @@ kbd {
     opacity: 0.92;
 }
 
+.agent-tool-call-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.agent-tool-call-section {
+    border: 1px solid rgba(131, 148, 150, 0.18);
+    border-radius: 8px;
+    background-color: rgba(0, 43, 54, 0.28);
+    overflow: hidden;
+}
+
+.agent-tool-call-section > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 6px 9px;
+    color: var(--text-muted);
+    font-size: 10px;
+    user-select: none;
+}
+
+.agent-tool-call-section > summary::-webkit-details-marker {
+    display: none;
+}
+
+.agent-tool-call-section[open] > summary {
+    border-bottom: 1px solid rgba(131, 148, 150, 0.12);
+}
+
+.agent-tool-call-section .agent-tool-call-body {
+    margin: 0;
+    padding: 8px 9px;
+}
+
 .agent-status-pill {
     display: inline-flex;
     align-items: center;
@@ -1587,6 +1622,17 @@ kbd {
     color: var(--text-base);
 }
 
+.agent-permission-option.primary {
+    background-color: rgba(38, 139, 210, 0.24);
+    border-color: rgba(38, 139, 210, 0.55);
+}
+
+.agent-permission-option.danger {
+    background-color: rgba(220, 80, 80, 0.14);
+    border-color: rgba(220, 80, 80, 0.42);
+    color: #ffb0b0;
+}
+
 .agent-panel-transcript {
     flex: 1 1 auto;
     overflow: auto;
@@ -1620,11 +1666,67 @@ kbd {
 
 .agent-message-body {
     margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
     font: inherit;
     font-size: 12px;
     color: var(--text-base);
+}
+
+.agent-message-body.plain {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.agent-message-body.markdown {
+    line-height: 1.55;
+}
+
+.agent-message-body.markdown > :first-child {
+    margin-top: 0;
+}
+
+.agent-message-body.markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.agent-message-body.markdown p,
+.agent-message-body.markdown ul,
+.agent-message-body.markdown pre {
+    margin: 0 0 8px;
+}
+
+.agent-message-body.markdown ul {
+    padding-left: 18px;
+}
+
+.agent-message-body.markdown code {
+    font: inherit;
+    font-size: 11px;
+    background-color: rgba(0, 43, 54, 0.38);
+    border: 1px solid rgba(131, 148, 150, 0.18);
+    border-radius: 6px;
+    padding: 1px 4px;
+}
+
+.agent-message-body.markdown pre {
+    overflow: auto;
+    background-color: rgba(0, 43, 54, 0.34);
+    border: 1px solid rgba(131, 148, 150, 0.16);
+    border-radius: 8px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.agent-message-body.markdown pre code {
+    border: 0;
+    padding: 0;
+    background: transparent;
+}
+
+.agent-message-body.markdown a {
+    color: var(--accent-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .agent-panel-composer {
@@ -1645,6 +1747,47 @@ kbd {
     color: var(--text-highlight);
     font: inherit;
     font-size: 12px;
+}
+
+.agent-command-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid rgba(131, 148, 150, 0.2);
+    border-radius: 10px;
+    background-color: rgba(0, 43, 54, 0.92);
+}
+
+.agent-command-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-base);
+    padding: 7px 9px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.agent-command-option:hover,
+.agent-command-option.active {
+    border-color: rgba(38, 139, 210, 0.34);
+    background-color: rgba(38, 139, 210, 0.12);
+}
+
+.agent-command-option-name {
+    color: var(--text-highlight);
+    font-size: 11px;
+}
+
+.agent-command-option-meta {
+    color: var(--text-muted);
+    font-size: 10px;
 }
 
 .agent-panel-actions {

@@ -190,26 +190,47 @@ async function main() {
         return readyState === 'complete';
     });
 
-    await waitFor('login-input', async () => {
+    const initialAuthState = await waitFor('auth-or-session', async () => {
         return await evaluate(
             toExpression(`
-                () => Boolean(document.getElementById('password-input'))
+                () => {
+                    const modal = document.getElementById('login-modal');
+                    const hasLogin = Boolean(
+                        document.getElementById('password-input')
+                    );
+                    const hasSession = document.querySelectorAll(
+                        '.tab-item'
+                    ).length > 0;
+                    if (hasLogin) return 'login';
+                    if (
+                        hasSession
+                        && modal
+                        && modal.style.display === 'none'
+                    ) {
+                        return 'session';
+                    }
+                    return '';
+                }
             `)
         );
     });
 
-    await evaluate(
-        toExpression(`
-            () => {
-                const input = document.getElementById('password-input');
-                input.value = ${JSON.stringify(tabminalPassword)};
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                document.getElementById('login-form').requestSubmit();
-                return true;
-            }
-        `)
-    );
-    log('submitted-login');
+    if (initialAuthState === 'login') {
+        await evaluate(
+            toExpression(`
+                () => {
+                    const input = document.getElementById('password-input');
+                    input.value = ${JSON.stringify(tabminalPassword)};
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    document.getElementById('login-form').requestSubmit();
+                    return true;
+                }
+            `)
+        );
+        log('submitted-login');
+    } else {
+        log('reused-existing-auth');
+    }
 
     await waitFor('session-ready', async () => {
         return await evaluate(
@@ -318,9 +339,80 @@ async function main() {
     await evaluate(
         toExpression(`
             () => {
+                const input = document.querySelector('.agent-panel-input');
+                input.value = '/re';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return true;
+            }
+        `)
+    );
+
+    await waitFor('command-menu', async () => {
+        return await evaluate(
+            toExpression(`
+                () => document.querySelectorAll(
+                    '.agent-command-option'
+                ).length > 0
+            `),
+            15000,
+            250
+        );
+    });
+
+    const commandMenu = await evaluate(
+        toExpression(`
+            () => Array.from(
+                document.querySelectorAll('.agent-command-option-name')
+            ).map((el) => el.textContent.trim())
+        `)
+    );
+    log('command-menu', JSON.stringify(commandMenu));
+
+    await evaluate(
+        toExpression(`
+            () => {
+                const option = document.querySelector('.agent-command-option');
+                option?.click();
+                return true;
+            }
+        `)
+    );
+
+    await waitFor('command-menu-apply', async () => {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const input = document.querySelector('.agent-panel-input');
+                    return Boolean(input)
+                        && /^\\/review/.test(input.value || '');
+                }
+            `),
+            15000,
+            250
+        );
+    });
+
+    await evaluate(
+        toExpression(`
+            () => {
+                const input = document.querySelector('.agent-panel-input');
+                input.value = '';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return true;
+            }
+        `)
+    );
+
+    await evaluate(
+        toExpression(`
+            () => {
                 const select = document.querySelector('.agent-panel-mode-select');
                 if (!select || select.options.length < 2) return false;
-                select.value = select.options[1].value;
+                const next = Array.from(select.options).find(
+                    (option) => option.value !== select.value
+                );
+                if (!next) return false;
+                select.value = next.value;
                 select.dispatchEvent(new Event('change', { bubbles: true }));
                 return true;
             }

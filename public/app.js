@@ -3,6 +3,7 @@ import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+es
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
 import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
 import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/+esm';
+import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify/+esm';
 import {
     normalizeBaseUrl,
     getServerEndpointKeyFromUrl,
@@ -30,6 +31,8 @@ import {
 // Detect Mobile/Tablet (focus on touch capability for font sizing)
 // Logic: If the device supports touch, we assume it needs larger fonts (14px)
 const IS_MOBILE = navigator.maxTouchPoints > 0;
+
+const AGENT_MESSAGE_MAX_RENDER_BYTES = 64 * 1024;
 
 // #region DOM Elements
 const terminalEl = document.getElementById('terminal');
@@ -477,6 +480,9 @@ class EditorManager {
         this.agentSendButton = null;
         this.agentHint = null;
         this.agentFixedActions = null;
+        this.agentCommandMenu = null;
+        this.agentCommandSuggestions = [];
+        this.agentCommandIndex = 0;
 
         this.initResizer();
         this.initAgentPanel();
@@ -537,6 +543,16 @@ class EditorManager {
 
         this.agentTranscript = document.createElement('div');
         this.agentTranscript.className = 'agent-panel-transcript';
+        this.agentTranscript.addEventListener('click', (event) => {
+            const anchor = event.target.closest('a');
+            if (!anchor) return;
+            const href = anchor.getAttribute('href') || '';
+            if (!href.startsWith('/')) {
+                return;
+            }
+            event.preventDefault();
+            void this.openFile(href);
+        });
 
         const composer = document.createElement('div');
         composer.className = 'agent-panel-composer';
@@ -548,11 +564,48 @@ class EditorManager {
         this.agentPrompt.addEventListener('input', () => {
             this.updateAgentComposerActions();
         });
+        this.agentPrompt.addEventListener('blur', () => {
+            setTimeout(() => {
+                this.hideAgentCommandMenu();
+            }, 120);
+        });
         this.agentPrompt.addEventListener('keydown', (event) => {
             const activeTabKey = this.getActiveWorkspaceTabKey();
             const agentTab = isAgentWorkspaceTabKey(activeTabKey)
                 ? state.agentTabs.get(activeTabKey)
                 : null;
+
+            if (this.agentCommandSuggestions.length > 0) {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    this.moveAgentCommandSelection(1);
+                    return;
+                }
+                if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    this.moveAgentCommandSelection(-1);
+                    return;
+                }
+                if (
+                    event.key === 'Tab'
+                    || (
+                        event.key === 'Enter'
+                        && !event.shiftKey
+                        && !event.altKey
+                        && !event.ctrlKey
+                        && !event.metaKey
+                    )
+                ) {
+                    event.preventDefault();
+                    this.applyAgentCommandSuggestion();
+                    return;
+                }
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this.hideAgentCommandMenu();
+                    return;
+                }
+            }
 
             if (
                 event.ctrlKey
@@ -593,6 +646,10 @@ class EditorManager {
             }
         });
 
+        this.agentCommandMenu = document.createElement('div');
+        this.agentCommandMenu.className = 'agent-command-menu';
+        this.agentCommandMenu.style.display = 'none';
+
         const actions = document.createElement('div');
         actions.className = 'agent-panel-actions';
 
@@ -625,6 +682,7 @@ class EditorManager {
         actions.appendChild(this.agentCommands);
         actions.appendChild(this.agentFixedActions);
         composer.appendChild(this.agentPrompt);
+        composer.appendChild(this.agentCommandMenu);
         composer.appendChild(actions);
 
         this.agentHint = document.createElement('div');
@@ -1321,9 +1379,18 @@ class EditorManager {
                 message
             );
 
-            const body = document.createElement('pre');
+            const body = document.createElement('div');
             body.className = 'agent-message-body';
-            body.textContent = message.text || '';
+            if (
+                message.role === 'assistant'
+                && message.kind === 'message'
+            ) {
+                body.classList.add('markdown');
+                body.innerHTML = renderAgentMessageMarkdown(message.text || '');
+            } else {
+                body.classList.add('plain');
+                body.textContent = message.text || '';
+            }
 
             item.appendChild(role);
             item.appendChild(body);
@@ -1341,7 +1408,7 @@ class EditorManager {
 
             const title = document.createElement('div');
             title.className = 'agent-tool-call-title';
-            title.textContent = toolCall.title || toolCall.toolCallId;
+            title.textContent = getAgentToolTitle(toolCall);
 
             const status = document.createElement('span');
             status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
@@ -1358,12 +1425,23 @@ class EditorManager {
                 node.appendChild(meta);
             }
 
-            const details = buildAgentToolDetails(toolCall);
-            if (details) {
-                const body = document.createElement('pre');
-                body.className = 'agent-tool-call-body';
-                body.textContent = details;
-                node.appendChild(body);
+            const sections = buildAgentToolSections(toolCall);
+            if (sections.length > 0) {
+                const sectionContainer = document.createElement('div');
+                sectionContainer.className = 'agent-tool-call-sections';
+                for (const section of sections) {
+                    const details = document.createElement('details');
+                    details.className = 'agent-tool-call-section';
+                    const summary = document.createElement('summary');
+                    summary.textContent = section.label;
+                    const body = document.createElement('pre');
+                    body.className = 'agent-tool-call-body';
+                    body.textContent = section.text;
+                    details.appendChild(summary);
+                    details.appendChild(body);
+                    sectionContainer.appendChild(details);
+                }
+                node.appendChild(sectionContainer);
             }
             this.agentTools.appendChild(node);
         }
@@ -1382,7 +1460,7 @@ class EditorManager {
 
             const title = document.createElement('div');
             title.className = 'agent-permission-title';
-            title.textContent = permission.toolCall?.title || 'Permission required';
+            title.textContent = getAgentPermissionTitle(permission);
 
             const status = document.createElement('span');
             status.className = 'agent-status-pill pending';
@@ -1399,12 +1477,31 @@ class EditorManager {
                 card.appendChild(meta);
             }
 
-            const details = buildAgentPermissionDetails(permission);
-            if (details) {
+            const summaryText = buildAgentPermissionSummary(permission);
+            if (summaryText) {
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
-                body.textContent = details;
+                body.textContent = summaryText;
                 card.appendChild(body);
+            }
+
+            const sections = buildAgentPermissionSections(permission);
+            if (sections.length > 0) {
+                const sectionContainer = document.createElement('div');
+                sectionContainer.className = 'agent-tool-call-sections';
+                for (const section of sections) {
+                    const details = document.createElement('details');
+                    details.className = 'agent-tool-call-section';
+                    const summary = document.createElement('summary');
+                    summary.textContent = section.label;
+                    const body = document.createElement('pre');
+                    body.className = 'agent-tool-call-body';
+                    body.textContent = section.text;
+                    details.appendChild(summary);
+                    details.appendChild(body);
+                    sectionContainer.appendChild(details);
+                }
+                card.appendChild(sectionContainer);
             }
 
             const options = document.createElement('div');
@@ -1414,6 +1511,12 @@ class EditorManager {
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'agent-permission-option';
+                if (option.kind === 'allow_once') {
+                    button.classList.add('primary');
+                } else if (option.kind === 'reject_once'
+                    || option.kind === 'reject_always') {
+                    button.classList.add('danger');
+                }
                 const optionId = option.optionId || option.id || '';
                 button.textContent = option.name || optionId || 'Allow';
                 button.onclick = async () => {
@@ -1456,8 +1559,6 @@ class EditorManager {
 
         this.agentPrompt.disabled = false;
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
-        this.agentHint.textContent = '';
-        this.agentHint.style.display = 'none';
         this.updateAgentComposerActions(agentTab);
     }
 
@@ -1540,6 +1641,92 @@ class EditorManager {
         const busy = !!activeAgentTab?.busy;
         this.agentSendButton.textContent = busy ? 'Stop' : 'Send';
         this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
+        if (busy) {
+            this.agentHint.textContent = 'Esc stops the current run.';
+            this.agentHint.style.display = '';
+        } else {
+            this.agentHint.textContent = '';
+            this.agentHint.style.display = 'none';
+        }
+        this.renderAgentCommandMenu(activeAgentTab);
+    }
+
+    renderAgentCommandMenu(agentTab = null) {
+        if (!this.agentCommandMenu) return;
+        const suggestions = getAgentCommandSuggestions(
+            agentTab,
+            this.agentPrompt?.value || ''
+        );
+        this.agentCommandSuggestions = suggestions;
+        if (suggestions.length === 0) {
+            this.hideAgentCommandMenu();
+            return;
+        }
+        this.agentCommandIndex = Math.max(
+            0,
+            Math.min(this.agentCommandIndex, suggestions.length - 1)
+        );
+        this.agentCommandMenu.innerHTML = '';
+        for (const [index, command] of suggestions.entries()) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'agent-command-option';
+            if (index === this.agentCommandIndex) {
+                button.classList.add('active');
+            }
+            const name = document.createElement('span');
+            name.className = 'agent-command-option-name';
+            name.textContent = `/${command.name}`;
+            button.appendChild(name);
+            if (command.description) {
+                const meta = document.createElement('span');
+                meta.className = 'agent-command-option-meta';
+                meta.textContent = command.description;
+                button.appendChild(meta);
+            }
+            button.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+            });
+            button.addEventListener('click', () => {
+                this.agentCommandIndex = index;
+                this.applyAgentCommandSuggestion();
+            });
+            this.agentCommandMenu.appendChild(button);
+        }
+        this.agentCommandMenu.style.display = 'flex';
+    }
+
+    hideAgentCommandMenu() {
+        if (!this.agentCommandMenu) return;
+        this.agentCommandSuggestions = [];
+        this.agentCommandIndex = 0;
+        this.agentCommandMenu.style.display = 'none';
+        this.agentCommandMenu.innerHTML = '';
+    }
+
+    moveAgentCommandSelection(delta) {
+        if (this.agentCommandSuggestions.length === 0) return;
+        const nextIndex = this.agentCommandIndex + delta;
+        this.agentCommandIndex = nextIndex < 0
+            ? this.agentCommandSuggestions.length - 1
+            : nextIndex % this.agentCommandSuggestions.length;
+        this.renderAgentCommandMenu(getActiveAgentTab());
+    }
+
+    applyAgentCommandSuggestion() {
+        const command = this.agentCommandSuggestions[this.agentCommandIndex];
+        if (!command) return;
+        const suffix = command.inputHint
+            ? ` ${command.inputHint}`
+            : ' ';
+        this.agentPrompt.focus();
+        this.agentPrompt.value = `/${command.name}${suffix}`;
+        this.agentPrompt.setSelectionRange(
+            this.agentPrompt.value.length,
+            this.agentPrompt.value.length
+        );
+        this.hideAgentCommandMenu();
+        this.updateAgentComposerActions(getActiveAgentTab());
     }
 
     showEmptyState() {
@@ -1585,9 +1772,7 @@ function openAgentDropdown(session, anchor) {
 
         const meta = document.createElement('span');
         meta.className = 'agent-dropdown-meta';
-        meta.textContent = definition.available === false
-            ? (definition.reason || 'Unavailable')
-            : (definition.description || definition.commandLabel || '');
+        meta.textContent = buildAgentDefinitionMeta(definition);
 
         button.appendChild(label);
         button.appendChild(meta);
@@ -1616,6 +1801,11 @@ function openAgentDropdown(session, anchor) {
         empty.className = 'agent-dropdown-empty';
         empty.textContent = 'No agents available';
         agentDropdownEl.appendChild(empty);
+    } else if (definitions.some((definition) => definition.available === false)) {
+        const note = document.createElement('div');
+        note.className = 'agent-dropdown-empty';
+        note.textContent = 'Agents run on the current host. Install or configure them there.';
+        agentDropdownEl.appendChild(note);
     }
 
     const rect = anchor.getBoundingClientRect();
@@ -2394,6 +2584,35 @@ function normalizeAgentCommands(commands) {
         .filter(Boolean);
 }
 
+function getAgentCommandSuggestions(agentTab, promptValue) {
+    if (!agentTab?.availableCommands || agentTab.busy) return [];
+    const source = String(promptValue || '');
+    const trimmed = source.replace(/^\s+/, '');
+    const firstLine = trimmed.split('\n', 1)[0] || '';
+    if (!firstLine.startsWith('/')) return [];
+
+    const commandToken = firstLine.slice(1);
+    if (/\s/.test(commandToken)) return [];
+
+    const query = commandToken.toLowerCase();
+    const commands = normalizeAgentCommands(agentTab.availableCommands);
+    const ranked = commands.filter((command) => {
+        const name = command.name.toLowerCase();
+        return !query || name.startsWith(query) || name.includes(query);
+    });
+
+    ranked.sort((left, right) => {
+        const leftStarts = left.name.toLowerCase().startsWith(query);
+        const rightStarts = right.name.toLowerCase().startsWith(query);
+        if (leftStarts !== rightStarts) {
+            return leftStarts ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+    });
+
+    return ranked.slice(0, 8);
+}
+
 function getCurrentAgentModeLabel(agentTab) {
     const currentModeId = agentTab?.currentModeId || '';
     if (!currentModeId) return '';
@@ -2502,6 +2721,128 @@ function normalizeStatusClass(status = '') {
     return 'pending';
 }
 
+function escapeHtml(text) {
+    return String(text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function renderAgentInlineMarkdown(text) {
+    const source = String(text || '');
+    const pattern = /(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))/g;
+    let result = '';
+    let lastIndex = 0;
+    for (const match of source.matchAll(pattern)) {
+        const [token, codeToken, , linkLabel, linkHref] = match;
+        result += escapeHtml(source.slice(lastIndex, match.index));
+        if (codeToken) {
+            result += `<code>${escapeHtml(codeToken.slice(1, -1))}</code>`;
+        } else if (linkLabel && linkHref) {
+            result += `<a href="${escapeHtml(linkHref)}">${escapeHtml(linkLabel)}</a>`;
+        } else {
+            result += escapeHtml(token);
+        }
+        lastIndex = (match.index || 0) + token.length;
+    }
+    result += escapeHtml(source.slice(lastIndex));
+    return result;
+}
+
+function renderAgentMessageMarkdown(text) {
+    const source = String(text || '').replace(/\r\n/g, '\n');
+    if (!source) return '';
+
+    const lines = source.split('\n');
+    const blocks = [];
+    let paragraph = [];
+    let list = [];
+    let codeFence = null;
+    let codeLines = [];
+
+    const flushParagraph = () => {
+        if (paragraph.length === 0) return;
+        blocks.push(
+            `<p>${paragraph.map(renderAgentInlineMarkdown).join('<br>')}</p>`
+        );
+        paragraph = [];
+    };
+
+    const flushList = () => {
+        if (list.length === 0) return;
+        blocks.push(
+            `<ul>${list.map((item) => (
+                `<li>${renderAgentInlineMarkdown(item)}</li>`
+            )).join('')}</ul>`
+        );
+        list = [];
+    };
+
+    const flushCode = () => {
+        if (codeFence === null) return;
+        const languageClass = codeFence
+            ? ` class="language-${escapeHtml(codeFence)}"`
+            : '';
+        blocks.push(
+            `<pre><code${languageClass}>${escapeHtml(
+                codeLines.join('\n')
+            )}</code></pre>`
+        );
+        codeFence = null;
+        codeLines = [];
+    };
+
+    for (const line of lines) {
+        const fenceMatch = line.match(/^```(.*)$/);
+        if (fenceMatch) {
+            flushParagraph();
+            flushList();
+            if (codeFence === null) {
+                codeFence = fenceMatch[1].trim();
+            } else {
+                flushCode();
+            }
+            continue;
+        }
+
+        if (codeFence !== null) {
+            codeLines.push(line);
+            continue;
+        }
+
+        if (!line.trim()) {
+            flushParagraph();
+            flushList();
+            continue;
+        }
+
+        const listMatch = line.match(/^[-*]\s+(.*)$/);
+        if (listMatch) {
+            flushParagraph();
+            list.push(listMatch[1]);
+            continue;
+        }
+
+        flushList();
+        paragraph.push(line);
+    }
+
+    flushParagraph();
+    flushList();
+    flushCode();
+
+    const html = blocks.join('');
+    return DOMPurify.sanitize(html);
+}
+
+function truncateAgentDetail(text, limit = AGENT_MESSAGE_MAX_RENDER_BYTES) {
+    const value = String(text || '');
+    if (value.length <= limit) return value;
+    return `${value.slice(0, limit)}\n\n…truncated…`;
+}
+
 function extractToolPaths(toolLike) {
     if (!Array.isArray(toolLike?.locations)) return [];
     return toolLike.locations
@@ -2523,9 +2864,72 @@ function summarizeAgentRawInput(rawInput) {
     return JSON.stringify(rawInput, null, 2);
 }
 
+function summarizeAgentRawOutput(rawOutput) {
+    if (!rawOutput || typeof rawOutput !== 'object') return '';
+    const parts = [];
+    if (typeof rawOutput.stdout === 'string' && rawOutput.stdout) {
+        parts.push(`STDOUT\n${rawOutput.stdout}`);
+    }
+    if (typeof rawOutput.stderr === 'string' && rawOutput.stderr) {
+        parts.push(`STDERR\n${rawOutput.stderr}`);
+    }
+    if (
+        typeof rawOutput.aggregated_output === 'string'
+        && rawOutput.aggregated_output
+        && parts.length === 0
+    ) {
+        parts.push(`OUTPUT\n${rawOutput.aggregated_output}`);
+    }
+    if (parts.length > 0) {
+        return truncateAgentDetail(parts.join('\n\n'));
+    }
+    return truncateAgentDetail(JSON.stringify(rawOutput, null, 2));
+}
+
+function summarizeToolCallContent(toolCall) {
+    if (!Array.isArray(toolCall?.content)) return '';
+    const lines = [];
+    for (const item of toolCall.content) {
+        if (item?.type === 'content' && item.content?.type === 'text') {
+            if (item.content.text) {
+                lines.push(item.content.text);
+            }
+            continue;
+        }
+        if (item?.type === 'terminal' && item.terminalId) {
+            lines.push(`Terminal: ${item.terminalId}`);
+            continue;
+        }
+        if (item?.type === 'diff' && item.path) {
+            lines.push(`Diff: ${item.path}`);
+        }
+    }
+    return truncateAgentDetail(lines.join('\n\n'));
+}
+
+function getAgentToolTitle(toolCall) {
+    if (toolCall?.title) return toolCall.title;
+    const command = Array.isArray(toolCall?.rawInput?.command)
+        ? toolCall.rawInput.command.join(' ')
+        : '';
+    if (command) {
+        return command.length > 80
+            ? `${command.slice(0, 77)}...`
+            : command;
+    }
+    if (toolCall?.kind === 'execute') return 'Command execution';
+    if (toolCall?.kind === 'read') return 'Read';
+    if (toolCall?.kind === 'edit') return 'Edit';
+    if (toolCall?.kind === 'search') return 'Search';
+    if (toolCall?.kind === 'fetch') return 'Fetch';
+    return toolCall?.toolCallId || 'Tool call';
+}
+
 function buildAgentToolMeta(toolCall) {
     const parts = [];
     if (toolCall?.kind) parts.push(toolCall.kind);
+    if (toolCall?.status) parts.push(toolCall.status);
+    if (toolCall?.rawInput?.cwd) parts.push(toolCall.rawInput.cwd);
     const paths = extractToolPaths(toolCall);
     if (paths.length > 0) {
         parts.push(paths.length === 1 ? paths[0] : `${paths.length} paths`);
@@ -2533,37 +2937,85 @@ function buildAgentToolMeta(toolCall) {
     return parts.join(' · ');
 }
 
-function buildAgentToolDetails(toolCall) {
-    const lines = [];
+function buildAgentToolSections(toolCall) {
+    const sections = [];
     const paths = extractToolPaths(toolCall);
     if (paths.length > 0) {
-        lines.push(paths.join('\n'));
+        sections.push({
+            label: paths.length === 1 ? 'Path' : 'Paths',
+            text: truncateAgentDetail(paths.join('\n'))
+        });
     }
     const rawInput = summarizeAgentRawInput(toolCall?.rawInput);
     if (rawInput) {
-        lines.push(rawInput);
+        sections.push({
+            label: 'Input',
+            text: truncateAgentDetail(rawInput)
+        });
     }
-    return lines.join('\n\n');
+    const content = summarizeToolCallContent(toolCall);
+    if (content) {
+        sections.push({
+            label: 'Content',
+            text: content
+        });
+    }
+    const rawOutput = summarizeAgentRawOutput(toolCall?.rawOutput);
+    if (rawOutput) {
+        sections.push({
+            label: 'Output',
+            text: rawOutput
+        });
+    }
+    return sections;
 }
 
 function buildAgentPermissionMeta(permission) {
     return buildAgentToolMeta(permission?.toolCall || {});
 }
 
-function buildAgentPermissionDetails(permission) {
-    const toolDetails = buildAgentToolDetails(permission?.toolCall || {});
+function buildAgentPermissionSummary(permission) {
+    const content = summarizeToolCallContent(permission?.toolCall || {});
+    if (content) return content;
+    return '';
+}
+
+function buildAgentPermissionSections(permission) {
+    const sections = buildAgentToolSections(permission?.toolCall || {});
     const optionLines = Array.isArray(permission?.options)
-        ? permission.options
-            .map((option) => option?.name || option?.optionId || '')
-            .filter(Boolean)
+        ? permission.options.map((option) => {
+            const label = option?.name || option?.optionId || '';
+            const kind = option?.kind ? ` (${option.kind})` : '';
+            return `${label}${kind}`;
+        }).filter(Boolean)
         : [];
-    if (toolDetails && optionLines.length > 0) {
-        return `${toolDetails}\n\nOptions:\n${optionLines.join('\n')}`;
-    }
     if (optionLines.length > 0) {
-        return `Options:\n${optionLines.join('\n')}`;
+        sections.push({
+            label: 'Options',
+            text: optionLines.join('\n')
+        });
     }
-    return toolDetails;
+    return sections;
+}
+
+function getAgentPermissionTitle(permission) {
+    return permission?.toolCall?.title
+        || getAgentToolTitle(permission?.toolCall || {})
+        || 'Permission required';
+}
+
+function buildAgentDefinitionMeta(definition) {
+    if (definition.available === false) {
+        if (definition.id === 'gemini'
+            && definition.reason === 'API key missing') {
+            return 'Set GEMINI_API_KEY or GOOGLE_API_KEY on this host';
+        }
+        if (definition.reason === 'not installed') {
+            return `Install or expose: ${definition.commandLabel}`;
+        }
+        return definition.reason || 'Unavailable';
+    }
+    return definition.description || definition.commandLabel || '';
 }
 
 async function throwResponseError(response, fallbackMessage) {
