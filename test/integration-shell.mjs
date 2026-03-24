@@ -131,3 +131,74 @@ test("removing a session deletes persisted files after pending saves", async () 
         manager.dispose();
     }
 });
+
+test("temporary HOME does not inherit host prompt command", async () => {
+    const originalHome = process.env.HOME;
+    const originalPromptCommand = process.env.PROMPT_COMMAND;
+    const originalPs1 = process.env.PS1;
+    const originalPs2 = process.env.PS2;
+    const originalPs4 = process.env.PS4;
+    const tempHome = await fs.mkdtemp(
+        path.join(os.tmpdir(), "tabminal-shell-home-")
+    );
+
+    process.env.HOME = tempHome;
+    process.env.PROMPT_COMMAND = "history -a; history -n; __bash_prompt";
+    process.env.PS1 = "__HOST_PROMPT__";
+    process.env.PS2 = "__HOST_CONT__";
+    process.env.PS4 = "__HOST_TRACE__";
+
+    const manager = new TerminalManager();
+    let session = null;
+
+    try {
+        session = manager.createSession({
+            cwd: tempHome
+        });
+        await waitForInitialExecution(session);
+        await delay(300);
+
+        assert.ok(
+            !/__bash_prompt/.test(session.history),
+            "should not leak inherited PROMPT_COMMAND into shell startup"
+        );
+        assert.ok(
+            !/__HOST_PROMPT__/.test(session.history),
+            "should not leak inherited prompt variables into shell startup"
+        );
+
+        const entry = await runCommand(session, "echo __TEMP_HOME_OK__");
+        assert.ok(entry.output.includes("__TEMP_HOME_OK__"));
+    } finally {
+        if (session) {
+            await manager.removeSession(session.id);
+        }
+        manager.dispose();
+
+        if (originalHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = originalHome;
+        }
+        if (originalPromptCommand === undefined) {
+            delete process.env.PROMPT_COMMAND;
+        } else {
+            process.env.PROMPT_COMMAND = originalPromptCommand;
+        }
+        if (originalPs1 === undefined) {
+            delete process.env.PS1;
+        } else {
+            process.env.PS1 = originalPs1;
+        }
+        if (originalPs2 === undefined) {
+            delete process.env.PS2;
+        } else {
+            process.env.PS2 = originalPs2;
+        }
+        if (originalPs4 === undefined) {
+            delete process.env.PS4;
+        } else {
+            process.env.PS4 = originalPs4;
+        }
+    }
+});
