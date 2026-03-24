@@ -5312,7 +5312,7 @@ if (virtualKeys) {
     // Touch Events
     virtualKeys.addEventListener('touchstart', (e) => {
         const btn = e.target.closest('button');
-        if (btn) {
+        if (btn?.dataset.key) {
             e.preventDefault(); // Prevent ghost clicks and focus loss
             startRepeat(btn);
         }
@@ -5324,7 +5324,7 @@ if (virtualKeys) {
     // Mouse Events (Desktop testing)
     virtualKeys.addEventListener('mousedown', (e) => {
         const btn = e.target.closest('button');
-        if (btn) {
+        if (btn?.dataset.key) {
             e.preventDefault();
             startRepeat(btn);
         }
@@ -5343,6 +5343,20 @@ const softKeyboard = document.getElementById('soft-keyboard');
 
 if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
     const modifiers = { ctrl: false, alt: false, shift: false, sym: false };
+
+    const bindPress = (element, handler) => {
+        if (!element) return;
+        element.addEventListener('touchstart', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handler(event);
+        }, { passive: false });
+        element.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handler(event);
+        });
+    };
     
     // Basic HHKB-like layout (12 keys max)
     const rows = [
@@ -5393,17 +5407,20 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         updateState();
     };
 
-    modCtrl.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('ctrl'); });
-    modAlt.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('alt'); });
-    modShift.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); toggleMod('shift'); });
-    
-    modSym.addEventListener('touchstart', (e) => { 
-        e.preventDefault(); 
-        e.stopPropagation(); 
-        
+    bindPress(modCtrl, () => {
+        toggleMod('ctrl');
+    });
+    bindPress(modAlt, () => {
+        toggleMod('alt');
+    });
+    bindPress(modShift, () => {
+        toggleMod('shift');
+    });
+
+    bindPress(modSym, () => {
         // Smart Toggle: If keyboard is open, close everything. If closed, open sym.
         const isKeyboardVisible = modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.sym;
-        
+
         if (isKeyboardVisible) {
             modifiers.ctrl = false;
             modifiers.alt = false;
@@ -5415,10 +5432,10 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         updateState();
     });
 
-    softKeyboard.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const keyEl = e.target.closest('.soft-key');
+    const handleSoftKeyPress = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const keyEl = event.target.closest('.soft-key');
         if (!keyEl) return;
         
         keyEl.classList.add('active');
@@ -5474,7 +5491,12 @@ if (modCtrl && modAlt && modShift && modSym && softKeyboard) {
         // Shift stays active until toggled off (Continuous input)
         
         updateState();
+    };
+
+    softKeyboard.addEventListener('touchstart', handleSoftKeyPress, {
+        passive: false
     });
+    softKeyboard.addEventListener('mousedown', handleSoftKeyPress);
 }
 
 // Search Bar Logic
