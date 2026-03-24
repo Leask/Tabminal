@@ -3446,6 +3446,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
         server.id,
         Array.isArray(data?.definitions) ? data.definitions : []
     );
+    const restoring = !!data?.restoring;
 
     const seenKeys = new Set();
     for (const tabData of data?.tabs || []) {
@@ -3454,12 +3455,18 @@ async function syncAgentsForServer(server, { force = false } = {}) {
         upsertAgentTab(server, tabData);
     }
 
-    for (const agentTab of getAgentTabsForServer(server.id)) {
-        if (seenKeys.has(agentTab.key)) continue;
-        removeAgentTab(agentTab.key);
+    if (!restoring) {
+        for (const agentTab of getAgentTabsForServer(server.id)) {
+            if (seenKeys.has(agentTab.key)) continue;
+            removeAgentTab(agentTab.key);
+        }
     }
 
-    server.agentStateLoaded = true;
+    server.agentStateLoaded = !restoring;
+    if (restoring) {
+        return;
+    }
+
     const activeSession = getActiveSession();
     const sessions = getSessionsForServer(server.id);
     for (const session of sessions) {

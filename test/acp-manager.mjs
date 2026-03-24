@@ -314,6 +314,15 @@ describe('AcpManager', () => {
         }]);
     });
 
+    it('reports restoring state through listState', async () => {
+        const { manager } = createManager();
+        manager.restoring = true;
+
+        const state = await manager.listState();
+
+        assert.equal(state.restoring, true);
+    });
+
     it('creates tabs with an initial mode when requested', async () => {
         const { manager } = createManager();
         const tab = await manager.createTab({

@@ -998,6 +998,7 @@ export class AcpManager {
         this.saveTabs = options.saveTabs || persistence.saveAgentTabs;
         this.persistenceChain = Promise.resolve();
         this.disposing = false;
+        this.restoring = false;
     }
 
     queuePersistence(operation) {
@@ -1041,6 +1042,7 @@ export class AcpManager {
 
     async listState() {
         return {
+            restoring: this.restoring,
             definitions: await this.listDefinitions(),
             tabs: Array.from(this.tabs.values()).map((entry) => entry.serialize())
         };

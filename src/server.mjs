@@ -135,14 +135,19 @@ const acpManager = new AcpManager();
 
 // Restore sessions
 (async () => {
-    const restoredSessions = await persistence.loadSessions();
-    if (restoredSessions.length > 0) {
-        console.log(`[Server] Restoring ${restoredSessions.length} sessions...`);
-        for (const data of restoredSessions) {
-            terminalManager.createSession(data);
+    acpManager.restoring = true;
+    try {
+        const restoredSessions = await persistence.loadSessions();
+        if (restoredSessions.length > 0) {
+            console.log(`[Server] Restoring ${restoredSessions.length} sessions...`);
+            for (const data of restoredSessions) {
+                terminalManager.createSession(data);
+            }
         }
+        await acpManager.restoreTabs(new Set(terminalManager.sessions.keys()));
+    } finally {
+        acpManager.restoring = false;
     }
-    await acpManager.restoreTabs(new Set(terminalManager.sessions.keys()));
 })();
 
 // Setup FS Routes
