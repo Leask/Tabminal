@@ -13,6 +13,11 @@ const finalMessagePattern = process.env.TABMINAL_FINAL_MESSAGE_PATTERN
     || 'all set';
 const screenshotPath = process.env.TABMINAL_SMOKE_SCREENSHOT
     || '/tmp/tabminal-acp-ui-smoke.png';
+const expectTool = process.env.TABMINAL_EXPECT_TOOL === '1';
+const expectCommandsAfterFinal = process.env.TABMINAL_EXPECT_COMMANDS_AFTER_FINAL
+    === '1';
+const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
+    !== '0';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -161,6 +166,35 @@ async function main() {
                 () => document.querySelectorAll(
                     '.agent-permission-card .agent-permission-option'
                 ).length > 0
+            `)
+        );
+    }
+
+    async function readComposerHint() {
+        return await evaluate(
+            toExpression(`
+                () => {
+                    const pill = document.querySelector(
+                        '.agent-panel-hint .agent-status-pill'
+                    );
+                    const summary = document.querySelector(
+                        '.agent-panel-hint-summary'
+                    );
+                    const hotkey = document.querySelector(
+                        '.agent-panel-hint-hotkey'
+                    );
+                    return {
+                        pill: pill?.textContent?.trim() || '',
+                        summary: summary?.textContent?.trim() || '',
+                        hotkey: hotkey?.textContent?.trim() || '',
+                        visible: !!(
+                            document.querySelector('.agent-panel-hint')
+                            && getComputedStyle(
+                                document.querySelector('.agent-panel-hint')
+                            ).display !== 'none'
+                        )
+                    };
+                }
             `)
         );
     }
@@ -358,9 +392,9 @@ async function main() {
     }
     log('picked-agent', picked);
 
-    const expectedAgentLabel = `${targetAgentLabel} #${
-        existingAgentTabCount + 1
-    }`;
+    const expectedAgentLabel = existingAgentTabCount === 0
+        ? targetAgentLabel
+        : `${targetAgentLabel} #${existingAgentTabCount + 1}`;
     await waitFor('agent-tab-created', async () => {
         return await evaluate(
             toExpression(`
@@ -418,61 +452,65 @@ async function main() {
     );
     log('panel-details', JSON.stringify(panelDetails));
 
-    await evaluate(
-        toExpression(`
-            () => {
-                const input = document.querySelector('.agent-panel-input');
-                input.value = '/re';
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                return true;
-            }
-        `)
-    );
-
-    await waitFor('command-menu', async () => {
-        return await evaluate(
-            toExpression(`
-                () => document.querySelectorAll(
-                    '.agent-command-option'
-                ).length > 0
-            `),
-            15000,
-            250
-        );
-    });
-
-    const commandMenu = await evaluate(
-        toExpression(`
-            () => Array.from(
-                document.querySelectorAll('.agent-command-option-name')
-            ).map((el) => el.textContent.trim())
-        `)
-    );
-    log('command-menu', JSON.stringify(commandMenu));
-
-    await evaluate(
-        toExpression(`
-            () => {
-                const option = document.querySelector('.agent-command-option');
-                option?.click();
-                return true;
-            }
-        `)
-    );
-
-    await waitFor('command-menu-apply', async () => {
-        return await evaluate(
+    if (requireInitialCommands || panelDetails.commandChips.length > 0) {
+        await evaluate(
             toExpression(`
                 () => {
                     const input = document.querySelector('.agent-panel-input');
-                    return Boolean(input)
-                        && /^\\/review/.test(input.value || '');
+                    input.value = '/re';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    return true;
                 }
-            `),
-            15000,
-            250
+            `)
         );
-    });
+
+        await waitFor('command-menu', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll(
+                        '.agent-command-option'
+                    ).length > 0
+                `),
+                15000,
+                250
+            );
+        });
+
+        const commandMenu = await evaluate(
+            toExpression(`
+                () => Array.from(
+                    document.querySelectorAll('.agent-command-option-name')
+                ).map((el) => el.textContent.trim())
+            `)
+        );
+        log('command-menu', JSON.stringify(commandMenu));
+
+        await evaluate(
+            toExpression(`
+                () => {
+                    const option = document.querySelector('.agent-command-option');
+                    option?.click();
+                    return true;
+                }
+            `)
+        );
+
+        await waitFor('command-menu-apply', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const input = document.querySelector('.agent-panel-input');
+                        return Boolean(input)
+                            && /^\\/review/.test(input.value || '');
+                    }
+                `),
+                15000,
+                250
+            );
+        });
+    } else {
+        log('command-menu', 'skipped-initially-unavailable');
+    }
 
     await evaluate(
         toExpression(`
@@ -519,7 +557,7 @@ async function main() {
                             JSON.stringify(switchedMode || '')
                         }
                         && placeholder.includes(
-                            ${JSON.stringify(`Mode ${switchedMode || ''}`)}
+                            ${JSON.stringify(switchedMode || '')}
                         );
                 }
             `),
@@ -544,6 +582,17 @@ async function main() {
     );
     log('submitted-agent-prompt');
 
+    await waitFor('active-hint', async () => {
+        const hint = await readComposerHint();
+        const activeState = /starting|running|responding/i.test(hint.pill)
+            || /needs approval/i.test(hint.pill);
+        const activeSummary = /working|waiting on|waiting for|drafting|summarizing/i
+            .test(hint.summary);
+        return activeState
+            && activeSummary
+            && /Esc stops/i.test(hint.hotkey);
+    });
+
     const fetchLogAfterPrompt = await evaluate(
         toExpression(`
             () => Array.isArray(window.__fetchLog)
@@ -558,6 +607,24 @@ async function main() {
     });
 
     if (await hasPermissionRequest()) {
+        await waitFor('permission-hint', async () => {
+            const hint = await readComposerHint();
+            return /needs approval/i.test(hint.pill)
+                && /waiting on/i.test(hint.summary);
+        });
+
+        await waitFor('permission-sections-expanded', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => Array.from(document.querySelectorAll(
+                        '.agent-permission-card details'
+                    )).some((details) => details.open)
+                `),
+                15000,
+                250
+            );
+        });
+
         const permissionOptions = await evaluate(
             toExpression(`
                 () => Array.from(document.querySelectorAll(
@@ -580,6 +647,11 @@ async function main() {
             `)
         );
         log('resolved-permission');
+
+        await waitFor('post-permission-running-hint', async () => {
+            const hint = await readComposerHint();
+            return /running|ready/i.test(hint.pill);
+        });
     } else {
         log('permission-options', '[]');
         log('resolved-permission', 'not-required');
@@ -588,6 +660,34 @@ async function main() {
     await waitFor('final-message', async () => {
         return await hasFinalMessage();
     });
+
+    if (expectTool) {
+        await waitFor('tool-call', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll('.agent-tool-call').length > 0
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    await waitFor('ready-hint-after-final', async () => {
+        const hint = await readComposerHint();
+        return /ready/i.test(hint.pill)
+            && /next turn/i.test(hint.summary);
+    });
+
+    if (expectCommandsAfterFinal) {
+        await waitFor('command-chips-after-final', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => Array.from(document.querySelectorAll(
+                        '.agent-command-chip'
+                    )).some((button) => /review/i.test(button.textContent || ''))
+                `)
+            );
+        }, 15000, 250);
+    }
 
     await evaluate(
         toExpression(`
@@ -642,12 +742,13 @@ async function main() {
                     const sendButton = Array.from(
                         document.querySelectorAll('.agent-panel-button')
                     ).find((el) => /send/i.test(el.textContent || ''));
-                    const placeholder = document.querySelector(
-                        '.agent-panel-input'
-                    )?.getAttribute('placeholder') || '';
                     return Boolean(sendButton)
                         && /send/i.test(sendButton.textContent || '')
-                        && /Status ready/i.test(placeholder);
+                        && /ready/i.test(
+                            document.querySelector(
+                                '.agent-panel-hint .agent-status-pill'
+                            )?.textContent || ''
+                        );
                 }
             `),
             15000,

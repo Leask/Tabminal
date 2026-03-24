@@ -65,8 +65,10 @@ const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const FILE_WORKSPACE_TAB_PREFIX = 'file:';
 const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
+const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
+const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -88,9 +90,17 @@ function isAgentWorkspaceTabKey(key) {
         && key.startsWith(AGENT_WORKSPACE_TAB_PREFIX);
 }
 
+function isTerminalWorkspaceTabKey(key) {
+    return key === TERMINAL_WORKSPACE_TAB_KEY;
+}
+
 function isFileWorkspaceTabKey(key) {
     return typeof key === 'string'
         && key.startsWith(FILE_WORKSPACE_TAB_PREFIX);
+}
+
+function isCompactWorkspaceMode() {
+    return !!window.__tabminalCompactWorkspaceMode;
 }
 
 function workspaceKeyToFilePath(key) {
@@ -120,7 +130,7 @@ if (sidebarToggle && sidebar && sidebarOverlay) {
     if (tabListEl) {
         tabListEl.addEventListener('click', (e) => {
             // Only close if we actually clicked a tab item (not empty space)
-            if (e.target.closest('.tab-item') && window.innerWidth < 768) {
+            if (e.target.closest('.tab-item') && isCompactWorkspaceMode()) {
                 closeSidebar();
             }
         });
@@ -466,6 +476,12 @@ class EditorManager {
         this.imagePreviewContainer = document.getElementById('image-preview-container');
         this.imagePreview = document.getElementById('image-preview');
         this.emptyState = document.getElementById('empty-editor-state');
+        this.terminalWrapper = terminalWrapper;
+        this.terminalOriginalParent = terminalWrapper?.parentElement || null;
+        this.terminalOriginalNextSibling = terminalWrapper?.nextSibling || null;
+        this.terminalTabHost = document.createElement('div');
+        this.terminalTabHost.className = 'terminal-tab-host';
+        this.contentContainer.appendChild(this.terminalTabHost);
         this.agentContainer = null;
         this.agentHeader = null;
         this.agentMeta = null;
@@ -488,6 +504,81 @@ class EditorManager {
         this.initAgentPanel();
         this.initMonaco();
         this.loadIconMap();
+    }
+
+    hasCompactWorkspaceTabs(session = this.currentSession) {
+        return !!session && isCompactWorkspaceMode();
+    }
+
+    getPreferredNonTerminalWorkspaceTabKey(session = this.currentSession) {
+        if (!session) return '';
+
+        const lastNonTerminal = session.workspaceState?.lastNonTerminalTabKey;
+        if (isAgentWorkspaceTabKey(lastNonTerminal)) {
+            if (state.agentTabs.has(lastNonTerminal)) {
+                return lastNonTerminal;
+            }
+        } else if (isFileWorkspaceTabKey(lastNonTerminal)) {
+            const filePath = workspaceKeyToFilePath(lastNonTerminal);
+            if (session.editorState.openFiles.includes(filePath)) {
+                return lastNonTerminal;
+            }
+        }
+
+        const activeFilePath = session.editorState.activeFilePath;
+        if (
+            activeFilePath
+            && session.editorState.openFiles.includes(activeFilePath)
+        ) {
+            return makeFileWorkspaceTabKey(activeFilePath);
+        }
+
+        const agentTabs = getAgentTabsForSession(session);
+        if (agentTabs.length > 0) {
+            return agentTabs[0].key;
+        }
+
+        if (session.editorState.openFiles.length > 0) {
+            return makeFileWorkspaceTabKey(
+                session.editorState.openFiles[
+                    session.editorState.openFiles.length - 1
+                ]
+            );
+        }
+
+        return '';
+    }
+
+    syncTerminalWorkspacePlacement(
+        activeKey = this.getActiveWorkspaceTabKey(this.currentSession)
+    ) {
+        if (!this.terminalWrapper || !this.terminalTabHost) return;
+
+        const compact = this.hasCompactWorkspaceTabs(this.currentSession);
+        const terminalActive = compact && isTerminalWorkspaceTabKey(activeKey);
+
+        if (terminalActive) {
+            if (this.terminalWrapper.parentElement !== this.terminalTabHost) {
+                this.terminalTabHost.appendChild(this.terminalWrapper);
+            }
+            this.terminalTabHost.style.display = 'flex';
+            this.terminalWrapper.style.display = 'flex';
+            this.terminalWrapper.classList.add('workspace-tab-active');
+        } else {
+            this.terminalTabHost.style.display = 'none';
+            this.terminalWrapper.classList.remove('workspace-tab-active');
+            if (
+                this.terminalOriginalParent
+                && this.terminalWrapper.parentElement
+                    !== this.terminalOriginalParent
+            ) {
+                this.terminalOriginalParent.insertBefore(
+                    this.terminalWrapper,
+                    this.terminalOriginalNextSibling
+                );
+            }
+            this.terminalWrapper.style.display = compact ? 'none' : 'flex';
+        }
     }
 
     initAgentPanel() {
@@ -687,6 +778,15 @@ class EditorManager {
 
         this.agentHint = document.createElement('div');
         this.agentHint.className = 'agent-panel-hint';
+        this.agentHintStatus = document.createElement('span');
+        this.agentHintStatus.className = 'agent-status-pill ready';
+        this.agentHintSummary = document.createElement('span');
+        this.agentHintSummary.className = 'agent-panel-hint-summary';
+        this.agentHintHotkey = document.createElement('span');
+        this.agentHintHotkey.className = 'agent-panel-hint-hotkey';
+        this.agentHint.appendChild(this.agentHintStatus);
+        this.agentHint.appendChild(this.agentHintSummary);
+        this.agentHint.appendChild(this.agentHintHotkey);
         composer.appendChild(this.agentHint);
 
         this.agentContainer.appendChild(header);
@@ -700,6 +800,10 @@ class EditorManager {
     getActiveWorkspaceTabKey(session = this.currentSession) {
         if (!session) return '';
         const explicitKey = session.workspaceState?.activeTabKey || '';
+        const compact = this.hasCompactWorkspaceTabs(session);
+        if (compact && isTerminalWorkspaceTabKey(explicitKey)) {
+            return explicitKey;
+        }
         if (explicitKey) {
             if (
                 isAgentWorkspaceTabKey(explicitKey)
@@ -716,11 +820,24 @@ class EditorManager {
                 return explicitKey;
             }
         }
+        if (!compact && isTerminalWorkspaceTabKey(explicitKey)) {
+            const fallback = this.getPreferredNonTerminalWorkspaceTabKey(
+                session
+            );
+            session.workspaceState.activeTabKey = fallback;
+            return fallback;
+        }
         if (session.editorState.activeFilePath) {
             return makeFileWorkspaceTabKey(session.editorState.activeFilePath);
         }
         const agentTabs = getAgentTabsForSession(session);
-        return agentTabs[0]?.key || '';
+        if (agentTabs.length > 0) {
+            return agentTabs[0].key;
+        }
+        if (compact) {
+            return TERMINAL_WORKSPACE_TAB_KEY;
+        }
+        return '';
     }
 
     getModelStore(session = this.currentSession) {
@@ -878,10 +995,14 @@ class EditorManager {
         const state = this.currentSession.editorState;
         const hasOpenFiles = state.openFiles.length > 0;
         const hasAgentTabs = getAgentTabsForSession(this.currentSession).length > 0;
-        const shouldShow = state.isVisible && (hasOpenFiles || hasAgentTabs);
+        const compact = this.hasCompactWorkspaceTabs(this.currentSession);
+        const shouldShow = compact
+            ? true
+            : state.isVisible && (hasOpenFiles || hasAgentTabs);
         
         this.pane.style.display = shouldShow ? 'flex' : 'none';
-        this.resizer.style.display = shouldShow ? 'flex' : 'none';
+        this.resizer.style.display = shouldShow && !compact ? 'flex' : 'none';
+        this.syncTerminalWorkspacePlacement();
         
         if (shouldShow) {
             this.layout();
@@ -914,6 +1035,14 @@ class EditorManager {
                 this.activateWorkspaceTab(activeKey, true);
             }
         }
+
+        if (this.hasCompactWorkspaceTabs(this.currentSession)) {
+            this.renderEditorTabs();
+            const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
+            if (activeKey) {
+                this.activateWorkspaceTab(activeKey, true);
+            }
+        }
         
         this.updateEditorPaneVisibility();
         this.currentSession.saveState();
@@ -938,7 +1067,9 @@ class EditorManager {
         const state = session.editorState;
 
         // Only render tabs and content, file tree is persistent in sidebar
-        if (state.isVisible) {
+        const shouldShowWorkspace = state.isVisible
+            || this.hasCompactWorkspaceTabs(session);
+        if (shouldShowWorkspace) {
             this.renderEditorTabs();
             const activeKey = this.getActiveWorkspaceTabKey(session);
             if (activeKey) {
@@ -1125,6 +1256,8 @@ class EditorManager {
                 const agentTabs = getAgentTabsForSession(this.currentSession);
                 if (agentTabs.length > 0) {
                     this.activateAgentTab(agentTabs[0].key);
+                } else if (this.hasCompactWorkspaceTabs(this.currentSession)) {
+                    this.activateTerminalTab();
                 } else {
                     state.activeFilePath = null;
                     if (this.currentSession.workspaceState) {
@@ -1145,6 +1278,26 @@ class EditorManager {
         const activeWorkspaceTabKey = this.getActiveWorkspaceTabKey();
 
         this.tabsContainer.innerHTML = '';
+        if (this.hasCompactWorkspaceTabs(this.currentSession)) {
+            const tab = document.createElement('div');
+            tab.className = 'editor-tab terminal-editor-tab';
+            if (TERMINAL_WORKSPACE_TAB_KEY === activeWorkspaceTabKey) {
+                tab.classList.add('active');
+            }
+
+            const icon = document.createElement('span');
+            icon.className = 'agent-editor-tab-icon';
+            icon.innerHTML = TERMINAL_TAB_ICON_SVG;
+
+            const label = document.createElement('span');
+            label.textContent = 'Terminal';
+
+            tab.onclick = () => this.activateTerminalTab();
+            tab.appendChild(icon);
+            tab.appendChild(label);
+            this.tabsContainer.appendChild(tab);
+        }
+
         for (const path of state.openFiles) {
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
@@ -1208,11 +1361,52 @@ class EditorManager {
     }
 
     activateWorkspaceTab(workspaceTabKey, isRestore = false) {
+        if (isTerminalWorkspaceTabKey(workspaceTabKey)) {
+            this.activateTerminalTab(isRestore);
+            return;
+        }
         if (isAgentWorkspaceTabKey(workspaceTabKey)) {
             this.activateAgentTab(workspaceTabKey, isRestore);
             return;
         }
         this.activateFileTab(workspaceKeyToFilePath(workspaceTabKey), isRestore);
+    }
+
+    activateTerminalTab(isRestore = false) {
+        if (!this.currentSession) return;
+
+        if (
+            !isRestore
+            && this.editor
+            && this.currentSession.editorState.activeFilePath
+        ) {
+            const filePath = this.currentSession.editorState.activeFilePath;
+            const model = this.getModel(filePath);
+            if (model && model.type === 'text') {
+                this.currentSession.editorState.viewStates.set(
+                    filePath,
+                    this.editor.saveViewState()
+                );
+            }
+        }
+
+        this.currentSession.workspaceState.activeTabKey =
+            TERMINAL_WORKSPACE_TAB_KEY;
+        if (!isRestore) {
+            this.currentSession.saveState();
+        }
+        this.renderEditorTabs();
+        this.monacoContainer.style.display = 'none';
+        this.imagePreviewContainer.style.display = 'none';
+        this.agentContainer.style.display = 'none';
+        this.emptyState.style.display = 'none';
+        this.syncTerminalWorkspacePlacement(TERMINAL_WORKSPACE_TAB_KEY);
+
+        requestAnimationFrame(() => {
+            this.currentSession.mainFitAddon.fit();
+            this.currentSession.mainTerm.focus();
+            this.currentSession.reportResize();
+        });
     }
 
     activateFileTab(filePath, isRestore = false) {
@@ -1229,11 +1423,14 @@ class EditorManager {
 
         state.activeFilePath = filePath;
         this.currentSession.workspaceState.activeTabKey = makeFileWorkspaceTabKey(filePath);
+        this.currentSession.workspaceState.lastNonTerminalTabKey =
+            makeFileWorkspaceTabKey(filePath);
         this.currentSession.saveState();
         const file = this.getModel(filePath);
         
         this.renderEditorTabs();
         this.emptyState.style.display = 'none';
+        this.syncTerminalWorkspacePlacement();
 
         if (!file) {
             this.openFile(filePath, true);
@@ -1308,8 +1505,10 @@ class EditorManager {
         }
 
         this.currentSession.workspaceState.activeTabKey = agentTabKey;
+        this.currentSession.workspaceState.lastNonTerminalTabKey = agentTabKey;
         this.currentSession.saveState();
         this.renderEditorTabs();
+        this.syncTerminalWorkspacePlacement(agentTabKey);
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.emptyState.style.display = 'none';
@@ -1368,6 +1567,13 @@ class EditorManager {
             this.agentCommands.style.display = 'none';
         }
 
+        const previousScrollTop = this.agentTranscript.scrollTop;
+        const previousScrollHeight = this.agentTranscript.scrollHeight;
+        const previousClientHeight = this.agentTranscript.clientHeight;
+        const wasNearBottom = previousScrollHeight === 0 || (
+            previousScrollHeight
+            - (previousScrollTop + previousClientHeight)
+        ) < 36;
         this.agentTranscript.innerHTML = '';
         const timeline = getAgentTimelineItems(agentTab);
         if (timeline.length === 0) {
@@ -1392,7 +1598,11 @@ class EditorManager {
                 }
             }
         }
-        this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
+        if (wasNearBottom) {
+            this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
+        } else {
+            this.agentTranscript.scrollTop = previousScrollTop;
+        }
         this.agentTools.innerHTML = '';
         this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
@@ -1440,7 +1650,8 @@ class EditorManager {
 
     buildAgentToolNode(agentTab, toolCall) {
         const node = document.createElement('div');
-        node.className = 'agent-tool-call';
+        const toolStatusClass = normalizeStatusClass(toolCall.status);
+        node.className = `agent-tool-call state-${toolStatusClass}`;
 
         const role = document.createElement('div');
         role.className = 'agent-message-role';
@@ -1455,7 +1666,7 @@ class EditorManager {
         title.textContent = getAgentToolTitle(toolCall);
 
         const status = document.createElement('span');
-        status.className = `agent-status-pill ${normalizeStatusClass(toolCall.status)}`;
+        status.className = `agent-status-pill ${toolStatusClass}`;
         status.textContent = getAgentStatusLabel(toolCall.status);
 
         header.appendChild(title);
@@ -1467,6 +1678,14 @@ class EditorManager {
         meta.textContent = buildAgentToolMeta(toolCall);
         if (meta.textContent) {
             node.appendChild(meta);
+        }
+
+        const summaryText = buildAgentToolSummary(toolCall);
+        if (summaryText) {
+            const summary = document.createElement('div');
+            summary.className = 'agent-tool-call-summary';
+            summary.textContent = summaryText;
+            node.appendChild(summary);
         }
 
         const sections = buildAgentToolSections(toolCall);
@@ -1489,6 +1708,9 @@ class EditorManager {
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
                 body.textContent = section.text;
+                details.open = shouldExpandAgentTimelineSections(
+                    toolCall.status
+                );
                 details.appendChild(summary);
                 details.appendChild(body);
                 sectionContainer.appendChild(details);
@@ -1501,7 +1723,10 @@ class EditorManager {
 
     buildAgentPermissionNode(agentTab, permission) {
         const card = document.createElement('div');
-        card.className = 'agent-permission-card';
+        const permissionStatusClass = normalizeStatusClass(
+            permission.status || 'pending'
+        );
+        card.className = `agent-permission-card state-${permissionStatusClass}`;
 
         const role = document.createElement('div');
         role.className = 'agent-message-role';
@@ -1521,9 +1746,7 @@ class EditorManager {
         title.textContent = getAgentPermissionTitle(permission);
 
         const status = document.createElement('span');
-        status.className = `agent-status-pill ${normalizeStatusClass(
-            permission.status || 'pending'
-        )}`;
+        status.className = `agent-status-pill ${permissionStatusClass}`;
         status.textContent = getAgentPermissionStatusLabel(permission);
 
         titleRow.appendChild(title);
@@ -1565,6 +1788,9 @@ class EditorManager {
                 const body = document.createElement('pre');
                 body.className = 'agent-tool-call-body';
                 body.textContent = section.text;
+                details.open = shouldExpandAgentTimelineSections(
+                    permission.status || 'pending'
+                );
                 details.appendChild(summary);
                 details.appendChild(body);
                 sectionContainer.appendChild(details);
@@ -1706,12 +1932,18 @@ class EditorManager {
         const busy = !!activeAgentTab?.busy;
         this.agentSendButton.textContent = busy ? 'Stop' : 'Send ⏎';
         this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
-        if (busy) {
-            this.agentHint.textContent = 'Esc stops the current run.';
+        const feedback = getAgentComposerFeedback(activeAgentTab);
+        if (feedback) {
             this.agentHint.style.display = '';
+            this.agentHintStatus.className = `agent-status-pill ${feedback.statusClass}`;
+            this.agentHintStatus.textContent = feedback.statusLabel;
+            this.agentHintSummary.textContent = feedback.summary;
+            this.agentHintHotkey.textContent = feedback.hotkey || '';
+            this.agentHintHotkey.style.display = feedback.hotkey ? '' : 'none';
         } else {
-            this.agentHint.textContent = '';
             this.agentHint.style.display = 'none';
+            this.agentHintSummary.textContent = '';
+            this.agentHintHotkey.textContent = '';
         }
         this.renderAgentCommandMenu(activeAgentTab);
     }
@@ -1799,6 +2031,7 @@ class EditorManager {
         this.imagePreviewContainer.style.display = 'none';
         this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'flex';
+        this.syncTerminalWorkspacePlacement('');
     }
 }
 
@@ -1949,6 +2182,14 @@ class Session {
         this.workspaceState = {
             activeTabKey: data.editorState?.activeWorkspaceTabKey
                 || (data.editorState?.activeFilePath
+                    ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
+                    : ''),
+            lastNonTerminalTabKey: data.editorState?.activeWorkspaceTabKey
+                && !isTerminalWorkspaceTabKey(
+                    data.editorState.activeWorkspaceTabKey
+                )
+                ? data.editorState.activeWorkspaceTabKey
+                : (data.editorState?.activeFilePath
                     ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
                     : '')
         };
@@ -2845,6 +3086,15 @@ function buildAgentTimelineRoleLabel(agentTab, kind) {
 
 function normalizeStatusClass(status = '') {
     const value = String(status || 'pending').toLowerCase();
+    if (value.includes('ready')) {
+        return 'ready';
+    }
+    if (value.includes('restore')) {
+        return 'running';
+    }
+    if (value.includes('disconnect')) {
+        return 'error';
+    }
     if (
         value.includes('complete')
         || value.includes('success')
@@ -2867,6 +3117,9 @@ function normalizeStatusClass(status = '') {
 
 function getAgentStatusLabel(status = '') {
     const value = String(status || 'pending').toLowerCase();
+    if (value.includes('ready')) return 'ready';
+    if (value.includes('restore')) return 'restoring';
+    if (value.includes('disconnect')) return 'disconnected';
     if (value.includes('approve')) return 'allowed';
     if (value.includes('select')) return 'allowed';
     if (value.includes('abort')) return 'denied';
@@ -2902,6 +3155,130 @@ function getAgentPermissionStatusLabel(permission) {
     if (kind === 'reject_once') return 'denied';
     if (status.includes('abort')) return 'denied';
     return getAgentStatusLabel(status);
+}
+
+function getAgentOrderedMapValues(map) {
+    return Array.from(map?.values?.() || []).sort((left, right) => {
+        const leftOrder = Number.isFinite(left?.order) ? left.order : 0;
+        const rightOrder = Number.isFinite(right?.order) ? right.order : 0;
+        return rightOrder - leftOrder;
+    });
+}
+
+function shouldExpandAgentTimelineSections(status = '') {
+    const statusClass = normalizeStatusClass(status);
+    return (
+        statusClass === 'pending'
+        || statusClass === 'running'
+        || statusClass === 'error'
+    );
+}
+
+function getAgentComposerFeedback(agentTab) {
+    if (!agentTab) return null;
+
+    if (agentTab.errorMessage) {
+        return {
+            statusClass: 'error',
+            statusLabel: 'Error',
+            summary: agentTab.errorMessage,
+            hotkey: ''
+        };
+    }
+
+    const pendingPermission = getAgentOrderedMapValues(
+        agentTab.permissions
+    ).find((permission) => permission.status === 'pending');
+    if (pendingPermission) {
+        return {
+            statusClass: 'pending',
+            statusLabel: 'Needs approval',
+            summary: `Waiting on ${getAgentPermissionTitle(pendingPermission)}.`,
+            hotkey: 'Esc stops.'
+        };
+    }
+
+    const activeTool = getAgentOrderedMapValues(agentTab.toolCalls).find(
+        (toolCall) => {
+            const statusClass = normalizeStatusClass(toolCall.status);
+            return statusClass === 'pending' || statusClass === 'running';
+        }
+    );
+    if (activeTool) {
+        return {
+            statusClass: 'running',
+            statusLabel: 'Running',
+            summary: `Working with ${getAgentToolTitle(activeTool)}.`,
+            hotkey: agentTab.busy ? 'Esc stops.' : ''
+        };
+    }
+
+    if (agentTab.status === 'disconnected') {
+        return {
+            statusClass: 'error',
+            statusLabel: 'Disconnected',
+            summary: 'Refresh or reconnect to restore live updates.',
+            hotkey: ''
+        };
+    }
+
+    if (agentTab.status === 'restoring') {
+        return {
+            statusClass: 'running',
+            statusLabel: 'Restoring',
+            summary: 'Restoring this agent session from the backend.',
+            hotkey: ''
+        };
+    }
+
+    if (agentTab.busy) {
+        const hasAssistantMessage = (agentTab.messages || []).some((message) => (
+            String(message?.role || '').toLowerCase() === 'assistant'
+        ));
+        const latestTool = getAgentOrderedMapValues(agentTab.toolCalls)[0] || null;
+        if (!hasAssistantMessage && !latestTool) {
+            return {
+                statusClass: 'running',
+                statusLabel: 'Starting',
+                summary: `Waiting for ${getAgentBaseName(agentTab)} to respond.`,
+                hotkey: 'Esc stops.'
+            };
+        }
+        if (latestTool) {
+            return {
+                statusClass: 'running',
+                statusLabel: 'Responding',
+                summary: `Summarizing ${getAgentToolTitle(latestTool)}.`,
+                hotkey: 'Esc stops.'
+            };
+        }
+        return {
+            statusClass: 'running',
+            statusLabel: 'Responding',
+            summary: `${getAgentBaseName(agentTab)} is drafting a response.`,
+            hotkey: 'Esc stops.'
+        };
+    }
+
+    if (agentTab.messages.length === 0) {
+        const hasCommands = Array.isArray(agentTab.availableCommands)
+            && agentTab.availableCommands.length > 0;
+        return {
+            statusClass: 'ready',
+            statusLabel: 'Ready',
+            summary: hasCommands
+                ? 'Start a new task or use / for available commands.'
+                : 'Start a new task in this workspace.',
+            hotkey: ''
+        };
+    }
+
+    return {
+        statusClass: 'ready',
+        statusLabel: 'Ready',
+        summary: 'Ready for the next turn.',
+        hotkey: ''
+    };
 }
 
 function escapeHtml(text) {
@@ -3056,6 +3433,16 @@ function buildAgentSectionSummaryPreviewNode(text) {
     return node;
 }
 
+function compactAgentSummaryText(text, limit = 180) {
+    const value = String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!value) return '';
+    return value.length > limit
+        ? `${value.slice(0, limit - 1)}…`
+        : value;
+}
+
 function extractToolPaths(toolLike) {
     if (!Array.isArray(toolLike?.locations)) return [];
     return toolLike.locations
@@ -3096,8 +3483,36 @@ function summarizeToolChanges(rawInput) {
     return lines.join('\n');
 }
 
+function buildAgentToolSummary(toolCall) {
+    const stdout = compactAgentSummaryText(toolCall?.rawOutput?.stdout || '');
+    if (stdout) return stdout;
+
+    const stderr = compactAgentSummaryText(toolCall?.rawOutput?.stderr || '');
+    if (stderr) return stderr;
+
+    const formatted = compactAgentSummaryText(
+        toolCall?.rawOutput?.formatted_output || ''
+    );
+    if (formatted) return formatted;
+
+    const contentSummary = compactAgentSummaryText(
+        summarizeToolCallContent(toolCall)
+    );
+    if (contentSummary) return contentSummary;
+
+    const changeSummary = compactAgentSummaryText(
+        summarizeToolChanges(toolCall?.rawInput)
+    );
+    if (changeSummary) return changeSummary;
+
+    return '';
+}
+
 function summarizeAgentRawInput(rawInput) {
     if (!rawInput || typeof rawInput !== 'object') return '';
+    if (typeof rawInput.cmd === 'string' && rawInput.cmd) {
+        return rawInput.cmd;
+    }
     const changeSummary = summarizeToolChanges(rawInput);
     if (changeSummary) {
         return changeSummary;
@@ -3118,6 +3533,10 @@ function summarizeAgentRawInput(rawInput) {
 }
 
 function summarizeAgentRawOutput(rawOutput) {
+    if (typeof rawOutput === 'string' && rawOutput) {
+        const outputMatch = rawOutput.match(/Output:\n([\s\S]*)$/);
+        return compactAgentSummaryText(outputMatch?.[1] || rawOutput);
+    }
     if (!rawOutput || typeof rawOutput !== 'object') return '';
     const parts = [];
     if (typeof rawOutput.stdout === 'string' && rawOutput.stdout) {
@@ -3177,7 +3596,23 @@ function summarizeToolCallContent(toolCall) {
 }
 
 function getAgentToolTitle(toolCall) {
-    if (toolCall?.title) return toolCall.title;
+    const rawInputCommand = typeof toolCall?.rawInput?.cmd === 'string'
+        ? toolCall.rawInput.cmd
+        : '';
+    const genericTitle = String(toolCall?.title || '').trim();
+    if (
+        genericTitle
+        && !/^(exec_command|read|edit|search|fetch|execute)$/i.test(
+            genericTitle
+        )
+    ) {
+        return genericTitle;
+    }
+    if (rawInputCommand) {
+        return rawInputCommand.length > 80
+            ? `${rawInputCommand.slice(0, 77)}...`
+            : rawInputCommand;
+    }
     const command = Array.isArray(toolCall?.rawInput?.command)
         ? toolCall.rawInput.command.join(' ')
         : '';
@@ -3197,7 +3632,11 @@ function getAgentToolTitle(toolCall) {
 function buildAgentToolMeta(toolCall) {
     const parts = [];
     if (toolCall?.kind) parts.push(toolCall.kind);
-    if (toolCall?.rawInput?.cwd) parts.push(toolCall.rawInput.cwd);
+    if (toolCall?.rawInput?.cwd) {
+        parts.push(toolCall.rawInput.cwd);
+    } else if (toolCall?.rawInput?.workdir) {
+        parts.push(toolCall.rawInput.workdir);
+    }
     const paths = extractToolPaths(toolCall);
     if (paths.length > 0) {
         const title = getAgentToolTitle(toolCall);
@@ -3418,7 +3857,10 @@ function removeAgentTab(agentTabKey) {
             );
         } else {
             const remaining = getAgentTabsForSession(session);
-            session.workspaceState.activeTabKey = remaining[0]?.key || '';
+            session.workspaceState.activeTabKey = remaining[0]?.key
+                || (isCompactWorkspaceMode()
+                    ? TERMINAL_WORKSPACE_TAB_KEY
+                    : '');
         }
     }
 
@@ -5012,7 +5454,13 @@ const resizeObserver = new ResizeObserver(() => {
         session.mainFitAddon.fit();
         session.reportResize();
         
-        if (session.editorState && session.editorState.isVisible) {
+        if (
+            session.editorState
+            && (
+                session.editorState.isVisible
+                || editorManager.hasCompactWorkspaceTabs(session)
+            )
+        ) {
             editorManager.layout();
         }
     }
@@ -5023,6 +5471,23 @@ if (terminalWrapper) {
 if (editorPane) {
     resizeObserver.observe(editorPane);
 }
+
+window.addEventListener('tabminal:layout-modechange', () => {
+    const session = getActiveSession();
+    if (!session) return;
+
+    if (
+        !isCompactWorkspaceMode()
+        && isTerminalWorkspaceTabKey(session.workspaceState?.activeTabKey || '')
+    ) {
+        session.workspaceState.activeTabKey =
+            editorManager.getPreferredNonTerminalWorkspaceTabKey(session);
+    }
+
+    editorManager.switchTo(session);
+    editorManager.updateEditorPaneVisibility();
+    renderTabs();
+});
 
 if (tabListEl) {
     tabListEl.addEventListener('click', (event) => {

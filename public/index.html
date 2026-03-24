@@ -13,6 +13,18 @@
     <link rel="manifest" href="./manifest.json">
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <script>
+        const COMPACT_WORKSPACE_MAX_WIDTH = 767;
+        const COMPACT_WORKSPACE_MAX_SHORT_HEIGHT = 500;
+        const COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH = 950;
+
+        function shouldUseCompactWorkspaceMode(width, height) {
+            return width <= COMPACT_WORKSPACE_MAX_WIDTH
+                || (
+                    width <= COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH
+                    && height <= COMPACT_WORKSPACE_MAX_SHORT_HEIGHT
+                );
+        }
+
         // Mobile Layout Manager
         function updateLayout() {
             const vv = window.visualViewport;
@@ -34,9 +46,21 @@
             document.documentElement.style.setProperty('--app-top', `${offsetTop}px`);
             document.documentElement.style.setProperty('--app-left', `${offsetLeft}px`);
 
+            const compactWorkspaceMode = shouldUseCompactWorkspaceMode(
+                width,
+                height
+            );
+            const previousCompactWorkspaceMode =
+                window.__tabminalCompactWorkspaceMode;
+            window.__tabminalCompactWorkspaceMode = compactWorkspaceMode;
+
             if (document.body) {
                 window.scrollTo(0, 0);
                 document.body.scrollTop = 0;
+                document.body.classList.toggle(
+                    'compact-workspace-mode',
+                    compactWorkspaceMode
+                );
             }
             document.documentElement.scrollTop = 0;
 
@@ -44,11 +68,29 @@
             const editorPane = document.getElementById('editor-pane');
             const terminalWrapper = document.getElementById('terminal-wrapper');
             if (editorPane && terminalWrapper) {
-                if (editorPane.style.display !== 'none') {
+                const workspaceTerminalActive = terminalWrapper.classList.contains(
+                    'workspace-tab-active'
+                );
+                if (
+                    editorPane.style.display !== 'none'
+                    && !compactWorkspaceMode
+                    && !workspaceTerminalActive
+                ) {
                     terminalWrapper.classList.remove('maximized');
                 } else {
                     terminalWrapper.classList.add('maximized');
                 }
+            }
+
+            if (
+                previousCompactWorkspaceMode !== undefined
+                && previousCompactWorkspaceMode !== compactWorkspaceMode
+            ) {
+                window.dispatchEvent(
+                    new CustomEvent('tabminal:layout-modechange', {
+                        detail: { compactWorkspaceMode }
+                    })
+                );
             }
         }
 

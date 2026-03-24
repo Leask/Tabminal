@@ -197,7 +197,7 @@ class TabminalTestAgent {
                         toolCallId: 'permission-tool',
                         status: permission.outcome.outcome === 'selected'
                             ? 'completed'
-                            : 'cancelled'
+                            : 'failed'
                     }
                 });
 

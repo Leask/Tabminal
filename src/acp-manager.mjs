@@ -436,6 +436,7 @@ class AcpRuntime extends EventEmitter {
                 // Ignore unsupported mode changes during initial tab creation.
             }
         }
+        await this.#hydrateFreshSessionMetadata(tab);
         this.tabs.set(tab.id, tab);
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
         return this.serializeTab(tab);
@@ -580,12 +581,33 @@ class AcpRuntime extends EventEmitter {
             }]
         });
 
-        void promptPromise.then((response) => {
+        void promptPromise.then(async (response) => {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'ready';
             tab.syntheticStreams.clear();
             tab.pendingUserEcho = null;
+            const previousCommandsLength = Array.isArray(tab.availableCommands)
+                ? tab.availableCommands.length
+                : 0;
+            await this.#hydrateFreshSessionMetadata(tab);
+            if (
+                Array.isArray(tab.availableCommands)
+                && tab.availableCommands.length > previousCommandsLength
+            ) {
+                this.#broadcast(tab, {
+                    type: 'session_update',
+                    update: {
+                        sessionUpdate: 'available_commands_update',
+                        availableCommands: tab.availableCommands
+                    },
+                    tab: {
+                        currentModeId: tab.currentModeId,
+                        availableModes: tab.availableModes,
+                        availableCommands: tab.availableCommands
+                    }
+                });
+            }
             this.#broadcast(tab, {
                 type: 'complete',
                 stopReason: response.stopReason,
@@ -926,6 +948,45 @@ class AcpRuntime extends EventEmitter {
         return new Promise((resolve) => {
             request.resolve = resolve;
         });
+    }
+
+    async #hydrateFreshSessionMetadata(tab) {
+        const needsHydration = (
+            !Array.isArray(tab.availableCommands)
+            || tab.availableCommands.length === 0
+        );
+        if (
+            !needsHydration
+            || !this.agentCapabilities?.loadSession
+            || typeof this.connection.loadSession !== 'function'
+        ) {
+            return;
+        }
+
+        try {
+            const response = await this.connection.loadSession({
+                cwd: tab.cwd,
+                sessionId: tab.acpSessionId,
+                mcpServers: []
+            });
+            const restoredSessionId = response?.sessionId || tab.acpSessionId;
+            if (restoredSessionId !== tab.acpSessionId) {
+                this.sessionToTabId.delete(tab.acpSessionId);
+                tab.acpSessionId = restoredSessionId;
+                this.sessionToTabId.set(tab.acpSessionId, tab.id);
+            }
+            if (response?.modes?.currentModeId) {
+                tab.currentModeId = response.modes.currentModeId;
+            }
+            if (Array.isArray(response?.modes?.availableModes)) {
+                tab.availableModes = response.modes.availableModes;
+            }
+            if (Array.isArray(response?.availableCommands)) {
+                tab.availableCommands = response.availableCommands;
+            }
+        } catch {
+            // Ignore metadata hydration failures for fresh sessions.
+        }
     }
 
     async #readTextFile(params) {

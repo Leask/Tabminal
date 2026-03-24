@@ -330,6 +330,36 @@ body {
     }
 }
 
+.compact-workspace-mode .sidebar-toggle {
+    display: block;
+}
+
+.compact-workspace-mode .sidebar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 240px;
+    z-index: 900;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        visibility 0s linear 0.3s;
+    box-shadow: 4px 0 12px rgba(0, 0, 0, 0.5);
+    border-right: 1px solid var(--border-color);
+}
+
+.compact-workspace-mode .sidebar.open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        visibility 0s;
+}
+
+.compact-workspace-mode .tab-item {
+    min-height: 80px !important;
+}
+
 /* Touch Device Typography Adjustments (Fonts only) */
 @media (pointer: coarse) {
     .system-status-bar {
@@ -590,6 +620,10 @@ body {
     .tab-item:hover .tab-info-overlay {
         transform: none !important;
     }
+}
+
+.compact-workspace-mode .tab-item:hover .tab-info-overlay {
+    transform: none !important;
 }
 
 /* Only pin toggle button if editor is open */
@@ -1394,6 +1428,18 @@ kbd {
     min-width: 0;
 }
 
+.terminal-tab-host {
+    position: absolute;
+    inset: 0;
+    display: none;
+    background-color: var(--bg-base);
+}
+
+.terminal-wrapper.workspace-tab-active {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
 .agent-panel {
     position: absolute;
     inset: 0;
@@ -1484,6 +1530,10 @@ kbd {
     }
 }
 
+.compact-workspace-mode .agent-panel-commands {
+    display: none !important;
+}
+
 .agent-tool-call,
 .agent-permission-card {
     width: 100%;
@@ -1494,6 +1544,24 @@ kbd {
     background-color: rgba(7, 54, 66, 0.4);
     color: var(--text-base);
     font-size: 11px;
+}
+
+.agent-tool-call.state-pending,
+.agent-permission-card.state-pending {
+    border-color: rgba(181, 137, 0, 0.34);
+    background-color: rgba(181, 137, 0, 0.08);
+}
+
+.agent-tool-call.state-running,
+.agent-permission-card.state-running {
+    border-color: rgba(38, 139, 210, 0.36);
+    background-color: rgba(38, 139, 210, 0.09);
+}
+
+.agent-tool-call.state-error,
+.agent-permission-card.state-error {
+    border-color: rgba(220, 80, 80, 0.34);
+    background-color: rgba(220, 80, 80, 0.08);
 }
 
 .agent-tool-call {
@@ -1525,6 +1593,13 @@ kbd {
     color: var(--text-muted);
     font-size: 10px;
     margin-top: 4px;
+}
+
+.agent-tool-call-summary {
+    color: var(--text-base);
+    font-size: 11px;
+    line-height: 1.45;
+    opacity: 0.94;
 }
 
 .agent-tool-call-body {
@@ -1599,6 +1674,18 @@ kbd {
     text-transform: lowercase;
     color: var(--text-muted);
     background-color: rgba(88, 110, 117, 0.18);
+}
+
+.agent-status-pill.ready {
+    color: var(--text-highlight);
+    border-color: rgba(131, 148, 150, 0.32);
+    background-color: rgba(88, 110, 117, 0.14);
+}
+
+.agent-status-pill.pending {
+    color: #f6d56a;
+    border-color: rgba(181, 137, 0, 0.42);
+    background-color: rgba(181, 137, 0, 0.12);
 }
 
 .agent-status-pill.running {
@@ -1871,8 +1958,23 @@ kbd {
 }
 
 .agent-panel-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 18px;
     font-size: 10px;
     color: var(--text-muted);
+    flex-wrap: wrap;
+}
+
+.agent-panel-hint-summary {
+    color: var(--text-muted);
+}
+
+.agent-panel-hint-hotkey {
+    color: var(--text-muted);
+    opacity: 0.85;
+    margin-left: auto;
 }
 
 .agent-dropdown {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import { describe, it } from 'node:test';
 import { EventEmitter } from 'node:events';
+import { fileURLToPath } from 'node:url';
 
 import {
     AcpManager,
@@ -154,6 +155,32 @@ class FailingRuntime extends FakeRuntime {
     async createTab() {
         throw new Error('Authentication required');
     }
+}
+
+function createSocketRecorder() {
+    const events = [];
+    return {
+        events,
+        socket: {
+            readyState: 1,
+            send(message) {
+                events.push(JSON.parse(message));
+            },
+            on() {}
+        }
+    };
+}
+
+async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const value = await fn();
+        if (value) {
+            return value;
+        }
+        await new Promise((resolve) => setTimeout(resolve, stepMs));
+    }
+    throw new Error('Timed out waiting for condition');
 }
 
 describe('AcpManager', () => {
@@ -384,6 +411,127 @@ describe('AcpManager', () => {
         assert.ok(runtime);
         assert.equal(runtime.disposed, true);
         assert.equal(manager.runtimes.size, 0);
+    });
+
+    it('streams real ACP test-agent permission turns end-to-end', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, 'please request permission now');
+
+            const permissionEvent = await waitForValue(
+                () => events.find((event) => event.type === 'permission_request')
+            );
+            assert.ok(permissionEvent.permission.id);
+
+            const runningTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                return state.tabs.find((entry) => entry.id === tab.id)
+                    || null;
+            });
+            assert.equal(runningTab.busy, true);
+            assert.match(
+                runningTab.messages.at(-1)?.text || '',
+                /Prompt: please request permission now/
+            );
+            assert.equal(runningTab.permissions.length, 1);
+
+            await manager.resolvePermission(
+                tab.id,
+                permissionEvent.permission.id,
+                'allow-once'
+            );
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            });
+            assert.equal(settledTab.status, 'ready');
+            assert.ok(
+                settledTab.messages.some((message) => (
+                    /Permission was granted/.test(message.text || '')
+                ))
+            );
+        } finally {
+            await manager.dispose();
+        }
+    });
+
+    it('cancels real ACP test-agent prompt turns cleanly', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, 'cancel-smoke');
+            await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current?.busy ? current : null;
+            });
+
+            await manager.cancel(tab.id);
+
+            const completedEvent = await waitForValue(
+                () => events.find((event) => (
+                    event.type === 'complete'
+                    && event.stopReason === 'cancelled'
+                ))
+            );
+            assert.equal(completedEvent.status, 'ready');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            });
+            assert.equal(settledTab.status, 'ready');
+        } finally {
+            await manager.dispose();
+        }
     });
 
     it('merges sentence chunks into separate paragraphs', () => {
