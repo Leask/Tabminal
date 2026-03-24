@@ -18,6 +18,7 @@ const expectCommandsAfterFinal = process.env.TABMINAL_EXPECT_COMMANDS_AFTER_FINA
     === '1';
 const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
     !== '0';
+const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -586,7 +587,7 @@ async function main() {
         const hint = await readComposerHint();
         const activeState = /starting|running|responding/i.test(hint.pill)
             || /needs approval/i.test(hint.pill);
-        const activeSummary = /working|waiting on|waiting for|drafting|summarizing/i
+        const activeSummary = /working|waiting on|waiting for|drafting|summarizing|choose an approval option/i
             .test(hint.summary);
         return activeState
             && activeSummary
@@ -610,7 +611,7 @@ async function main() {
         await waitFor('permission-hint', async () => {
             const hint = await readComposerHint();
             return /needs approval/i.test(hint.pill)
-                && /waiting on/i.test(hint.summary);
+                && /waiting on|choose an approval option/i.test(hint.summary);
         });
 
         await waitFor('permission-sections-expanded', async () => {
@@ -666,6 +667,18 @@ async function main() {
             return await evaluate(
                 toExpression(`
                     () => document.querySelectorAll('.agent-tool-call').length > 0
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectPathLink) {
+        await waitFor('path-link', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll(
+                        '.agent-path-link[href^="/"]'
+                    ).length > 0
                 `)
             );
         }, 20000, 250);

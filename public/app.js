@@ -1680,6 +1680,11 @@ class EditorManager {
             node.appendChild(meta);
         }
 
+        const pathLinks = buildAgentPathLinks(agentTab, toolCall);
+        if (pathLinks) {
+            node.appendChild(pathLinks);
+        }
+
         const summaryText = buildAgentToolSummary(toolCall);
         if (summaryText) {
             const summary = document.createElement('div');
@@ -1688,7 +1693,7 @@ class EditorManager {
             node.appendChild(summary);
         }
 
-        const sections = buildAgentToolSections(toolCall);
+        const sections = buildAgentToolSections(toolCall, summaryText);
         if (sections.length > 0) {
             const sectionContainer = document.createElement('div');
             sectionContainer.className = 'agent-tool-call-sections';
@@ -1760,15 +1765,20 @@ class EditorManager {
             card.appendChild(meta);
         }
 
-        const summaryText = buildAgentPermissionSummary(permission);
-        if (summaryText) {
-            const body = document.createElement('pre');
-            body.className = 'agent-tool-call-body';
-            body.textContent = summaryText;
-            card.appendChild(body);
+        const pathLinks = buildAgentPathLinks(agentTab, permission?.toolCall);
+        if (pathLinks) {
+            card.appendChild(pathLinks);
         }
 
-        const sections = buildAgentPermissionSections(permission);
+        const summaryText = buildAgentPermissionSummary(permission);
+        if (summaryText) {
+            const summary = document.createElement('div');
+            summary.className = 'agent-tool-call-summary';
+            summary.textContent = summaryText;
+            card.appendChild(summary);
+        }
+
+        const sections = buildAgentPermissionSections(permission, summaryText);
         if (sections.length > 0) {
             const sectionContainer = document.createElement('div');
             sectionContainer.className = 'agent-tool-call-sections';
@@ -1815,7 +1825,7 @@ class EditorManager {
                     button.classList.add('danger');
                 }
                 const optionId = option.optionId || option.id || '';
-                button.textContent = option.name || optionId || 'Allow';
+                button.textContent = getPermissionOptionDisplayLabel(option);
                 button.onclick = async () => {
                     try {
                         await agentTab.resolvePermission(
@@ -3141,6 +3151,26 @@ function getPermissionOptionById(permission, optionId) {
         : null;
 }
 
+function getPermissionOptionDisplayLabel(option) {
+    const kind = String(option?.kind || '').toLowerCase();
+    const providedName = String(option?.name || '').trim();
+    if (providedName) {
+        return providedName;
+    }
+    switch (kind) {
+        case 'allow_once':
+            return 'Allow once';
+        case 'allow_always':
+            return 'Always allow';
+        case 'reject_once':
+            return 'Deny';
+        case 'reject_always':
+            return 'Always deny';
+        default:
+            return option?.optionId || option?.id || 'Select';
+    }
+}
+
 function getAgentPermissionStatusLabel(permission) {
     const status = String(permission?.status || 'pending').toLowerCase();
     const selected = getPermissionOptionById(
@@ -3190,10 +3220,11 @@ function getAgentComposerFeedback(agentTab) {
         agentTab.permissions
     ).find((permission) => permission.status === 'pending');
     if (pendingPermission) {
+        const permissionTitle = getAgentPermissionTitle(pendingPermission);
         return {
             statusClass: 'pending',
             statusLabel: 'Needs approval',
-            summary: `Waiting on ${getAgentPermissionTitle(pendingPermission)}.`,
+            summary: `Choose an approval option for ${permissionTitle}.`,
             hotkey: 'Esc stops.'
         };
     }
@@ -3443,6 +3474,24 @@ function compactAgentSummaryText(text, limit = 180) {
         : value;
 }
 
+function normalizeAgentComparableText(text) {
+    return String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function isAgentSectionRedundant(sectionText, summaryText) {
+    const normalizedSection = normalizeAgentComparableText(
+        compactAgentSummaryText(sectionText)
+    );
+    const normalizedSummary = normalizeAgentComparableText(summaryText);
+    if (!normalizedSection || !normalizedSummary) {
+        return false;
+    }
+    return normalizedSection === normalizedSummary;
+}
+
 function extractToolPaths(toolLike) {
     if (!Array.isArray(toolLike?.locations)) return [];
     return toolLike.locations
@@ -3457,13 +3506,21 @@ function normalizeToolPathLabel(path) {
     return basename ? `${basename} · ${value}` : value;
 }
 
-function toolTitleIncludesPath(title, path) {
-    const titleValue = String(title || '').toLowerCase();
-    const pathValue = String(path || '').toLowerCase();
-    if (!titleValue || !pathValue) return false;
-    if (titleValue.includes(pathValue)) return true;
-    const basename = pathValue.split('/').filter(Boolean).pop() || '';
-    return basename ? titleValue.includes(basename) : false;
+function getAgentTimelinePaths(toolLike) {
+    const paths = [
+        ...extractToolPaths(toolLike)
+    ];
+    if (typeof toolLike?.rawInput?.path === 'string' && toolLike.rawInput.path) {
+        paths.push(toolLike.rawInput.path);
+    }
+    if (Array.isArray(toolLike?.rawInput?.paths)) {
+        for (const path of toolLike.rawInput.paths) {
+            if (typeof path === 'string' && path) {
+                paths.push(path);
+            }
+        }
+    }
+    return Array.from(new Set(paths.filter(Boolean)));
 }
 
 function summarizeToolChanges(rawInput) {
@@ -3481,6 +3538,35 @@ function summarizeToolChanges(rawInput) {
         lines.push(`…and ${extra} more change${extra === 1 ? '' : 's'}`);
     }
     return lines.join('\n');
+}
+
+function buildAgentPathLinks(agentTab, toolLike) {
+    const session = agentTab?.getLinkedSession?.() || null;
+    const allPaths = getAgentTimelinePaths(toolLike);
+    const paths = allPaths.slice(0, 5);
+    if (paths.length === 0) return null;
+
+    const container = document.createElement('div');
+    container.className = 'agent-path-links';
+
+    for (const path of paths) {
+        const link = document.createElement('a');
+        link.className = 'agent-path-link';
+        link.href = path;
+        link.title = path;
+        link.textContent = shortenPath(path, session?.env || '');
+        container.appendChild(link);
+    }
+
+    const extraCount = allPaths.length - paths.length;
+    if (extraCount > 0) {
+        const more = document.createElement('span');
+        more.className = 'agent-path-link more';
+        more.textContent = `+${extraCount} more`;
+        container.appendChild(more);
+    }
+
+    return container;
 }
 
 function buildAgentToolSummary(toolCall) {
@@ -3637,48 +3723,34 @@ function buildAgentToolMeta(toolCall) {
     } else if (toolCall?.rawInput?.workdir) {
         parts.push(toolCall.rawInput.workdir);
     }
-    const paths = extractToolPaths(toolCall);
-    if (paths.length > 0) {
-        const title = getAgentToolTitle(toolCall);
-        if (paths.length > 1) {
-            parts.push(`${paths.length} paths`);
-        } else if (!toolTitleIncludesPath(title, paths[0])) {
-            parts.push(normalizeToolPathLabel(paths[0]));
-        }
-    }
     return parts.join(' · ');
 }
 
-function buildAgentToolSections(toolCall) {
+function buildAgentToolSections(toolCall, summaryText = '') {
     const sections = [];
-    const paths = extractToolPaths(toolCall);
     const title = getAgentToolTitle(toolCall);
-    if (paths.length > 0 && !(
-        paths.length === 1 && toolTitleIncludesPath(title, paths[0])
-    )) {
-        sections.push({
-            label: paths.length === 1 ? 'Path' : 'Paths',
-            text: truncateAgentDetail(
-                paths.map((path) => normalizeToolPathLabel(path)).join('\n')
-            )
-        });
-    }
     const rawInput = summarizeAgentRawInput(toolCall?.rawInput);
-    if (rawInput) {
+    const normalizedTitle = normalizeAgentComparableText(title);
+    const normalizedInput = normalizeAgentComparableText(rawInput);
+    if (
+        rawInput
+        && normalizedInput
+        && normalizedInput !== normalizedTitle
+    ) {
         sections.push({
             label: 'Input',
             text: truncateAgentDetail(rawInput)
         });
     }
     const content = summarizeToolCallContent(toolCall);
-    if (content) {
+    if (content && !isAgentSectionRedundant(content, summaryText)) {
         sections.push({
             label: 'Content',
             text: content
         });
     }
     const rawOutput = summarizeAgentRawOutput(toolCall?.rawOutput);
-    if (rawOutput) {
+    if (rawOutput && !isAgentSectionRedundant(rawOutput, summaryText)) {
         sections.push({
             label: 'Output',
             text: rawOutput
@@ -3692,6 +3764,16 @@ function buildAgentPermissionMeta(permission) {
 }
 
 function buildAgentPermissionSummary(permission) {
+    const leading = [];
+    const statusLabel = getAgentPermissionStatusLabel(permission);
+    if (permission?.status === 'pending') {
+        leading.push('Approval is required to continue.');
+    } else if (statusLabel) {
+        leading.push(
+            `${statusLabel.charAt(0).toUpperCase()}${statusLabel.slice(1)}.`
+        );
+    }
+
     const content = summarizeToolCallContent(permission?.toolCall || {});
     const paths = extractToolPaths(permission?.toolCall || {});
     const lines = String(content || '')
@@ -3704,13 +3786,17 @@ function buildAgentPermissionSummary(permission) {
     const hasOnlyPathDiffs = lines.length > 0
         && lines.length === expectedDiffLines.length
         && lines.every((line) => expectedDiffLines.includes(line));
-    if (hasOnlyPathDiffs) return '';
-    if (content) return content;
-    return '';
+    if (!hasOnlyPathDiffs && content) {
+        leading.push(content);
+    }
+    return leading.join('\n\n').trim();
 }
 
-function buildAgentPermissionSections(permission) {
-    const sections = buildAgentToolSections(permission?.toolCall || {});
+function buildAgentPermissionSections(permission, summaryText = '') {
+    const sections = buildAgentToolSections(
+        permission?.toolCall || {},
+        summaryText
+    );
     const selectedOption = getPermissionOptionById(
         permission,
         permission?.selectedOptionId || ''
@@ -3718,16 +3804,13 @@ function buildAgentPermissionSections(permission) {
     if (selectedOption) {
         sections.push({
             label: 'Decision',
-            text: selectedOption.name
-                || selectedOption.optionId
-                || selectedOption.kind
-                || 'Selected option'
+            text: getPermissionOptionDisplayLabel(selectedOption)
         });
     }
     const optionLines = permission?.status === 'pending'
         && Array.isArray(permission?.options)
         ? permission.options.map((option) => {
-            const label = option?.name || option?.optionId || '';
+            const label = getPermissionOptionDisplayLabel(option);
             const kind = option?.kind ? ` (${option.kind})` : '';
             return `${label}${kind}`;
         }).filter(Boolean)

@@ -1595,11 +1595,49 @@ kbd {
     margin-top: 4px;
 }
 
+.agent-path-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.agent-path-link {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(38, 139, 210, 0.3);
+    background-color: rgba(38, 139, 210, 0.1);
+    color: var(--text-highlight);
+    font-size: 10px;
+    line-height: 1.4;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-path-link:hover,
+.agent-path-link:focus-visible {
+    border-color: rgba(38, 139, 210, 0.5);
+    background-color: rgba(38, 139, 210, 0.16);
+}
+
+.agent-path-link.more {
+    border-color: rgba(131, 148, 150, 0.26);
+    background-color: rgba(88, 110, 117, 0.12);
+    color: var(--text-muted);
+}
+
 .agent-tool-call-summary {
     color: var(--text-base);
     font-size: 11px;
     line-height: 1.45;
     opacity: 0.94;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .agent-tool-call-body {
