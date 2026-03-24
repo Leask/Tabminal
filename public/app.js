@@ -1581,7 +1581,7 @@ class EditorManager {
                 this.buildAgentEmptyState(agentTab)
             );
         } else {
-            for (const entry of timeline) {
+            for (const [index, entry] of timeline.entries()) {
                 let node = null;
                 if (entry.type === 'message') {
                     node = this.buildAgentMessageNode(agentTab, entry.value);
@@ -1594,6 +1594,14 @@ class EditorManager {
                     );
                 }
                 if (node) {
+                    if (
+                        index > 0
+                        && entry.type === 'message'
+                        && String(entry.value?.role || '').toLowerCase()
+                            === 'user'
+                    ) {
+                        node.classList.add('agent-turn-start');
+                    }
                     this.agentTranscript.appendChild(node);
                 }
             }
@@ -3127,19 +3135,19 @@ function normalizeStatusClass(status = '') {
 
 function getAgentStatusLabel(status = '') {
     const value = String(status || 'pending').toLowerCase();
-    if (value.includes('ready')) return 'ready';
-    if (value.includes('restore')) return 'restoring';
-    if (value.includes('disconnect')) return 'disconnected';
-    if (value.includes('approve')) return 'allowed';
-    if (value.includes('select')) return 'allowed';
-    if (value.includes('abort')) return 'denied';
+    if (value.includes('ready')) return 'Ready';
+    if (value.includes('restore')) return 'Restoring';
+    if (value.includes('disconnect')) return 'Disconnected';
+    if (value.includes('approve')) return 'Allowed';
+    if (value.includes('select')) return 'Allowed';
+    if (value.includes('abort')) return 'Denied';
     if (value.includes('complete') || value.includes('success')) {
-        return 'completed';
+        return 'Completed';
     }
-    if (value.includes('cancel')) return 'cancelled';
-    if (value.includes('error') || value.includes('fail')) return 'error';
-    if (value.includes('run') || value.includes('progress')) return 'running';
-    return 'pending';
+    if (value.includes('cancel')) return 'Cancelled';
+    if (value.includes('error') || value.includes('fail')) return 'Error';
+    if (value.includes('run') || value.includes('progress')) return 'Running';
+    return 'Pending';
 }
 
 function getPermissionOptionById(permission, optionId) {
@@ -3179,11 +3187,11 @@ function getAgentPermissionStatusLabel(permission) {
     );
     const kind = String(selected?.kind || '').toLowerCase();
 
-    if (kind === 'allow_always') return 'allowed always';
-    if (kind === 'allow_once') return 'allowed once';
-    if (kind === 'reject_always') return 'denied always';
-    if (kind === 'reject_once') return 'denied';
-    if (status.includes('abort')) return 'denied';
+    if (kind === 'allow_always') return 'Allowed Always';
+    if (kind === 'allow_once') return 'Allowed Once';
+    if (kind === 'reject_always') return 'Denied Always';
+    if (kind === 'reject_once') return 'Denied';
+    if (status.includes('abort')) return 'Denied';
     return getAgentStatusLabel(status);
 }
 
@@ -3506,6 +3514,21 @@ function normalizeToolPathLabel(path) {
     return basename ? `${basename} · ${value}` : value;
 }
 
+function extractCommandPaths(command) {
+    const source = String(command || '');
+    if (!source) return [];
+    const paths = [];
+    const pattern = /"([^"\n]+)"|'([^'\n]+)'|(\/[^\s"'`]+)/g;
+    for (const match of source.matchAll(pattern)) {
+        const candidate = match[1] || match[2] || match[3] || '';
+        if (!candidate.startsWith('/') || candidate === '/') {
+            continue;
+        }
+        paths.push(candidate);
+    }
+    return paths;
+}
+
 function getAgentTimelinePaths(toolLike) {
     const paths = [
         ...extractToolPaths(toolLike)
@@ -3520,6 +3543,14 @@ function getAgentTimelinePaths(toolLike) {
             }
         }
     }
+    const commandText = typeof toolLike?.rawInput?.cmd === 'string'
+        ? toolLike.rawInput.cmd
+        : Array.isArray(toolLike?.rawInput?.command)
+            ? toolLike.rawInput.command.join(' ')
+            : typeof toolLike?.rawInput?.command === 'string'
+                ? toolLike.rawInput.command
+                : '';
+    paths.push(...extractCommandPaths(commandText));
     return Array.from(new Set(paths.filter(Boolean)));
 }
 
@@ -3618,6 +3649,21 @@ function summarizeAgentRawInput(rawInput) {
     return JSON.stringify(rawInput, null, 2);
 }
 
+function extractCommandExecutable(command) {
+    const source = String(command || '').trim();
+    if (!source) return '';
+    const token = source.match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
+    const executable = token?.[1] || token?.[2] || token?.[3] || '';
+    if (!executable) return '';
+    const parts = executable.split('/').filter(Boolean);
+    return parts.at(-1) || executable;
+}
+
+function getFirstToolPath(toolCall) {
+    const paths = getAgentTimelinePaths(toolCall);
+    return paths[0] || '';
+}
+
 function summarizeAgentRawOutput(rawOutput) {
     if (typeof rawOutput === 'string' && rawOutput) {
         const outputMatch = rawOutput.match(/Output:\n([\s\S]*)$/);
@@ -3685,6 +3731,11 @@ function getAgentToolTitle(toolCall) {
     const rawInputCommand = typeof toolCall?.rawInput?.cmd === 'string'
         ? toolCall.rawInput.cmd
         : '';
+    const rawInput = toolCall?.rawInput || {};
+    const firstPath = getFirstToolPath(toolCall);
+    const firstPathBase = firstPath
+        ? firstPath.split('/').filter(Boolean).pop() || firstPath
+        : '';
     const genericTitle = String(toolCall?.title || '').trim();
     if (
         genericTitle
@@ -3694,18 +3745,38 @@ function getAgentToolTitle(toolCall) {
     ) {
         return genericTitle;
     }
+    if (toolCall?.kind === 'read') {
+        return firstPathBase ? `Read ${firstPathBase}` : 'Read file';
+    }
+    if (toolCall?.kind === 'edit') {
+        return firstPathBase ? `Edited ${firstPathBase}` : 'Edited files';
+    }
+    if (toolCall?.kind === 'search') {
+        const query = String(
+            rawInput?.query || rawInput?.pattern || rawInput?.search || ''
+        ).trim();
+        if (query) {
+            return `Searched for ${query}`;
+        }
+        return 'Searched the workspace';
+    }
+    if (toolCall?.kind === 'fetch') {
+        return 'Fetched resource';
+    }
     if (rawInputCommand) {
-        return rawInputCommand.length > 80
-            ? `${rawInputCommand.slice(0, 77)}...`
-            : rawInputCommand;
+        const executable = extractCommandExecutable(rawInputCommand);
+        if (executable) {
+            return `Ran ${executable}`;
+        }
     }
     const command = Array.isArray(toolCall?.rawInput?.command)
         ? toolCall.rawInput.command.join(' ')
         : '';
     if (command) {
-        return command.length > 80
-            ? `${command.slice(0, 77)}...`
-            : command;
+        const executable = extractCommandExecutable(command);
+        if (executable) {
+            return `Ran ${executable}`;
+        }
     }
     if (toolCall?.kind === 'execute') return 'Command execution';
     if (toolCall?.kind === 'read') return 'Read';
@@ -3717,7 +3788,6 @@ function getAgentToolTitle(toolCall) {
 
 function buildAgentToolMeta(toolCall) {
     const parts = [];
-    if (toolCall?.kind) parts.push(toolCall.kind);
     if (toolCall?.rawInput?.cwd) {
         parts.push(toolCall.rawInput.cwd);
     } else if (toolCall?.rawInput?.workdir) {
@@ -3788,6 +3858,13 @@ function buildAgentPermissionSummary(permission) {
         && lines.every((line) => expectedDiffLines.includes(line));
     if (!hasOnlyPathDiffs && content) {
         leading.push(content);
+    } else {
+        const inputSummary = compactAgentSummaryText(
+            summarizeAgentRawInput(permission?.toolCall?.rawInput || {})
+        );
+        if (inputSummary) {
+            leading.push(inputSummary);
+        }
     }
     return leading.join('\n\n').trim();
 }

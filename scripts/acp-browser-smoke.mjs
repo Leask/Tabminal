@@ -19,6 +19,7 @@ const expectCommandsAfterFinal = process.env.TABMINAL_EXPECT_COMMANDS_AFTER_FINA
 const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
     !== '0';
 const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
+const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -111,32 +112,34 @@ async function main() {
         url: tabminalUrl
     });
     log('target-created', targetId);
+    let page = null;
 
-    const pageTarget = await waitFor('page-target', async () => {
-        const list = await getJson(`${chromeBaseUrl}/json/list`);
-        return list.find((item) => item.id === targetId);
-    });
-
-    const page = new CdpClient(pageTarget.webSocketDebuggerUrl);
-    await page.open();
-    await page.send('Page.enable');
-    await page.send('Runtime.enable');
-
-    async function evaluate(expression) {
-        const result = await page.send('Runtime.evaluate', {
-            expression,
-            awaitPromise: true,
-            returnByValue: true
+    try {
+        const pageTarget = await waitFor('page-target', async () => {
+            const list = await getJson(`${chromeBaseUrl}/json/list`);
+            return list.find((item) => item.id === targetId);
         });
-        if (result.exceptionDetails) {
-            throw new Error(JSON.stringify(result.exceptionDetails));
-        }
-        return result.result.value;
-    }
 
-    async function hasFinalMessage() {
-        return await evaluate(
-            toExpression(`
+        page = new CdpClient(pageTarget.webSocketDebuggerUrl);
+        await page.open();
+        await page.send('Page.enable');
+        await page.send('Runtime.enable');
+
+        async function evaluate(expression) {
+            const result = await page.send('Runtime.evaluate', {
+                expression,
+                awaitPromise: true,
+                returnByValue: true
+            });
+            if (result.exceptionDetails) {
+                throw new Error(JSON.stringify(result.exceptionDetails));
+            }
+            return result.result.value;
+        }
+
+        async function hasFinalMessage() {
+            return await evaluate(
+                toExpression(`
                 () => {
                     const bodies = Array.from(
                         document.querySelectorAll('.agent-message-body')
@@ -158,22 +161,22 @@ async function main() {
                     return bodies.some((text) => matcher.test(text));
                 }
             `)
-        );
-    }
+            );
+        }
 
-    async function hasPermissionRequest() {
-        return await evaluate(
-            toExpression(`
+        async function hasPermissionRequest() {
+            return await evaluate(
+                toExpression(`
                 () => document.querySelectorAll(
                     '.agent-permission-card .agent-permission-option'
                 ).length > 0
-            `)
-        );
-    }
+                `)
+            );
+        }
 
-    async function readComposerHint() {
-        return await evaluate(
-            toExpression(`
+        async function readComposerHint() {
+            return await evaluate(
+                toExpression(`
                 () => {
                     const pill = document.querySelector(
                         '.agent-panel-hint .agent-status-pill'
@@ -196,12 +199,12 @@ async function main() {
                         )
                     };
                 }
-            `)
-        );
-    }
+                `)
+            );
+        }
 
-    await evaluate(
-        toExpression(`
+        await evaluate(
+            toExpression(`
             () => {
                 if (!window.__tabminalSmokeProbeInstalled) {
                     window.__tabminalSmokeProbeInstalled = true;
@@ -257,8 +260,8 @@ async function main() {
                 }
                 return true;
             }
-        `)
-    );
+            `)
+        );
 
     await waitFor('document-ready', async () => {
         const readyState = await evaluate('document.readyState');
@@ -529,43 +532,56 @@ async function main() {
             () => {
                 const select = document.querySelector('.agent-panel-mode-select');
                 if (!select || select.options.length < 2) return '';
-                const next = Array.from(select.options).find(
-                    (option) => option.value !== select.value
-                );
+                const options = Array.from(select.options);
+                const requestedMode = ${JSON.stringify(targetMode)};
+                const next = requestedMode
+                    ? options.find((option) => (
+                        option.textContent.toLowerCase().includes(
+                            requestedMode.toLowerCase()
+                        )
+                        || option.value.toLowerCase() === requestedMode
+                            .toLowerCase()
+                    ))
+                    : options.find((option) => option.value !== select.value);
                 if (!next) return '';
+                if (next.value === select.value) {
+                    return '';
+                }
                 select.value = next.value;
                 select.dispatchEvent(new Event('change', { bubbles: true }));
                 return next.textContent.trim();
             }
         `)
     );
-    log('switched-mode');
+    log('switched-mode', switchedMode || 'unchanged');
 
-    await waitFor('mode-updated', async () => {
-        return await evaluate(
-            toExpression(`
-                () => {
-                    const placeholder = document.querySelector(
-                        '.agent-panel-input'
-                    )?.getAttribute('placeholder') || '';
-                    return Array.isArray(window.__fetchLog)
-                        && window.__fetchLog.some((entry) =>
-                            /\\/api\\/agents\\/tabs\\/[^/]+\\/mode$/.test(
-                                entry.url || ''
+    if (switchedMode) {
+        await waitFor('mode-updated', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const placeholder = document.querySelector(
+                            '.agent-panel-input'
+                        )?.getAttribute('placeholder') || '';
+                        return Array.isArray(window.__fetchLog)
+                            && window.__fetchLog.some((entry) =>
+                                /\\/api\\/agents\\/tabs\\/[^/]+\\/mode$/.test(
+                                    entry.url || ''
+                                )
                             )
-                        )
-                        || ${
-                            JSON.stringify(switchedMode || '')
-                        }
-                        && placeholder.includes(
-                            ${JSON.stringify(switchedMode || '')}
-                        );
-                }
-            `),
-            15000,
-            250
-        );
-    });
+                            || ${
+                                JSON.stringify(switchedMode || '')
+                            }
+                            && placeholder.includes(
+                                ${JSON.stringify(switchedMode || '')}
+                            );
+                    }
+                `),
+                15000,
+                250
+            );
+        });
+    }
 
     await evaluate(
         toExpression(`
@@ -917,24 +933,34 @@ async function main() {
         `)
     );
 
-    const screenshot = await page.send('Page.captureScreenshot', {
-        format: 'png'
-    });
-    fs.writeFileSync(
-        screenshotPath,
-        Buffer.from(screenshot.data, 'base64')
-    );
+        const screenshot = await page.send('Page.captureScreenshot', {
+            format: 'png'
+        });
+        fs.writeFileSync(
+            screenshotPath,
+            Buffer.from(screenshot.data, 'base64')
+        );
 
-    console.log(JSON.stringify({
-        chromeBaseUrl,
-        tabminalUrl,
-        picked,
-        finalState,
-        screenshotPath
-    }, null, 2));
-
-    page.close();
-    browser.close();
+        console.log(JSON.stringify({
+            chromeBaseUrl,
+            tabminalUrl,
+            picked,
+            finalState,
+            screenshotPath
+        }, null, 2));
+    } finally {
+        if (page) {
+            page.close();
+        }
+        try {
+            await browser.send('Target.closeTarget', { targetId });
+            await waitFor('target-closed', async () => {
+                const list = await getJson(`${chromeBaseUrl}/json/list`);
+                return !list.some((item) => item.id === targetId);
+            }, 5000, 100);
+        } catch {}
+        browser.close();
+    }
 }
 
 main().catch((error) => {

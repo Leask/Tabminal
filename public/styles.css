@@ -1709,7 +1709,6 @@ kbd {
     border-radius: 999px;
     border: 1px solid var(--border-color);
     font-size: 10px;
-    text-transform: lowercase;
     color: var(--text-muted);
     background-color: rgba(88, 110, 117, 0.18);
 }
@@ -1834,6 +1833,10 @@ kbd {
     border-radius: 10px;
     padding: 9px 11px;
     background-color: rgba(7, 54, 66, 0.35);
+}
+
+.agent-turn-start {
+    margin-top: 8px;
 }
 
 .agent-message.user {
