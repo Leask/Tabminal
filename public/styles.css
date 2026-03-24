@@ -1478,6 +1478,12 @@ kbd {
     min-width: 0;
 }
 
+@media (max-width: 767px) {
+    .agent-panel-commands {
+        display: none !important;
+    }
+}
+
 .agent-tool-call,
 .agent-permission-card {
     width: 100%;
@@ -1714,7 +1720,7 @@ kbd {
 }
 
 .agent-message-role {
-    font-size: 9px;
+    font-size: 10px;
     letter-spacing: 0.02em;
     color: var(--text-muted);
     margin-bottom: 5px;

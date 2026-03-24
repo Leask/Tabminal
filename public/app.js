@@ -1404,46 +1404,12 @@ class EditorManager {
     }
 
     buildAgentEmptyState(agentTab) {
-        const card = document.createElement('div');
-        card.className = 'agent-empty-state';
-
-        const title = document.createElement('div');
-        title.className = 'agent-empty-state-title';
-        title.textContent = agentTab.busy
-            ? `${getAgentBaseName(agentTab)} is thinking`
-            : `${getAgentBaseName(agentTab)} is ready`;
-        card.appendChild(title);
-
-        const body = document.createElement('div');
-        body.className = 'agent-empty-state-body';
-        body.textContent = agentTab.busy
-            ? 'Waiting for the current run to produce output.'
-            : 'Ask for code review, implementation, debugging, or '
-                + 'explanations in this workspace.';
-        card.appendChild(body);
-
-        if (!agentTab.busy) {
-            const prompts = getAgentStarterPrompts(agentTab);
-            if (prompts.length > 0) {
-                const actions = document.createElement('div');
-                actions.className = 'agent-empty-state-actions';
-                for (const prompt of prompts) {
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'agent-empty-state-action';
-                    button.textContent = prompt;
-                    button.onclick = () => {
-                        this.agentPrompt.focus();
-                        this.agentPrompt.value = prompt;
-                        this.updateAgentComposerActions(agentTab);
-                    };
-                    actions.appendChild(button);
-                }
-                card.appendChild(actions);
-            }
-        }
-
-        return card;
+        return this.buildAgentMessageNode(agentTab, {
+            id: 'agent-empty-state',
+            role: 'assistant',
+            kind: 'message',
+            text: 'The Answer? The Answer to what?'
+        });
     }
 
     buildAgentMessageNode(agentTab, message) {
@@ -1738,7 +1704,7 @@ class EditorManager {
                 : null
         );
         const busy = !!activeAgentTab?.busy;
-        this.agentSendButton.textContent = busy ? 'Stop' : 'Send';
+        this.agentSendButton.textContent = busy ? 'Stop' : 'Send ⏎';
         this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
         if (busy) {
             this.agentHint.textContent = 'Esc stops the current run.';
@@ -1837,9 +1803,9 @@ class EditorManager {
 }
 
 const AGENT_PROMPT_PLACEHOLDER = [
-    'Answer to the Ultimate Question of Life, the Universe, '
-        + 'and Everything',
-    '// Enter sends. Shift+Enter or Ctrl+J inserts a newline.'
+    'Life! The Universe! Everything!',
+    '// Host ... · CWD ... · Mode ... · Status ...',
+    '// ⇧⏎ / ⌃J inserts a newline.'
 ];
 
 const editorManager = new EditorManager();
@@ -2754,35 +2720,6 @@ function getAgentBaseName(agentTab) {
     return cleaned || rawLabel || 'Agent';
 }
 
-function getAgentStarterPrompts(agentTab) {
-    switch (String(agentTab?.agentId || '')) {
-        case 'codex':
-            return [
-                'Review this workspace for issues.',
-                'Explain how auth works here.',
-                'Fix the ACP smoke flow.'
-            ];
-        case 'claude':
-            return [
-                'Summarize this codebase.',
-                'Find the riskiest regression here.',
-                'Propose a small refactor.'
-            ];
-        case 'gemini':
-            return [
-                'Explain this repository structure.',
-                'Review this code for bugs.',
-                'Suggest a minimal implementation plan.'
-            ];
-        default:
-            return [
-                'Inspect this workspace.',
-                'Explain the current architecture.',
-                'Suggest the next implementation step.'
-            ];
-    }
-}
-
 function buildAgentPromptPlaceholder(agentTab) {
     if (!agentTab) {
         return AGENT_PROMPT_PLACEHOLDER.join('\n');
@@ -2795,15 +2732,21 @@ function buildAgentPromptPlaceholder(agentTab) {
             session?.env || ''
         )
         : '';
+    const host = getDisplayHost(agentTab.server);
+    const location = cwd ? `${host}:${cwd}` : host;
+    const status = String(agentTab.status || 'ready');
+    const statusLabel = status
+        ? status.charAt(0).toUpperCase() + status.slice(1)
+        : 'Ready';
     const metaLine = [
-        `Host ${getDisplayHost(agentTab.server)}`,
-        cwd ? `CWD ${cwd}` : '',
-        modeLabel ? `Mode ${modeLabel}` : '',
-        `Status ${agentTab.status}${agentTab.busy ? ' (running)' : ''}`
+        location,
+        modeLabel,
+        statusLabel
     ].filter(Boolean).join(' · ');
     return [
-        ...AGENT_PROMPT_PLACEHOLDER,
-        `// ${metaLine}`
+        AGENT_PROMPT_PLACEHOLDER[0],
+        `// ${metaLine}`,
+        AGENT_PROMPT_PLACEHOLDER[2]
     ].join('\n');
 }
 
@@ -2812,16 +2755,21 @@ function getAgentMessageRoleLabel(agentTab, message) {
     const kind = String(message?.kind || 'message').toLowerCase();
 
     let roleLabel = message?.role || 'assistant';
+    let icon = '';
     if (role === 'user') {
         roleLabel = getAgentSessionUser(agentTab);
+        icon = '😺 ';
     } else if (role === 'assistant') {
         roleLabel = getAgentBaseName(agentTab);
+        icon = '🤖 ';
     }
 
+    const displayRoleLabel = `${icon}${roleLabel}`.trim();
+
     if (kind === 'message') {
-        return roleLabel;
+        return displayRoleLabel;
     }
-    return `${roleLabel} · ${message.kind || kind}`;
+    return `${displayRoleLabel} · ${message.kind || kind}`;
 }
 
 function getAgentTimelineItems(agentTab) {
