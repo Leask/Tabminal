@@ -750,6 +750,18 @@ class EditorManager {
         this.updateTerminalLayoutButton();
     }
 
+    saveActiveEditorViewState(session = this.currentSession) {
+        if (!session || !this.editor) return;
+        const filePath = session.editorState?.activeFilePath;
+        if (!filePath) return;
+        const file = this.getModel(filePath, session);
+        if (!file || file.type !== 'text') return;
+        session.editorState.viewStates.set(
+            filePath,
+            this.editor.saveViewState()
+        );
+    }
+
     initAgentPanel() {
         this.agentContainer = document.createElement('div');
         this.agentContainer.className = 'agent-panel';
@@ -9045,8 +9057,15 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
             const session = getActiveSession();
             if (!session) return;
-            const hasTerminalTab = editorManager?.hasCompactWorkspaceTabs?.(session);
             const activeKey = editorManager?.getActiveWorkspaceTabKey(session) || '';
+            if (
+                editorManager
+                && !isAgentWorkspaceTabKey(activeKey)
+                && !isTerminalWorkspaceTabKey(activeKey)
+            ) {
+                editorManager.saveActiveEditorViewState(session);
+            }
+            const hasTerminalTab = editorManager?.hasCompactWorkspaceTabs?.(session);
             if (hasTerminalTab && activeKey !== TERMINAL_WORKSPACE_TAB_KEY) {
                 editorManager.activateTerminalTab();
             } else {
