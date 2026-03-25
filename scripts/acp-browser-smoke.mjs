@@ -11,9 +11,6 @@ const targetAgentDisplayLabel = targetAgentLabel.replace(
     /\s+(CLI|Agent|Adapter)$/i,
     ''
 ).trim() || targetAgentLabel;
-const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
-    || `Read ${process.cwd()}/package.json and ${process.cwd()}/README.md, `
-        + 'then summarize this project briefly.';
 const finalMessageMode = process.env.TABMINAL_FINAL_MESSAGE_MODE || 'pattern';
 const finalMessagePattern = process.env.TABMINAL_FINAL_MESSAGE_PATTERN
     || 'all set';
@@ -52,6 +49,15 @@ const attachmentFiles = String(
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
+    || (
+        /test agent/i.test(targetAgentLabel)
+        && (expectDiffEditor || expectCodeEditor)
+            ? 'diff-smoke'
+            : `Read ${process.cwd()}/package.json `
+                + `and ${process.cwd()}/README.md, `
+                + 'then summarize this project briefly.'
+    );
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -1245,12 +1251,24 @@ async function main() {
                 await waitFor(`${label}-updated`, async () => {
                     return await evaluate(
                         toExpression(`
-                            () => Array.isArray(window.__fetchLog)
-                                && window.__fetchLog.some((entry) =>
+                            () => {
+                                const select = document.querySelector(
+                                    '.agent-panel-mode-select[data-selector-role="${selectorRole}"]'
+                                );
+                                const selectedText = select
+                                    ? select.options[select.selectedIndex]
+                                        ?.textContent?.trim() || ''
+                                    : '';
+                                const sawConfigFetch = Array.isArray(
+                                    window.__fetchLog
+                                ) && window.__fetchLog.some((entry) =>
                                     /\\/api\\/agents\\/tabs\\/[^/]+\\/config$/.test(
                                         entry.url || ''
                                     )
-                                )
+                                );
+                                return sawConfigFetch
+                                    || selectedText === ${JSON.stringify(switchedConfig)};
+                            }
                         `),
                         15000,
                         250
@@ -1642,7 +1660,7 @@ async function main() {
             toExpression(`
                 () => {
                     const button = document.querySelector(
-                        '.agent-activity-cancel'
+                        '.agent-activity-action'
                     );
                     return Boolean(button)
                         && button.disabled === false
@@ -1658,7 +1676,7 @@ async function main() {
         toExpression(`
             () => {
                 const stopButton = document.querySelector(
-                    '.agent-activity-cancel'
+                    '.agent-activity-action'
                 );
                 stopButton?.click();
                 return true;
@@ -1839,8 +1857,8 @@ async function main() {
             () => ({
                 tabs: Array.from(document.querySelectorAll('.editor-tab'))
                     .map((el) => el.textContent.trim()),
-                agentHeader:
-                    document.querySelector('.agent-panel-title')
+                activeAgentTab:
+                    document.querySelector('.agent-editor-tab.active')
                         ?.textContent || '',
                 messages: Array.from(document.querySelectorAll('.agent-message'))
                     .map((el) => el.textContent.trim()),
