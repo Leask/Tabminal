@@ -2278,8 +2278,8 @@ kbd {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 12px 4px;
-    min-height: 18px;
+    padding: 6px 12px 8px;
+    min-height: 26px;
     font-size: 10px;
     color: var(--text-muted);
 }
