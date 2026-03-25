@@ -114,6 +114,16 @@ function formatAgentStartupError(definition, error) {
             + 'for the user running Tabminal, or start Tabminal with a HOME '
             + 'that already contains Codex auth.';
     }
+    if (
+        definition?.id === 'claude'
+        && /auth|login|credential|api key|unauthorized/i.test(rawMessage)
+    ) {
+        return 'Claude is not authenticated on this host. Use an existing '
+            + 'Claude login, set ANTHROPIC_API_KEY, or configure Vertex '
+            + 'with CLAUDE_CODE_USE_VERTEX=1, ANTHROPIC_VERTEX_PROJECT_ID, '
+            + 'CLOUD_ML_REGION, and Google Cloud credentials before '
+            + 'starting Tabminal.';
+    }
     return rawMessage;
 }
 

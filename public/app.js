@@ -3922,7 +3922,8 @@ function buildAgentDefinitionMeta(definition) {
         return 'Codex ACP adapter · requires codex login on this host';
     }
     if (definition.id === 'claude') {
-        return 'Claude Code ACP adapter · requires Claude auth on this host';
+        return 'Claude Code ACP adapter · supports Claude login, '
+            + 'ANTHROPIC_API_KEY, or Vertex auth on this host';
     }
     return definition.description || definition.commandLabel || '';
 }
@@ -3943,6 +3944,13 @@ function buildAgentSetupMessage(definition) {
     if (definition.reason === 'not installed') {
         return `Install or expose ${definition.commandLabel} on the current `
             + 'host, then restart Tabminal.';
+    }
+    if (definition.id === 'claude') {
+        return 'Claude Code can run here with an existing Claude login, '
+            + 'ANTHROPIC_API_KEY, or Vertex auth. For Vertex, start '
+            + 'Tabminal with CLAUDE_CODE_USE_VERTEX=1, '
+            + 'ANTHROPIC_VERTEX_PROJECT_ID, CLOUD_ML_REGION, and Google '
+            + 'Cloud credentials in the host environment.';
     }
     return definition.reason || 'This agent is not ready on the current host.';
 }
