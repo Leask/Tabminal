@@ -1074,6 +1074,7 @@ class AcpRuntime extends EventEmitter {
         const tab = this.#getTabBySession(params.sessionId);
         if (!tab) return;
         const update = params.update;
+        let broadcastUpdate = update;
 
         switch (update.sessionUpdate) {
             case 'agent_message_chunk':
@@ -1085,12 +1086,15 @@ class AcpRuntime extends EventEmitter {
             case 'user_message_chunk':
                 this.#appendContentChunk(tab, update, 'user', 'message');
                 break;
-            case 'tool_call':
-                tab.toolCalls.set(update.toolCallId, {
+            case 'tool_call': {
+                const nextToolCall = {
                     ...update,
                     order: this.#nextTimelineOrder(tab)
-                });
+                };
+                tab.toolCalls.set(update.toolCallId, nextToolCall);
+                broadcastUpdate = nextToolCall;
                 break;
+            }
             case 'tool_call_update': {
                 const previous = tab.toolCalls.get(update.toolCallId) || {
                     toolCallId: update.toolCallId,
@@ -1098,10 +1102,12 @@ class AcpRuntime extends EventEmitter {
                     status: 'pending',
                     order: this.#nextTimelineOrder(tab)
                 };
-                tab.toolCalls.set(update.toolCallId, {
+                const nextToolCall = {
                     ...previous,
                     ...update
-                });
+                };
+                tab.toolCalls.set(update.toolCallId, nextToolCall);
+                broadcastUpdate = nextToolCall;
                 break;
             }
             case 'current_mode_update':
@@ -1119,7 +1125,7 @@ class AcpRuntime extends EventEmitter {
 
         this.#broadcast(tab, {
             type: 'session_update',
-            update,
+            update: broadcastUpdate,
             tab: {
                 currentModeId: tab.currentModeId,
                 availableModes: tab.availableModes,

@@ -2985,19 +2985,26 @@ class AgentTab {
         this.availableCommands = Array.isArray(data.availableCommands)
             ? data.availableCommands
             : [];
+        this.timelineCounter = 0;
         this.messages = Array.isArray(data.messages)
-            ? data.messages.map((message) => ({ ...message }))
+            ? data.messages.map((message) => this.#normalizeMessage(message))
             : [];
         this.toolCalls = new Map();
         for (const toolCall of data.toolCalls || []) {
             if (toolCall?.toolCallId) {
-                this.toolCalls.set(toolCall.toolCallId, { ...toolCall });
+                this.toolCalls.set(
+                    toolCall.toolCallId,
+                    this.#normalizeTimelineEntry(toolCall)
+                );
             }
         }
         this.permissions = new Map();
         for (const permission of data.permissions || []) {
             if (permission?.id) {
-                this.permissions.set(permission.id, { ...permission });
+                this.permissions.set(
+                    permission.id,
+                    this.#normalizeTimelineEntry(permission)
+                );
             }
         }
     }
@@ -3042,7 +3049,7 @@ class AgentTab {
                 this.update(message.tab || {});
                 break;
             case 'message_open':
-                this.messages.push({ ...message.message });
+                this.#upsertMessage(message.message);
                 break;
             case 'message_chunk':
                 this.#appendChunk(message);
@@ -3062,8 +3069,13 @@ class AgentTab {
                 break;
             case 'permission_request':
                 if (message.permission?.id) {
+                    const previous = this.permissions.get(message.permission.id);
                     this.permissions.set(message.permission.id, {
-                        ...message.permission
+                        ...previous,
+                        ...this.#normalizeTimelineEntry(
+                            message.permission,
+                            previous?.order
+                        )
                     });
                 }
                 break;
@@ -3092,39 +3104,106 @@ class AgentTab {
         this.notifyUi();
     }
 
-    #appendChunk(message) {
-        const last = this.messages[this.messages.length - 1] || null;
-        if (
-            last
-            && last.streamKey === message.streamKey
-            && last.role === message.role
-            && last.kind === message.kind
-        ) {
-            last.text += message.text || '';
+    #normalizeTimelineEntry(entry, fallbackOrder = null) {
+        const nextEntry = { ...entry };
+        if (Number.isFinite(nextEntry.order)) {
+            this.timelineCounter = Math.max(this.timelineCounter, nextEntry.order);
+            return nextEntry;
+        }
+        nextEntry.order = Number.isFinite(fallbackOrder)
+            ? fallbackOrder
+            : this.#nextTimelineOrder();
+        return nextEntry;
+    }
+
+    #normalizeMessage(message, fallbackOrder = null) {
+        const nextMessage = this.#normalizeTimelineEntry(message, fallbackOrder);
+        nextMessage.text = typeof nextMessage.text === 'string'
+            ? nextMessage.text
+            : '';
+        return nextMessage;
+    }
+
+    #nextTimelineOrder() {
+        this.timelineCounter = Math.max(this.timelineCounter || 0, 0) + 1;
+        return this.timelineCounter;
+    }
+
+    #findMessageIndex(candidate) {
+        if (!candidate) return -1;
+        if (candidate.id) {
+            const byId = this.messages.findIndex(
+                (message) => message.id === candidate.id
+            );
+            if (byId !== -1) return byId;
+        }
+        if (!candidate.streamKey) return -1;
+        for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+            const message = this.messages[index];
+            if (
+                message.streamKey === candidate.streamKey
+                && message.role === candidate.role
+                && message.kind === candidate.kind
+            ) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    #upsertMessage(message) {
+        if (!message) return;
+        const index = this.#findMessageIndex(message);
+        if (index === -1) {
+            this.messages.push(this.#normalizeMessage(message));
             return;
         }
 
-        this.messages.push({
+        const previous = this.messages[index];
+        const nextMessage = this.#normalizeMessage(message, previous.order);
+        this.messages[index] = {
+            ...previous,
+            ...nextMessage,
+            text: selectAgentMessageText(previous.text, nextMessage.text)
+        };
+    }
+
+    #appendChunk(message) {
+        const index = this.#findMessageIndex(message);
+        if (index !== -1) {
+            const existing = this.messages[index];
+            existing.text = mergeAgentMessageText(
+                existing.text || '',
+                message.text || ''
+            );
+            return;
+        }
+
+        this.messages.push(this.#normalizeMessage({
             id: crypto.randomUUID(),
             streamKey: message.streamKey,
             role: message.role || 'assistant',
             kind: message.kind || 'message',
             text: message.text || ''
-        });
+        }));
     }
 
     #applySessionUpdate(update) {
         switch (update.sessionUpdate) {
             case 'tool_call':
                 if (update.toolCallId) {
-                    this.toolCalls.set(update.toolCallId, { ...update });
+                    const previous = this.toolCalls.get(update.toolCallId);
+                    this.toolCalls.set(
+                        update.toolCallId,
+                        this.#normalizeTimelineEntry(update, previous?.order)
+                    );
                 }
                 break;
             case 'tool_call_update': {
                 const previous = this.toolCalls.get(update.toolCallId) || {};
                 this.toolCalls.set(update.toolCallId, {
                     ...previous,
-                    ...update
+                    ...this.#normalizeTimelineEntry(update, previous.order)
                 });
                 break;
             }
@@ -3357,6 +3436,36 @@ function normalizeAgentCommands(commands) {
             };
         })
         .filter(Boolean);
+}
+
+function mergeAgentMessageText(previousText, chunkText) {
+    const previous = String(previousText || '');
+    const chunk = String(chunkText || '');
+    if (!previous) return chunk;
+    if (!chunk) return previous;
+    if (/\s$/.test(previous) || /^\s/.test(chunk)) {
+        return `${previous}${chunk}`;
+    }
+    const previousLast = previous.slice(-1);
+    const chunkFirst = chunk[0] || '';
+    if (
+        /[.!?`'")\]]/.test(previousLast)
+        && /[A-Z`"'[(]/.test(chunkFirst)
+    ) {
+        return `${previous}\n\n${chunk}`;
+    }
+    return `${previous}${chunk}`;
+}
+
+function selectAgentMessageText(previousText, nextText) {
+    const previous = String(previousText || '');
+    const next = String(nextText || '');
+    if (!previous) return next;
+    if (!next) return previous;
+    if (previous === next) return previous;
+    if (next.startsWith(previous)) return next;
+    if (previous.startsWith(next)) return previous;
+    return previous;
 }
 
 function getAgentCommandSuggestions(agentTab, promptValue) {
