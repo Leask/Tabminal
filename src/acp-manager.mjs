@@ -5,7 +5,7 @@ import process from 'node:process';
 import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as acp from '@agentclientprotocol/sdk';
 import pkg from '../package.json' with { type: 'json' };
@@ -13,6 +13,13 @@ import * as persistence from './persistence.mjs';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
+const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+    'txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'toml',
+    'ini', 'env', 'xml', 'html', 'htm', 'css', 'scss', 'less', 'csv',
+    'tsv', 'log', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb',
+    'go', 'rs', 'java', 'kt', 'swift', 'c', 'cc', 'cpp', 'h', 'hpp',
+    'sh', 'bash', 'zsh', 'fish', 'sql', 'graphql', 'gql', 'diff', 'patch'
+]);
 const NPX_COMMAND = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const TEST_AGENT_PATH = path.join(CURRENT_DIR, 'acp-test-agent.mjs');
@@ -164,6 +171,64 @@ function commandExists(command) {
         stdio: 'ignore'
     });
     return result.status === 0;
+}
+
+function getAttachmentExtension(name = '') {
+    const extension = path.extname(String(name || '')).toLowerCase();
+    return extension.startsWith('.') ? extension.slice(1) : extension;
+}
+
+function normalizeAttachmentMimeType(mimeType = '') {
+    const value = String(mimeType || '').trim();
+    return value || 'application/octet-stream';
+}
+
+function getAttachmentKind(attachment = {}) {
+    const mimeType = normalizeAttachmentMimeType(attachment.mimeType);
+    if (mimeType.startsWith('image/')) {
+        return 'image';
+    }
+    if (
+        mimeType.startsWith('text/')
+        || mimeType.includes('json')
+        || mimeType.includes('xml')
+        || mimeType.includes('yaml')
+        || mimeType.includes('javascript')
+        || mimeType.includes('typescript')
+    ) {
+        return 'text';
+    }
+    const extension = getAttachmentExtension(attachment.name);
+    if (TEXT_ATTACHMENT_EXTENSIONS.has(extension)) {
+        return 'text';
+    }
+    return 'binary';
+}
+
+function normalizePromptAttachment(attachment = {}) {
+    const name = String(attachment.name || 'attachment').trim() || 'attachment';
+    const mimeType = normalizeAttachmentMimeType(attachment.mimeType);
+    const size = Number.isFinite(attachment.size) ? attachment.size : 0;
+    const tempPath = String(attachment.tempPath || '').trim();
+    return {
+        id: String(attachment.id || crypto.randomUUID()),
+        name,
+        mimeType,
+        size,
+        tempPath,
+        kind: getAttachmentKind({ name, mimeType })
+    };
+}
+
+function serializePromptAttachment(attachment = {}) {
+    const normalized = normalizePromptAttachment(attachment);
+    return {
+        id: normalized.id,
+        name: normalized.name,
+        mimeType: normalized.mimeType,
+        size: normalized.size,
+        kind: normalized.kind
+    };
 }
 
 function makeBuiltInDefinitions() {
@@ -830,6 +895,82 @@ class AcpRuntime extends EventEmitter {
         };
     }
 
+    #getPromptCapabilities() {
+        return this.agentCapabilities?.promptCapabilities || {};
+    }
+
+    async #buildAttachmentPromptBlock(attachment) {
+        const normalized = normalizePromptAttachment(attachment);
+        const fileUri = pathToFileURL(normalized.tempPath).toString();
+        const capabilities = this.#getPromptCapabilities();
+
+        if (normalized.kind === 'image' && capabilities.image) {
+            const data = await fs.readFile(normalized.tempPath);
+            return {
+                type: 'image',
+                data: data.toString('base64'),
+                mimeType: normalized.mimeType,
+                uri: fileUri
+            };
+        }
+
+        if (capabilities.embeddedContext) {
+            if (normalized.kind === 'text') {
+                const text = await fs.readFile(normalized.tempPath, 'utf8');
+                return {
+                    type: 'resource',
+                    resource: {
+                        text,
+                        uri: fileUri,
+                        mimeType: normalized.mimeType
+                    }
+                };
+            }
+
+            const data = await fs.readFile(normalized.tempPath);
+            return {
+                type: 'resource',
+                resource: {
+                    blob: data.toString('base64'),
+                    uri: fileUri,
+                    mimeType: normalized.mimeType
+                }
+            };
+        }
+
+        return {
+            type: 'resource_link',
+            name: normalized.name,
+            title: normalized.name,
+            uri: fileUri,
+            mimeType: normalized.mimeType,
+            size: normalized.size || null
+        };
+    }
+
+    async #buildPromptBlocks(text, attachments = []) {
+        const blocks = [];
+        for (const attachment of attachments) {
+            blocks.push(await this.#buildAttachmentPromptBlock(attachment));
+        }
+        if (text) {
+            blocks.push({
+                type: 'text',
+                text
+            });
+        }
+        return blocks;
+    }
+
+    async #cleanupPromptAttachments(attachments = []) {
+        const paths = attachments
+            .map((attachment) => String(attachment?.tempPath || '').trim())
+            .filter(Boolean);
+        await Promise.allSettled(paths.map((filePath) =>
+            fs.rm(filePath, { force: true })
+        ));
+    }
+
     attachSocket(tabId, socket) {
         const tab = this.tabs.get(tabId);
         if (!tab) {
@@ -847,7 +988,7 @@ class AcpRuntime extends EventEmitter {
         return true;
     }
 
-    async sendPrompt(tabId, text) {
+    async sendPrompt(tabId, text, attachments = []) {
         const tab = this.tabs.get(tabId);
         if (!tab) {
             throw new Error('Agent tab not found');
@@ -855,6 +996,14 @@ class AcpRuntime extends EventEmitter {
         if (tab.busy) {
             throw new Error('Agent tab is already running');
         }
+        const promptText = typeof text === 'string' ? text : '';
+        const promptAttachments = Array.isArray(attachments)
+            ? attachments.map((attachment) => normalizePromptAttachment(attachment))
+            : [];
+        const promptBlocks = await this.#buildPromptBlocks(
+            promptText,
+            promptAttachments
+        );
         tab.errorMessage = '';
         tab.busy = true;
         tab.status = 'running';
@@ -862,13 +1011,18 @@ class AcpRuntime extends EventEmitter {
         this.#appendMessage(tab, {
             role: 'user',
             kind: 'message',
-            text,
-            streamKey: crypto.randomUUID()
+            text: promptText,
+            streamKey: crypto.randomUUID(),
+            attachments: promptAttachments.map((attachment) =>
+                serializePromptAttachment(attachment)
+            )
         });
-        tab.pendingUserEcho = {
-            text,
-            matched: 0
-        };
+        tab.pendingUserEcho = promptText
+            ? {
+                text: promptText,
+                matched: 0
+            }
+            : null;
         this.#broadcast(tab, {
             type: 'status',
             status: tab.status,
@@ -878,10 +1032,7 @@ class AcpRuntime extends EventEmitter {
 
         const promptPromise = this.connection.prompt({
             sessionId: tab.acpSessionId,
-            prompt: [{
-                type: 'text',
-                text
-            }]
+            prompt: promptBlocks
         });
 
         void promptPromise.then(async (response) => {
@@ -930,6 +1081,8 @@ class AcpRuntime extends EventEmitter {
                 busy: false,
                 errorMessage: tab.errorMessage
             });
+        }).finally(() => {
+            void this.#cleanupPromptAttachments(promptAttachments);
         });
     }
 
@@ -1213,7 +1366,12 @@ class AcpRuntime extends EventEmitter {
             kind: message.kind,
             text: message.text,
             streamKey: message.streamKey || crypto.randomUUID(),
-            order: this.#nextTimelineOrder(tab)
+            order: this.#nextTimelineOrder(tab),
+            attachments: Array.isArray(message.attachments)
+                ? message.attachments.map((attachment) =>
+                    serializePromptAttachment(attachment)
+                )
+                : []
         };
         tab.messages.push(entry);
         this.#broadcast(tab, {
@@ -1777,12 +1935,12 @@ export class AcpManager {
         return tabEntry.runtime.attachSocket(tabId, socket);
     }
 
-    async sendPrompt(tabId, text) {
+    async sendPrompt(tabId, text, attachments = []) {
         const tabEntry = this.tabs.get(tabId);
         if (!tabEntry) {
             throw new Error('Agent tab not found');
         }
-        await tabEntry.runtime.sendPrompt(tabId, text);
+        await tabEntry.runtime.sendPrompt(tabId, text, attachments);
     }
 
     async cancel(tabId) {

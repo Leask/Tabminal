@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,7 @@ import Koa from 'koa';
 import serve from 'koa-static';
 import Router from '@koa/router';
 import bodyParser from 'koa-bodyparser';
+import { formidable } from 'formidable';
 import { WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
@@ -28,10 +30,59 @@ const publicDir = path.join(__dirname, '..', 'public');
 const app = new Koa();
 const router = new Router();
 const SERVER_BOOT_ID = `${Date.now()}`;
+const AGENT_ATTACHMENT_FIELD = 'attachments';
+const MAX_AGENT_ATTACHMENTS = 8;
+const MAX_AGENT_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const MAX_AGENT_ATTACHMENTS_TOTAL_SIZE = 25 * 1024 * 1024;
+
 function debugLog(...args) {
     if (config.debug) {
         console.log(...args);
     }
+}
+
+function parseMultipartForm(req, options = {}) {
+    return new Promise((resolve, reject) => {
+        const form = formidable({
+            multiples: true,
+            allowEmptyFiles: false,
+            maxFiles: MAX_AGENT_ATTACHMENTS,
+            maxFileSize: MAX_AGENT_ATTACHMENT_SIZE,
+            maxTotalFileSize: MAX_AGENT_ATTACHMENTS_TOTAL_SIZE,
+            ...options
+        });
+        form.parse(req, (error, fields, files) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve({ fields, files });
+        });
+    });
+}
+
+function firstFormFieldValue(value) {
+    if (Array.isArray(value)) {
+        return typeof value[0] === 'string' ? value[0] : '';
+    }
+    return typeof value === 'string' ? value : '';
+}
+
+function normalizePromptAttachments(files) {
+    const rawList = Array.isArray(files)
+        ? files
+        : (files ? [files] : []);
+    return rawList
+        .filter((file) => file && typeof file === 'object')
+        .map((file) => ({
+            id: crypto.randomUUID(),
+            name: String(file.originalFilename || 'attachment').trim()
+                || 'attachment',
+            mimeType: String(file.mimetype || '').trim(),
+            size: Number.isFinite(file.size) ? file.size : 0,
+            tempPath: String(file.filepath || '').trim()
+        }))
+        .filter((file) => file.tempPath);
 }
 
 app.use(async (ctx, next) => {
@@ -355,14 +406,35 @@ router.post('/api/agents/tabs', async (ctx) => {
 
 router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
     const { tabId } = ctx.params;
-    const { text } = ctx.request.body || {};
-    if (!text || typeof text !== 'string') {
+    let text = '';
+    let attachments = [];
+
+    if (ctx.is('multipart')) {
+        try {
+            const { fields, files } = await parseMultipartForm(ctx.req);
+            text = firstFormFieldValue(fields?.text);
+            attachments = normalizePromptAttachments(
+                files?.[AGENT_ATTACHMENT_FIELD]
+            );
+        } catch (error) {
+            ctx.status = 400;
+            ctx.body = {
+                error: error?.message || 'Failed to parse prompt attachments'
+            };
+            return;
+        }
+    } else {
+        const body = ctx.request.body || {};
+        text = typeof body.text === 'string' ? body.text : '';
+    }
+
+    if (!text.trim() && attachments.length === 0) {
         ctx.status = 400;
-        ctx.body = { error: 'text is required' };
+        ctx.body = { error: 'text or attachments are required' };
         return;
     }
     try {
-        await acpManager.sendPrompt(tabId, text);
+        await acpManager.sendPrompt(tabId, text, attachments);
         ctx.status = 202;
         ctx.body = { ok: true };
     } catch (error) {

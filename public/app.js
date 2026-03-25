@@ -108,6 +108,7 @@ const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
 const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5a2 2 0 1 1 4 0"></path><path d="M5 16a7 7 0 1 0 14 0"></path><path d="M4 16h16"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg>';
 const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
+const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5 9 14a3.5 3.5 0 1 1-5-5l8-8a5 5 0 1 1 7 7l-9 9a6.5 6.5 0 0 1-9-9l8-8"></path></svg>';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -540,6 +541,9 @@ class EditorManager {
         this.agentTools = null;
         this.agentPermissions = null;
         this.agentPrompt = null;
+        this.agentAttachmentInput = null;
+        this.agentAttachmentButton = null;
+        this.agentAttachmentList = null;
         this.agentSendButton = null;
         this.agentHint = null;
         this.agentFixedActions = null;
@@ -708,6 +712,20 @@ class EditorManager {
         const composer = document.createElement('div');
         composer.className = 'agent-panel-composer';
 
+        this.agentAttachmentInput = document.createElement('input');
+        this.agentAttachmentInput.type = 'file';
+        this.agentAttachmentInput.multiple = true;
+        this.agentAttachmentInput.className = 'agent-panel-file-input';
+        this.agentAttachmentInput.addEventListener('change', (event) => {
+            const files = Array.from(event.target.files || []);
+            void this.addAgentAttachments(files);
+            this.agentAttachmentInput.value = '';
+        });
+
+        this.agentAttachmentList = document.createElement('div');
+        this.agentAttachmentList.className = 'agent-attachment-list';
+        this.agentAttachmentList.style.display = 'none';
+
         this.agentPrompt = document.createElement('textarea');
         this.agentPrompt.className = 'agent-panel-input';
         this.agentPrompt.placeholder = AGENT_PROMPT_PLACEHOLDER.join('\n');
@@ -729,6 +747,25 @@ class EditorManager {
             setTimeout(() => {
                 this.hideAgentCommandMenu();
             }, 120);
+        });
+        for (const eventName of ['dragenter', 'dragover']) {
+            this.agentPrompt.addEventListener(eventName, (event) => {
+                if (!event.dataTransfer?.files?.length) return;
+                event.preventDefault();
+                composer.classList.add('drag-over');
+            });
+        }
+        for (const eventName of ['dragleave', 'dragend']) {
+            this.agentPrompt.addEventListener(eventName, () => {
+                composer.classList.remove('drag-over');
+            });
+        }
+        this.agentPrompt.addEventListener('drop', (event) => {
+            const files = Array.from(event.dataTransfer?.files || []);
+            if (files.length === 0) return;
+            event.preventDefault();
+            composer.classList.remove('drag-over');
+            void this.addAgentAttachments(files);
         });
         this.agentPrompt.addEventListener('keydown', (event) => {
             const activeTabKey = this.getActiveWorkspaceTabKey();
@@ -842,6 +879,20 @@ class EditorManager {
         this.agentFixedActions = document.createElement('div');
         this.agentFixedActions.className = 'agent-panel-fixed-actions';
 
+        this.agentAttachmentButton = document.createElement('button');
+        this.agentAttachmentButton.type = 'button';
+        this.agentAttachmentButton.className = 'agent-panel-button secondary';
+        this.agentAttachmentButton.innerHTML = ATTACH_ICON_SVG;
+        this.agentAttachmentButton.title = 'Add attachments';
+        this.agentAttachmentButton.setAttribute(
+            'aria-label',
+            'Add attachments'
+        );
+        this.agentAttachmentButton.addEventListener('click', () => {
+            if (this.agentAttachmentButton.disabled) return;
+            this.agentAttachmentInput?.click();
+        });
+
         this.agentSendButton = document.createElement('button');
         this.agentSendButton.type = 'button';
         this.agentSendButton.className = 'agent-panel-button';
@@ -861,10 +912,13 @@ class EditorManager {
         this.agentFixedActions.appendChild(this.agentModeSelect);
         this.agentFixedActions.appendChild(this.agentSetupButton);
         this.agentFixedActions.appendChild(this.agentNewChatButton);
+        this.agentFixedActions.appendChild(this.agentAttachmentButton);
         this.agentFixedActions.appendChild(this.agentSendButton);
 
         actions.appendChild(this.agentCommands);
         actions.appendChild(this.agentFixedActions);
+        composer.appendChild(this.agentAttachmentInput);
+        composer.appendChild(this.agentAttachmentList);
         composer.appendChild(this.agentPrompt);
         composer.appendChild(this.agentCommandMenu);
         composer.appendChild(actions);
@@ -1672,6 +1726,8 @@ class EditorManager {
             this.agentCommands.style.display = 'none';
         }
 
+        this.renderAgentComposerAttachments(agentTab);
+
         const previousScrollTop = this.agentTranscript.scrollTop;
         const previousScrollHeight = this.agentTranscript.scrollHeight;
         const previousClientHeight = this.agentTranscript.clientHeight;
@@ -1744,21 +1800,29 @@ class EditorManager {
         role.className = 'agent-message-role';
         role.textContent = getAgentMessageRoleLabel(agentTab, message);
 
-        const body = document.createElement('div');
-        body.className = 'agent-message-body';
-        if (
-            message.role === 'assistant'
-            && message.kind === 'message'
-        ) {
-            body.classList.add('markdown');
-            body.innerHTML = renderAgentMessageMarkdown(message.text || '');
-        } else {
-            body.classList.add('plain');
-            body.textContent = message.text || '';
+        item.appendChild(role);
+        const attachments = buildAgentMessageAttachmentsNode(
+            message.attachments
+        );
+        if (attachments) {
+            item.appendChild(attachments);
         }
 
-        item.appendChild(role);
-        item.appendChild(body);
+        if (message.text) {
+            const body = document.createElement('div');
+            body.className = 'agent-message-body';
+            if (
+                message.role === 'assistant'
+                && message.kind === 'message'
+            ) {
+                body.classList.add('markdown');
+                body.innerHTML = renderAgentMessageMarkdown(message.text || '');
+            } else {
+                body.classList.add('plain');
+                body.textContent = message.text || '';
+            }
+            item.appendChild(body);
+        }
         return item;
     }
 
@@ -1984,12 +2048,18 @@ class EditorManager {
         if (!agentTab) return;
         if (agentTab.busy) return;
         const text = this.agentPrompt.value.trim();
-        if (!text) return;
-        this.recordAgentPromptHistory(agentTab, text);
-        this.setAgentPromptValue('', agentTab);
+        const attachments = Array.isArray(agentTab.pendingAttachments)
+            ? [...agentTab.pendingAttachments]
+            : [];
+        if (!text && attachments.length === 0) return;
         try {
             agentTab.lastSubmittedPrompt = text;
-            await agentTab.sendPrompt(text);
+            await agentTab.sendPrompt(text, attachments);
+            if (text) {
+                this.recordAgentPromptHistory(agentTab, text);
+            }
+            agentTab.pendingAttachments = [];
+            this.setAgentPromptValue('', agentTab);
             agentTab.busy = true;
             agentTab.status = 'running';
             this.renderAgentPanel(agentTab);
@@ -2076,8 +2146,13 @@ class EditorManager {
             definition,
             activeAgentTab?.errorMessage || ''
         );
+        const hasAttachments = Array.isArray(activeAgentTab?.pendingAttachments)
+            && activeAgentTab.pendingAttachments.length > 0;
         this.agentSendButton.textContent = busy ? 'Stop' : 'Send ⏎';
-        this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
+        this.agentSendButton.disabled = !busy
+            && !this.agentPrompt.value.trim()
+            && !hasAttachments;
+        this.agentAttachmentButton.disabled = !!busy;
         this.agentSetupButton.style.display = needsSetup ? '' : 'none';
         if (!needsSetup && activeAgentTab) {
             activeAgentTab.lastSetupPromptedErrorMessage = '';
@@ -2086,6 +2161,7 @@ class EditorManager {
             activeAgentTab
         );
         this.renderAgentActivity(activeAgentTab);
+        this.renderAgentComposerAttachments(activeAgentTab);
         if (this.suppressAgentCommandMenu) {
             this.hideAgentCommandMenu();
         } else {
@@ -2218,6 +2294,83 @@ class EditorManager {
         agentTab.promptHistory.push(text);
         agentTab.promptHistoryIndex = null;
         agentTab.promptDraft = '';
+    }
+
+    async addAgentAttachments(files = []) {
+        const agentTab = getActiveAgentTab();
+        if (!agentTab || agentTab.busy) return;
+        const nextAttachments = normalizeAgentComposerAttachments(files);
+        if (nextAttachments.length === 0) return;
+        if (!Array.isArray(agentTab.pendingAttachments)) {
+            agentTab.pendingAttachments = [];
+        }
+        for (const attachment of nextAttachments) {
+            const duplicate = agentTab.pendingAttachments.some((existing) => (
+                existing.name === attachment.name
+                && existing.size === attachment.size
+                && existing.lastModified === attachment.lastModified
+            ));
+            if (!duplicate) {
+                agentTab.pendingAttachments.push(attachment);
+            }
+        }
+        this.renderAgentComposerAttachments(agentTab);
+        this.updateAgentComposerActions(agentTab);
+    }
+
+    removeAgentAttachment(agentTab, attachmentId) {
+        if (!agentTab || !Array.isArray(agentTab.pendingAttachments)) return;
+        agentTab.pendingAttachments = agentTab.pendingAttachments.filter(
+            (attachment) => attachment.id !== attachmentId
+        );
+        this.renderAgentComposerAttachments(agentTab);
+        this.updateAgentComposerActions(agentTab);
+    }
+
+    renderAgentComposerAttachments(agentTab = null) {
+        if (!this.agentAttachmentList) return;
+        const attachments = Array.isArray(agentTab?.pendingAttachments)
+            ? agentTab.pendingAttachments
+            : [];
+        this.agentAttachmentList.innerHTML = '';
+        if (attachments.length === 0) {
+            this.agentAttachmentList.style.display = 'none';
+            return;
+        }
+        for (const attachment of attachments) {
+            const chip = document.createElement('div');
+            chip.className = 'agent-attachment-chip';
+
+            const meta = document.createElement('div');
+            meta.className = 'agent-attachment-chip-meta';
+
+            const name = document.createElement('span');
+            name.className = 'agent-attachment-chip-name';
+            name.textContent = attachment.name;
+            meta.appendChild(name);
+
+            const detail = document.createElement('span');
+            detail.className = 'agent-attachment-chip-detail';
+            detail.textContent = buildAgentAttachmentMetaLabel(attachment);
+            meta.appendChild(detail);
+
+            chip.appendChild(meta);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'agent-attachment-chip-remove';
+            remove.textContent = '×';
+            remove.disabled = !!agentTab?.busy;
+            remove.title = `Remove ${attachment.name}`;
+            remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+            remove.addEventListener('click', () => {
+                this.removeAgentAttachment(agentTab, attachment.id);
+            });
+            chip.appendChild(remove);
+
+            this.agentAttachmentList.appendChild(chip);
+        }
+        this.agentAttachmentList.style.display = 'flex';
     }
 
     handleAgentPromptHistoryKey(event, agentTab) {
@@ -3288,6 +3441,7 @@ class AgentTab {
         this.promptDraft = '';
         this.promptHistory = [];
         this.promptHistoryIndex = null;
+        this.pendingAttachments = [];
         this.update(data);
         this.connect();
     }
@@ -3509,6 +3663,9 @@ class AgentTab {
         nextMessage.text = typeof nextMessage.text === 'string'
             ? nextMessage.text
             : '';
+        nextMessage.attachments = normalizeAgentMessageAttachments(
+            nextMessage.attachments
+        );
         return nextMessage;
     }
 
@@ -3608,19 +3765,37 @@ class AgentTab {
         }
     }
 
-    async sendPrompt(text) {
+    async sendPrompt(text, attachments = []) {
         const baseline = {
             messageCount: this.messages.length,
             toolCount: this.toolCalls.size,
             permissionCount: this.permissions.size
         };
+        const hasAttachments = Array.isArray(attachments)
+            && attachments.length > 0;
+        const request = {
+            method: 'POST'
+        };
+        if (hasAttachments) {
+            const formData = new FormData();
+            formData.append('text', text);
+            for (const attachment of attachments) {
+                if (attachment?.file instanceof File) {
+                    formData.append(
+                        'attachments',
+                        attachment.file,
+                        attachment.name
+                    );
+                }
+            }
+            request.body = formData;
+        } else {
+            request.headers = { 'Content-Type': 'application/json' };
+            request.body = JSON.stringify({ text });
+        }
         const response = await this.server.fetch(
             `/api/agents/tabs/${this.id}/prompt`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text })
-            }
+            request
         );
         if (!response.ok) {
             await throwResponseError(response, 'Failed to send prompt');
@@ -3894,6 +4069,94 @@ function normalizeAgentCommands(commands) {
             };
         })
         .filter(Boolean);
+}
+
+function formatAgentAttachmentSize(size) {
+    const value = Number(size);
+    if (!Number.isFinite(value) || value <= 0) {
+        return '';
+    }
+    if (value < 1024) {
+        return `${value} B`;
+    }
+    if (value < 1024 * 1024) {
+        return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+    }
+    return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function normalizeAgentComposerAttachments(files) {
+    return Array.from(files || [])
+        .filter((file) => file instanceof File && file.name)
+        .map((file) => ({
+            id: crypto.randomUUID(),
+            file,
+            name: file.name,
+            mimeType: String(file.type || '').trim(),
+            size: Number.isFinite(file.size) ? file.size : 0,
+            lastModified: Number.isFinite(file.lastModified)
+                ? file.lastModified
+                : 0
+        }));
+}
+
+function normalizeAgentMessageAttachments(attachments) {
+    if (!Array.isArray(attachments)) return [];
+    return attachments
+        .map((attachment) => {
+            const name = String(attachment?.name || '').trim();
+            if (!name) return null;
+            return {
+                id: String(attachment?.id || crypto.randomUUID()),
+                name,
+                mimeType: String(attachment?.mimeType || '').trim(),
+                size: Number.isFinite(attachment?.size) ? attachment.size : 0
+            };
+        })
+        .filter(Boolean);
+}
+
+function buildAgentAttachmentMetaLabel(attachment) {
+    const parts = [];
+    const mimeType = String(attachment?.mimeType || '').trim();
+    if (mimeType) {
+        parts.push(mimeType);
+    }
+    const sizeLabel = formatAgentAttachmentSize(attachment?.size);
+    if (sizeLabel) {
+        parts.push(sizeLabel);
+    }
+    return parts.join(' · ');
+}
+
+function buildAgentMessageAttachmentsNode(attachments) {
+    const normalized = normalizeAgentMessageAttachments(attachments);
+    if (normalized.length === 0) return null;
+
+    const container = document.createElement('div');
+    container.className = 'agent-message-attachments';
+
+    for (const attachment of normalized) {
+        const item = document.createElement('div');
+        item.className = 'agent-message-attachment';
+
+        const name = document.createElement('span');
+        name.className = 'agent-message-attachment-name';
+        name.textContent = attachment.name;
+        item.appendChild(name);
+
+        const detailText = buildAgentAttachmentMetaLabel(attachment);
+        if (detailText) {
+            const detail = document.createElement('span');
+            detail.className = 'agent-message-attachment-detail';
+            detail.textContent = detailText;
+            item.appendChild(detail);
+        }
+
+        container.appendChild(item);
+    }
+
+    return container;
 }
 
 function mergeAgentMessageText(previousText, chunkText) {

@@ -7,6 +7,10 @@ const tabminalUrl = process.env.TABMINAL_URL
     || 'http://127.0.0.1:19846/';
 const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
+const targetAgentDisplayLabel = targetAgentLabel.replace(
+    /\s+(CLI|Agent|Adapter)$/i,
+    ''
+).trim() || targetAgentLabel;
 const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
     || `Read ${process.cwd()}/package.json and ${process.cwd()}/README.md, `
         + 'then summarize this project briefly.';
@@ -39,6 +43,12 @@ const setupClaudeRegion = process.env.TABMINAL_SETUP_CLAUDE_REGION || '';
 const setupClaudeCredentials =
     process.env.TABMINAL_SETUP_CLAUDE_CREDENTIALS || '';
 const setupCopilotToken = process.env.TABMINAL_SETUP_COPILOT_TOKEN || '';
+const attachmentFiles = String(
+    process.env.TABMINAL_ATTACHMENT_FILES || ''
+)
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -210,6 +220,7 @@ async function main() {
             await page.open();
             await page.send('Page.enable');
             await page.send('Runtime.enable');
+            await page.send('DOM.enable');
         }
 
         async function recreateTarget(label = 'recreated-target') {
@@ -243,6 +254,34 @@ async function main() {
                 throw new Error(JSON.stringify(result.exceptionDetails));
             }
             return result.result.value;
+        }
+
+        async function setFileInputFiles(selector, files) {
+            const { root } = await page.send('DOM.getDocument');
+            const { nodeId } = await page.send('DOM.querySelector', {
+                nodeId: root.nodeId,
+                selector
+            });
+            if (!nodeId) {
+                throw new Error(`Unable to find file input: ${selector}`);
+            }
+            await page.send('DOM.setFileInputFiles', {
+                nodeId,
+                files
+            });
+            await evaluate(
+                toExpression(`
+                    () => {
+                        const input = document.querySelector(
+                            ${JSON.stringify(selector)}
+                        );
+                        input?.dispatchEvent(new Event('change', {
+                            bubbles: true
+                        }));
+                        return true;
+                    }
+                `)
+            );
         }
 
         async function waitForDocumentReady(label = 'document-ready') {
@@ -541,7 +580,7 @@ async function main() {
                     () => Array.from(
                         document.querySelectorAll('.agent-editor-tab')
                     ).filter((tab) => (tab.textContent || '').includes(
-                        ${JSON.stringify(targetAgentLabel)}
+                        ${JSON.stringify(targetAgentDisplayLabel)}
                     )).length
                 `)
             );
@@ -671,7 +710,7 @@ async function main() {
                             const count = Array.from(
                                 document.querySelectorAll('.agent-editor-tab')
                             ).filter((tab) => (tab.textContent || '').includes(
-                                ${JSON.stringify(targetAgentLabel)}
+                                ${JSON.stringify(targetAgentDisplayLabel)}
                             )).length;
                             if (count > ${JSON.stringify(existingCount)}) {
                                 return 'created';
@@ -723,7 +762,7 @@ async function main() {
                             );
                             const count = tabs.filter((tab) =>
                                 (tab.textContent || '').includes(
-                                    ${JSON.stringify(targetAgentLabel)}
+                                    ${JSON.stringify(targetAgentDisplayLabel)}
                                 )
                             ).length;
                             const hasExpectedActive = Boolean(active)
@@ -852,7 +891,7 @@ async function main() {
             () => Array.from(
                 document.querySelectorAll('.agent-editor-tab')
             ).filter((tab) => (tab.textContent || '').includes(
-                ${JSON.stringify(targetAgentLabel)}
+                ${JSON.stringify(targetAgentDisplayLabel)}
             )).length
         `)
     );
@@ -920,7 +959,7 @@ async function main() {
         log('agent-setup-outcome', setupOutcome);
         if (setupOutcome === 'created') {
             agentTabCreatedFromSetup = true;
-            picked = targetAgentLabel;
+            picked = targetAgentDisplayLabel;
         } else {
             await evaluate(
                 toExpression(`
@@ -969,11 +1008,11 @@ async function main() {
     log('picked-agent', picked);
 
     const expectedAgentLabel = existingAgentTabCount === 0
-        ? targetAgentLabel
-        : `${targetAgentLabel} #${existingAgentTabCount + 1}`;
+        ? targetAgentDisplayLabel
+        : `${targetAgentDisplayLabel} #${existingAgentTabCount + 1}`;
     const expectedSecondAgentLabel = existingAgentTabCount === 0
-        ? `${targetAgentLabel} #2`
-        : `${targetAgentLabel} #${existingAgentTabCount + 2}`;
+        ? `${targetAgentDisplayLabel} #2`
+        : `${targetAgentDisplayLabel} #${existingAgentTabCount + 2}`;
     const createOutcome = await waitForAgentTabCreationOrSetup(
         existingAgentTabCount,
         expectedAgentLabel
@@ -1161,6 +1200,60 @@ async function main() {
         });
     }
 
+    if (attachmentFiles.length > 0) {
+        await setFileInputFiles('.agent-panel-file-input', attachmentFiles);
+        await waitFor('attachment-chips-added', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll(
+                        '.agent-attachment-chip'
+                    ).length === ${attachmentFiles.length}
+                `),
+                15000,
+                250
+            );
+        });
+
+        if (attachmentFiles.length > 1) {
+            await evaluate(
+                toExpression(`
+                    () => {
+                        document.querySelector(
+                            '.agent-attachment-chip-remove'
+                        )?.click();
+                        return true;
+                    }
+                `)
+            );
+            await waitFor('attachment-chip-removed', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll(
+                            '.agent-attachment-chip'
+                        ).length === ${attachmentFiles.length - 1}
+                    `),
+                    15000,
+                    250
+                );
+            });
+            await setFileInputFiles(
+                '.agent-panel-file-input',
+                [attachmentFiles[0]]
+            );
+            await waitFor('attachment-chip-restored', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll(
+                            '.agent-attachment-chip'
+                        ).length === ${attachmentFiles.length}
+                    `),
+                    15000,
+                    250
+                );
+            });
+        }
+    }
+
     await evaluate(
         toExpression(`
             () => {
@@ -1216,6 +1309,37 @@ async function main() {
     if (promptOutcome === 'setup') {
         await handleRuntimeSetup();
         promptOutcome = await waitForPromptOutcome('permission-final-after-setup');
+    }
+
+    if (attachmentFiles.length > 0) {
+        const attachmentNamesVisible = await waitFor(
+            'message-attachments-visible',
+            async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const names = Array.from(document.querySelectorAll(
+                                '.agent-message-attachment-name'
+                            )).map((node) => node.textContent?.trim() || '');
+                            const expected = ${JSON.stringify(
+                                attachmentFiles.map((filePath) =>
+                                    filePath.split('/').pop()
+                                )
+                            )};
+                            return expected.every((name) => names.includes(name))
+                                ? names
+                                : null;
+                        }
+                    `),
+                    15000,
+                    250
+                );
+            }
+        );
+        log(
+            'message-attachments',
+            JSON.stringify(attachmentNamesVisible)
+        );
     }
 
     if (promptOutcome === 'permission') {

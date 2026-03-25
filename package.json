@@ -36,6 +36,7 @@
     "@fontsource/monaspace-neon": "^5.2.5",
     "@koa/router": "^15.4.0",
     "@mozilla/readability": "^0.6.0",
+    "formidable": "^3.5.4",
     "jsdom": "^29.0.1",
     "koa": "^3.1.2",
     "koa-bodyparser": "^4.4.1",

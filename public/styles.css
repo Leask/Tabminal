@@ -2068,11 +2068,117 @@ kbd {
     text-underline-offset: 2px;
 }
 
+.agent-message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.agent-message-attachment {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 8px;
+    border: 1px solid rgba(131, 148, 150, 0.24);
+    border-radius: 8px;
+    background-color: rgba(0, 43, 54, 0.28);
+}
+
+.agent-message-attachment-name {
+    color: var(--text-highlight);
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-message-attachment-detail {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.3;
+}
+
 .agent-panel-composer {
     padding: 10px 12px 12px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.agent-panel-composer.drag-over {
+    border-radius: 10px;
+    background-color: rgba(38, 139, 210, 0.08);
+    outline: 1px dashed rgba(38, 139, 210, 0.4);
+    outline-offset: -1px;
+}
+
+.agent-panel-file-input {
+    display: none;
+}
+
+.agent-attachment-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.agent-attachment-chip {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    max-width: 100%;
+    padding: 7px 8px;
+    border: 1px solid rgba(131, 148, 150, 0.24);
+    border-radius: 8px;
+    background-color: rgba(0, 43, 54, 0.24);
+}
+
+.agent-attachment-chip-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.agent-attachment-chip-name {
+    color: var(--text-highlight);
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-attachment-chip-detail {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+.agent-attachment-chip-remove {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.agent-attachment-chip-remove:hover,
+.agent-attachment-chip-remove:focus-visible {
+    color: var(--text-highlight);
+}
+
+.agent-attachment-chip-remove:disabled {
+    cursor: not-allowed;
+    color: rgba(88, 110, 117, 0.7);
 }
 
 .agent-panel-input {

@@ -113,8 +113,8 @@ class FakeRuntime extends EventEmitter {
         return true;
     }
 
-    async sendPrompt(tabId, text) {
-        this.prompts.push({ tabId, text });
+    async sendPrompt(tabId, text, attachments = []) {
+        this.prompts.push({ tabId, text, attachments });
     }
 
     async cancel(tabId) {
@@ -819,6 +819,37 @@ describe('AcpManager', () => {
         } finally {
             await manager.dispose();
         }
+    });
+
+    it('passes prompt attachments through to the runtime', async () => {
+        const { manager } = createManager();
+        const tab = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.ok(runtimeEntry?.runtime);
+
+        await manager.sendPrompt(tab.id, 'attach this', [{
+            id: 'att-1',
+            name: 'notes.txt',
+            mimeType: 'text/plain',
+            size: 12,
+            tempPath: '/tmp/notes.txt'
+        }]);
+
+        assert.deepEqual(runtimeEntry.runtime.prompts.at(-1), {
+            tabId: tab.id,
+            text: 'attach this',
+            attachments: [{
+                id: 'att-1',
+                name: 'notes.txt',
+                mimeType: 'text/plain',
+                size: 12,
+                tempPath: '/tmp/notes.txt'
+            }]
+        });
     });
 
     it('merges sentence chunks into separate paragraphs', () => {
