@@ -2199,7 +2199,7 @@ class EditorManager {
         this.isApplyingAgentPromptState = true;
         this.suppressAgentCommandMenu = !!options.suppressCommandMenu;
         this.agentPrompt.value = value;
-        if (agentTab) {
+        if (agentTab && !options.preserveDraft) {
             agentTab.promptDraft = value;
         }
         this.hideAgentCommandMenu();
@@ -2243,7 +2243,10 @@ class EditorManager {
             this.setAgentPromptValue(
                 history[agentTab.promptHistoryIndex] || '',
                 agentTab,
-                { suppressCommandMenu: true }
+                {
+                    suppressCommandMenu: true,
+                    preserveDraft: true
+                }
             );
             return true;
         }
@@ -2267,7 +2270,10 @@ class EditorManager {
         this.setAgentPromptValue(
             history[agentTab.promptHistoryIndex] || '',
             agentTab,
-            { suppressCommandMenu: true }
+            {
+                suppressCommandMenu: true,
+                preserveDraft: true
+            }
         );
         return true;
     }
