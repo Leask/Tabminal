@@ -769,6 +769,58 @@ describe('AcpManager', () => {
         }
     });
 
+    it('splits synthetic assistant chunks around tool calls', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+
+            await manager.sendPrompt(tab.id, 'synthetic-order');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            });
+
+            const beforeMessage = settledTab.messages.find((message) => (
+                message.text === 'Before tool.'
+            ));
+            const afterMessage = settledTab.messages.find((message) => (
+                message.text === 'After tool.'
+            ));
+            const toolCall = settledTab.toolCalls.find((tool) => (
+                tool.toolCallId === 'synthetic-tool'
+            ));
+
+            assert.ok(beforeMessage);
+            assert.ok(afterMessage);
+            assert.ok(toolCall);
+            assert.ok(beforeMessage.order < toolCall.order);
+            assert.ok(toolCall.order < afterMessage.order);
+        } finally {
+            await manager.dispose();
+        }
+    });
+
     it('merges sentence chunks into separate paragraphs', () => {
         assert.equal(
             mergeAgentMessageText(

@@ -161,6 +161,48 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
+            if (/synthetic-order/i.test(promptText)) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Before tool.'
+                        }
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call',
+                        toolCallId: 'synthetic-tool',
+                        title: 'Synthetic tool call',
+                        kind: 'execute',
+                        status: 'pending'
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call_update',
+                        toolCallId: 'synthetic-tool',
+                        status: 'completed'
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'After tool.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
             if (/permission/i.test(promptText)) {
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,

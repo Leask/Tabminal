@@ -854,8 +854,7 @@ class AcpRuntime extends EventEmitter {
         tab.errorMessage = '';
         tab.busy = true;
         tab.status = 'running';
-        tab.syntheticStreamTurn += 1;
-        tab.syntheticStreams.clear();
+        this.#advanceSyntheticStreamTurn(tab);
         this.#appendMessage(tab, {
             role: 'user',
             kind: 'message',
@@ -1087,6 +1086,7 @@ class AcpRuntime extends EventEmitter {
                 this.#appendContentChunk(tab, update, 'user', 'message');
                 break;
             case 'tool_call': {
+                this.#advanceSyntheticStreamTurn(tab);
                 const nextToolCall = {
                     ...update,
                     order: this.#nextTimelineOrder(tab)
@@ -1096,6 +1096,7 @@ class AcpRuntime extends EventEmitter {
                 break;
             }
             case 'tool_call_update': {
+                this.#advanceSyntheticStreamTurn(tab);
                 const previous = tab.toolCalls.get(update.toolCallId) || {
                     toolCallId: update.toolCallId,
                     title: '',
@@ -1226,6 +1227,7 @@ class AcpRuntime extends EventEmitter {
                 }
             };
         }
+        this.#advanceSyntheticStreamTurn(tab);
 
         const permissionId = crypto.randomUUID();
         const request = {
@@ -1347,6 +1349,11 @@ class AcpRuntime extends EventEmitter {
             tab.syntheticStreams.set(bucketKey, streamKey);
         }
         return streamKey;
+    }
+
+    #advanceSyntheticStreamTurn(tab) {
+        tab.syntheticStreamTurn += 1;
+        tab.syntheticStreams.clear();
     }
 
     #nextTimelineOrder(tab) {
