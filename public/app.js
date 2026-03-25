@@ -546,6 +546,8 @@ class EditorManager {
         this.agentCommandMenu = null;
         this.agentCommandSuggestions = [];
         this.agentCommandIndex = 0;
+        this.isApplyingAgentPromptState = false;
+        this.suppressAgentCommandMenu = false;
 
         this.initResizer();
         this.initAgentPanel();
@@ -711,6 +713,16 @@ class EditorManager {
         this.agentPrompt.placeholder = AGENT_PROMPT_PLACEHOLDER.join('\n');
         this.agentPrompt.rows = 3;
         this.agentPrompt.addEventListener('input', () => {
+            const activeTabKey = this.getActiveWorkspaceTabKey();
+            const agentTab = isAgentWorkspaceTabKey(activeTabKey)
+                ? state.agentTabs.get(activeTabKey) || null
+                : null;
+            if (agentTab) {
+                agentTab.promptDraft = this.agentPrompt.value;
+                if (!this.isApplyingAgentPromptState) {
+                    agentTab.promptHistoryIndex = null;
+                }
+            }
             this.updateAgentComposerActions();
         });
         this.agentPrompt.addEventListener('blur', () => {
@@ -754,6 +766,13 @@ class EditorManager {
                     this.hideAgentCommandMenu();
                     return;
                 }
+            }
+
+            if (
+                (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+                && this.handleAgentPromptHistoryKey(event, agentTab)
+            ) {
+                return;
             }
 
             if (
@@ -1626,8 +1645,10 @@ class EditorManager {
                         ? ` ${command.inputHint}`
                         : ' ';
                     this.agentPrompt.focus();
-                    this.agentPrompt.value = `/${command.name}${suffix}`;
-                    this.updateAgentComposerActions(agentTab);
+                    this.setAgentPromptValue(
+                        `/${command.name}${suffix}`,
+                        agentTab
+                    );
                 };
                 this.agentCommands.appendChild(button);
             }
@@ -1686,6 +1707,7 @@ class EditorManager {
         this.agentPermissions.style.display = 'none';
 
         this.agentPrompt.disabled = false;
+        this.setAgentPromptValue(agentTab.promptDraft || '', agentTab);
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
         this.updateAgentComposerActions(agentTab);
     }
@@ -1948,7 +1970,8 @@ class EditorManager {
         if (agentTab.busy) return;
         const text = this.agentPrompt.value.trim();
         if (!text) return;
-        this.agentPrompt.value = '';
+        this.recordAgentPromptHistory(agentTab, text);
+        this.setAgentPromptValue('', agentTab);
         try {
             agentTab.lastSubmittedPrompt = text;
             await agentTab.sendPrompt(text);
@@ -2048,7 +2071,11 @@ class EditorManager {
             activeAgentTab
         );
         this.renderAgentActivity(activeAgentTab);
-        this.renderAgentCommandMenu(activeAgentTab);
+        if (this.suppressAgentCommandMenu) {
+            this.hideAgentCommandMenu();
+        } else {
+            this.renderAgentCommandMenu(activeAgentTab);
+        }
         if (
             activeAgentTab
             && needsSetup
@@ -2153,6 +2180,83 @@ class EditorManager {
         this.renderAgentCommandMenu(getActiveAgentTab());
     }
 
+    setAgentPromptValue(value, agentTab = null, options = {}) {
+        this.isApplyingAgentPromptState = true;
+        this.suppressAgentCommandMenu = !!options.suppressCommandMenu;
+        this.agentPrompt.value = value;
+        if (agentTab) {
+            agentTab.promptDraft = value;
+        }
+        this.hideAgentCommandMenu();
+        this.updateAgentComposerActions(agentTab);
+        const cursor = this.agentPrompt.value.length;
+        this.agentPrompt.setSelectionRange(cursor, cursor);
+        this.suppressAgentCommandMenu = false;
+        this.isApplyingAgentPromptState = false;
+    }
+
+    recordAgentPromptHistory(agentTab, text) {
+        if (!agentTab || !text) return;
+        if (!Array.isArray(agentTab.promptHistory)) {
+            agentTab.promptHistory = [];
+        }
+        agentTab.promptHistory.push(text);
+        agentTab.promptHistoryIndex = null;
+        agentTab.promptDraft = '';
+    }
+
+    handleAgentPromptHistoryKey(event, agentTab) {
+        if (!agentTab || !this.agentPrompt) return false;
+
+        const direction = event.key === 'ArrowUp' ? -1 : 1;
+        const history = Array.isArray(agentTab.promptHistory)
+            ? agentTab.promptHistory
+            : [];
+        const isBrowsing = Number.isInteger(agentTab.promptHistoryIndex);
+
+        if (!isBrowsing) {
+            if (this.agentPrompt.value !== '' || direction > 0) {
+                return false;
+            }
+            if (history.length === 0) {
+                return false;
+            }
+
+            event.preventDefault();
+            agentTab.promptDraft = '';
+            agentTab.promptHistoryIndex = history.length - 1;
+            this.setAgentPromptValue(
+                history[agentTab.promptHistoryIndex] || '',
+                agentTab,
+                { suppressCommandMenu: true }
+            );
+            return true;
+        }
+
+        event.preventDefault();
+        if (direction < 0) {
+            agentTab.promptHistoryIndex = Math.max(
+                0,
+                agentTab.promptHistoryIndex - 1
+            );
+        } else if (agentTab.promptHistoryIndex >= history.length - 1) {
+            agentTab.promptHistoryIndex = null;
+            this.setAgentPromptValue(agentTab.promptDraft || '', agentTab, {
+                suppressCommandMenu: true
+            });
+            return true;
+        } else {
+            agentTab.promptHistoryIndex += 1;
+        }
+
+        this.setAgentPromptValue(
+            history[agentTab.promptHistoryIndex] || '',
+            agentTab,
+            { suppressCommandMenu: true }
+        );
+        return true;
+    }
+
     applyAgentCommandSuggestion() {
         const command = this.agentCommandSuggestions[this.agentCommandIndex];
         if (!command) return;
@@ -2160,13 +2264,10 @@ class EditorManager {
             ? ` ${command.inputHint}`
             : ' ';
         this.agentPrompt.focus();
-        this.agentPrompt.value = `/${command.name}${suffix}`;
-        this.agentPrompt.setSelectionRange(
-            this.agentPrompt.value.length,
-            this.agentPrompt.value.length
+        this.setAgentPromptValue(
+            `/${command.name}${suffix}`,
+            getActiveAgentTab()
         );
-        this.hideAgentCommandMenu();
-        this.updateAgentComposerActions(getActiveAgentTab());
     }
 
     showEmptyState() {
@@ -3137,6 +3238,9 @@ class AgentTab {
         this.needsAttention = false;
         this.runCounter = 0;
         this.lastCompletedRunCounter = 0;
+        this.promptDraft = '';
+        this.promptHistory = [];
+        this.promptHistoryIndex = null;
         this.update(data);
         this.connect();
     }
@@ -3188,6 +3292,17 @@ class AgentTab {
         this.messages = Array.isArray(data.messages)
             ? data.messages.map((message) => this.#normalizeMessage(message))
             : [];
+        const transcriptPromptHistory = this.messages
+            .filter((message) => (
+                String(message?.role || '').toLowerCase() === 'user'
+                && String(message?.kind || 'message').toLowerCase()
+                    === 'message'
+                && String(message?.text || '').trim()
+            ))
+            .map((message) => String(message.text).trim());
+        if (transcriptPromptHistory.length >= this.promptHistory.length) {
+            this.promptHistory = transcriptPromptHistory;
+        }
         this.toolCalls = new Map();
         for (const toolCall of data.toolCalls || []) {
             if (toolCall?.toolCallId) {
