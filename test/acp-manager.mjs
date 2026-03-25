@@ -775,6 +775,14 @@ describe('AcpManager', () => {
                 runningTab.messages.at(-1)?.text || '',
                 /Prompt: please request permission now/
             );
+            assert.match(
+                runningTab.messages.at(-1)?.createdAt || '',
+                /^\d{4}-\d{2}-\d{2}T/
+            );
+            assert.match(
+                runningTab.permissions.at(-1)?.createdAt || '',
+                /^\d{4}-\d{2}-\d{2}T/
+            );
             assert.equal(runningTab.permissions.length, 1);
 
             await manager.resolvePermission(

@@ -2083,11 +2083,29 @@ kbd {
     border-style: dashed;
 }
 
+.agent-message-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 5px;
+}
+
 .agent-message-role {
     font-size: 10px;
     letter-spacing: 0.02em;
     color: var(--text-muted);
-    margin-bottom: 5px;
+    min-width: 0;
+}
+
+.agent-message-time {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    opacity: 0.88;
+    text-align: right;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 
 .agent-message-body {
@@ -2371,16 +2389,49 @@ kbd {
     color: var(--text-muted);
 }
 
-.agent-activity-cancel {
-    width: 17px;
-    height: 17px;
-    min-width: 17px;
-    min-height: 17px;
+.agent-activity-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    min-width: 15px;
+    min-height: 15px;
     padding: 0;
     margin: 0;
-    border-radius: 999px;
+    border: 0;
+    background: transparent;
+    color: inherit;
     flex: 0 0 auto;
     line-height: 1;
+    border-radius: 4px;
+    cursor: default;
+}
+
+.agent-activity-action svg {
+    display: block;
+}
+
+.agent-activity-action:disabled {
+    opacity: 1;
+}
+
+.agent-activity-action.cancelable {
+    cursor: pointer;
+}
+
+.agent-activity-action-stop {
+    display: none;
+}
+
+.agent-activity-action.cancelable:hover .agent-activity-action-primary,
+.agent-activity-action.cancelable:focus-visible .agent-activity-action-primary {
+    display: none;
+}
+
+.agent-activity-action.cancelable:hover .agent-activity-action-stop,
+.agent-activity-action.cancelable:focus-visible .agent-activity-action-stop {
+    display: inline-flex;
 }
 
 .agent-panel-activity.running {

@@ -112,7 +112,6 @@ const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke=
 const CHEVRON_DOWN_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
 const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="m9 15 3-3 3 3"></path></svg>';
 const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
-const CIRCLE_X_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m9 9 6 6"></path><path d="m15 9-6 6"></path></svg>';
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
 const serverModalState = {
     mode: 'add',
@@ -519,6 +518,7 @@ class EditorManager {
     constructor() {
         this.currentSession = null;
         this.iconMap = null;
+        this.agentTimestampTimer = null;
         
         // DOM Elements
         this.pane = document.getElementById('editor-pane');
@@ -569,6 +569,9 @@ class EditorManager {
         this.initAgentPanel();
         this.initMonaco();
         this.loadIconMap();
+        this.agentTimestampTimer = window.setInterval(() => {
+            this.refreshAgentTimelineTimestamps();
+        }, 1000);
     }
 
     isTerminalTabPinned(session = this.currentSession) {
@@ -1090,24 +1093,31 @@ class EditorManager {
         this.agentActivity.style.display = 'none';
         this.agentActivityCancelButton = document.createElement('button');
         this.agentActivityCancelButton.type = 'button';
-        this.agentActivityCancelButton.className =
-            'agent-panel-button secondary icon-only agent-activity-cancel';
-        this.agentActivityCancelButton.innerHTML = CIRCLE_X_ICON_SVG;
-        this.agentActivityCancelButton.title = 'Stop current run';
+        this.agentActivityCancelButton.className = 'agent-activity-action';
+        this.agentActivityCancelButton.title = 'Current activity';
         this.agentActivityCancelButton.setAttribute(
             'aria-label',
-            'Stop current run'
+            'Current activity'
         );
-        this.agentActivityCancelButton.style.display = 'none';
+        this.agentActivityCancelButton.disabled = true;
         this.agentActivityCancelButton.addEventListener('click', () => {
             void this.cancelActiveAgentPrompt();
         });
-        this.agentActivityIcon = document.createElement('span');
-        this.agentActivityIcon.className = 'agent-panel-activity-icon';
+        this.agentActivityPrimaryIcon = document.createElement('span');
+        this.agentActivityPrimaryIcon.className =
+            'agent-panel-activity-icon agent-activity-action-primary';
+        this.agentActivityStopIcon = document.createElement('span');
+        this.agentActivityStopIcon.className = 'agent-activity-action-stop';
+        this.agentActivityStopIcon.innerHTML = CLOSE_ICON_SVG;
+        this.agentActivityCancelButton.appendChild(
+            this.agentActivityPrimaryIcon
+        );
+        this.agentActivityCancelButton.appendChild(
+            this.agentActivityStopIcon
+        );
         this.agentActivityLabel = document.createElement('span');
         this.agentActivityLabel.className = 'agent-panel-activity-label';
         this.agentActivity.appendChild(this.agentActivityCancelButton);
-        this.agentActivity.appendChild(this.agentActivityIcon);
         this.agentActivity.appendChild(this.agentActivityLabel);
 
         this.agentQueue = document.createElement('div');
@@ -1982,6 +1992,21 @@ class EditorManager {
         this.setAgentPromptValue(agentTab.promptDraft || '', agentTab);
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
         this.updateAgentComposerActions(agentTab);
+        this.refreshAgentTimelineTimestamps();
+    }
+
+    refreshAgentTimelineTimestamps() {
+        if (!this.agentContainer || this.agentContainer.style.display === 'none') {
+            return;
+        }
+        const timestamps = this.agentContainer.querySelectorAll(
+            '.agent-message-time[data-created-at]'
+        );
+        for (const node of timestamps) {
+            const createdAt = String(node.dataset.createdAt || '').trim();
+            if (!createdAt) continue;
+            node.textContent = getAgentMessageTimeLabel({ createdAt });
+        }
     }
 
     buildAgentEmptyState(agentTab) {
@@ -1997,11 +2022,11 @@ class EditorManager {
         const item = document.createElement('div');
         item.className = `agent-message ${message.role} ${message.kind}`;
 
-        const role = document.createElement('div');
-        role.className = 'agent-message-role';
-        role.textContent = getAgentMessageRoleLabel(agentTab, message);
-
-        item.appendChild(role);
+        item.appendChild(buildAgentTimelineHeader(
+            getAgentMessageRoleLabel(agentTab, message),
+            getAgentMessageTimeLabel(message),
+            message.createdAt || ''
+        ));
         const attachments = buildAgentMessageAttachmentsNode(
             message.attachments
         );
@@ -2032,10 +2057,11 @@ class EditorManager {
         const toolStatusClass = normalizeStatusClass(toolCall.status);
         node.className = `agent-tool-call state-${toolStatusClass}`;
 
-        const role = document.createElement('div');
-        role.className = 'agent-message-role';
-        role.textContent = buildAgentTimelineRoleLabel(agentTab, 'tool');
-        node.appendChild(role);
+        node.appendChild(buildAgentTimelineHeader(
+            buildAgentTimelineRoleLabel(agentTab, 'tool'),
+            getAgentMessageTimeLabel(toolCall),
+            toolCall.createdAt || ''
+        ));
 
         const header = document.createElement('div');
         header.className = 'agent-tool-call-header';
@@ -2113,15 +2139,16 @@ class EditorManager {
         );
         card.className = `agent-permission-card state-${permissionStatusClass}`;
 
-        const role = document.createElement('div');
-        role.className = 'agent-message-role';
-        role.textContent = buildAgentTimelineRoleLabel(
-            agentTab,
-            permission.status === 'pending'
-                ? 'permission request'
-                : 'permission'
-        );
-        card.appendChild(role);
+        card.appendChild(buildAgentTimelineHeader(
+            buildAgentTimelineRoleLabel(
+                agentTab,
+                permission.status === 'pending'
+                    ? 'permission request'
+                    : 'permission'
+            ),
+            getAgentMessageTimeLabel(permission),
+            permission.createdAt || ''
+        ));
 
         const titleRow = document.createElement('div');
         titleRow.className = 'agent-tool-call-header';
@@ -2606,22 +2633,37 @@ class EditorManager {
                 'pending',
                 'error'
             );
-            this.agentActivityCancelButton.style.display = 'none';
+            this.agentActivityCancelButton.disabled = true;
+            this.agentActivityCancelButton.classList.remove('cancelable');
+            this.agentActivityCancelButton.title = 'Current activity';
+            this.agentActivityCancelButton.setAttribute(
+                'aria-label',
+                'Current activity'
+            );
             this.agentActivityLabel.textContent = '';
-            this.agentActivityIcon.innerHTML = '';
-            this.agentActivityIcon.classList.remove('is-spinning');
+            this.agentActivityPrimaryIcon.innerHTML = '';
+            this.agentActivityPrimaryIcon.classList.remove('is-spinning');
             return;
         }
 
         this.agentActivity.style.display = '';
         this.agentActivity.classList.remove('running', 'pending', 'error');
         this.agentActivity.classList.add(activity.stateClass);
-        this.agentActivityCancelButton.style.display = activity.cancelable
-            ? ''
-            : 'none';
+        this.agentActivityCancelButton.disabled = !activity.cancelable;
+        this.agentActivityCancelButton.classList.toggle(
+            'cancelable',
+            !!activity.cancelable
+        );
+        this.agentActivityCancelButton.title = activity.cancelable
+            ? 'Stop current run'
+            : 'Current activity';
+        this.agentActivityCancelButton.setAttribute(
+            'aria-label',
+            activity.cancelable ? 'Stop current run' : 'Current activity'
+        );
         this.agentActivityLabel.textContent = activity.label;
-        this.agentActivityIcon.innerHTML = activity.iconSvg;
-        this.agentActivityIcon.classList.toggle(
+        this.agentActivityPrimaryIcon.innerHTML = activity.iconSvg;
+        this.agentActivityPrimaryIcon.classList.toggle(
             'is-spinning',
             !!activity.spinning
         );
@@ -3959,6 +4001,7 @@ class AgentTab {
         this.queueCounter = 0;
         this.isDrainingQueuedPrompt = false;
         this.scrollToBottomOnNextRender = true;
+        this.busySyncTimer = null;
         this.update(data);
         this.connect();
     }
@@ -4043,6 +4086,7 @@ class AgentTab {
                 );
             }
         }
+        this.#syncBusyWatchdog();
     }
 
     connect() {
@@ -4177,6 +4221,7 @@ class AgentTab {
         } else if (isAgentTabVisible(this)) {
             this.needsAttention = false;
         }
+        this.#syncBusyWatchdog();
         this.notifyUi();
         if (shouldAutostartQueuedPrompt) {
             this.lastCompletedRunCounter = this.runCounter;
@@ -4184,8 +4229,65 @@ class AgentTab {
         }
     }
 
+    #hasPendingPermission() {
+        return getAgentOrderedMapValues(this.permissions).some(
+            (permission) => permission.status === 'pending'
+        );
+    }
+
+    #hasActiveTool() {
+        return getAgentOrderedMapValues(this.toolCalls).some((toolCall) => {
+            const statusClass = normalizeStatusClass(toolCall?.status);
+            return statusClass === 'pending' || statusClass === 'running';
+        });
+    }
+
+    #needsBusyStateRefresh() {
+        return !!(
+            this.busy
+            && !this.isDrainingQueuedPrompt
+            && !this.errorMessage
+            && this.status !== 'restoring'
+            && !this.#hasPendingPermission()
+            && !this.#hasActiveTool()
+        );
+    }
+
+    #clearBusyWatchdog() {
+        if (this.busySyncTimer) {
+            clearTimeout(this.busySyncTimer);
+            this.busySyncTimer = null;
+        }
+    }
+
+    #syncBusyWatchdog() {
+        this.#clearBusyWatchdog();
+        if (!this.#needsBusyStateRefresh()) {
+            return;
+        }
+        this.busySyncTimer = setTimeout(async () => {
+            this.busySyncTimer = null;
+            if (!this.#needsBusyStateRefresh()) {
+                return;
+            }
+            try {
+                await syncAgentsForServer(this.server, { force: true });
+            } catch {
+                // Ignore transient refresh failures; the next event or sync
+                // will reconcile the state.
+            } finally {
+                if (this.#needsBusyStateRefresh()) {
+                    this.#syncBusyWatchdog();
+                }
+            }
+        }, 2000);
+    }
+
     #normalizeTimelineEntry(entry, fallbackOrder = null) {
         const nextEntry = { ...entry };
+        nextEntry.createdAt = typeof nextEntry.createdAt === 'string'
+            ? nextEntry.createdAt
+            : '';
         if (Number.isFinite(nextEntry.order)) {
             this.timelineCounter = Math.max(this.timelineCounter, nextEntry.order);
             return nextEntry;
@@ -4200,6 +4302,9 @@ class AgentTab {
         const nextMessage = this.#normalizeTimelineEntry(message, fallbackOrder);
         nextMessage.text = typeof nextMessage.text === 'string'
             ? nextMessage.text
+            : '';
+        nextMessage.createdAt = typeof nextMessage.createdAt === 'string'
+            ? nextMessage.createdAt
             : '';
         nextMessage.attachments = normalizeAgentMessageAttachments(
             nextMessage.attachments
@@ -4247,6 +4352,7 @@ class AgentTab {
         this.messages[index] = {
             ...previous,
             ...nextMessage,
+            createdAt: nextMessage.createdAt || previous.createdAt || '',
             text: selectAgentMessageText(previous.text, nextMessage.text)
         };
     }
@@ -4267,7 +4373,8 @@ class AgentTab {
             streamKey: message.streamKey,
             role: message.role || 'assistant',
             kind: message.kind || 'message',
-            text: message.text || ''
+            text: message.text || '',
+            createdAt: new Date().toISOString()
         }));
     }
 
@@ -4464,6 +4571,7 @@ class AgentTab {
     }
 
     dispose() {
+        this.#clearBusyWatchdog();
         this.socket?.close();
         this.socket = null;
     }
@@ -5024,6 +5132,71 @@ function getAgentRoleDisplayLabel(agentTab, role = 'assistant') {
     return role || 'assistant';
 }
 
+function getAgentMessageTimeLabel(message) {
+    const raw = String(message?.createdAt || '').trim();
+    if (!raw) return '';
+    const timestamp = new Date(raw);
+    if (Number.isNaN(timestamp.getTime())) return '';
+    const deltaMs = Date.now() - timestamp.getTime();
+    const absDeltaMs = Math.abs(deltaMs);
+
+    if (absDeltaMs < 24 * 60 * 60 * 1000) {
+        const formatter = new Intl.RelativeTimeFormat(undefined, {
+            numeric: 'auto'
+        });
+        if (absDeltaMs < 60 * 1000) {
+            if (absDeltaMs < 5 * 1000) {
+                return 'just now';
+            }
+            const seconds = Math.max(
+                1,
+                Math.round(deltaMs / 1000)
+            );
+            return formatter.format(-seconds, 'second');
+        }
+        if (absDeltaMs < 60 * 60 * 1000) {
+            const minutes = Math.max(
+                1,
+                Math.round(deltaMs / (60 * 1000))
+            );
+            return formatter.format(-minutes, 'minute');
+        }
+        const hours = Math.max(
+            1,
+            Math.round(deltaMs / (60 * 60 * 1000))
+        );
+        return formatter.format(-hours, 'hour');
+    }
+
+    return timestamp.toLocaleString();
+}
+
+function buildAgentTimelineHeader(
+    roleLabel,
+    timeLabel = '',
+    createdAt = ''
+) {
+    const header = document.createElement('div');
+    header.className = 'agent-message-header';
+
+    const role = document.createElement('div');
+    role.className = 'agent-message-role';
+    role.textContent = roleLabel;
+    header.appendChild(role);
+
+    if (timeLabel) {
+        const time = document.createElement('div');
+        time.className = 'agent-message-time';
+        time.textContent = timeLabel;
+        if (createdAt) {
+            time.dataset.createdAt = createdAt;
+        }
+        header.appendChild(time);
+    }
+
+    return header;
+}
+
 function getAgentTimelineItems(agentTab) {
     if (!agentTab) return [];
     const items = [];
@@ -5070,7 +5243,11 @@ function getAgentTimelineItems(agentTab) {
 function getAgentDisplayLabel(agentTab) {
     if (!agentTab) return 'Agent';
     const explicitTitle = String(agentTab.title || '').trim();
-    if (explicitTitle) {
+    const hasMeaningfulTitle = (
+        explicitTitle
+        && !/^[.\u2026\s]+$/u.test(explicitTitle)
+    );
+    if (hasMeaningfulTitle) {
         return explicitTitle;
     }
     const baseName = getAgentBaseName(agentTab);
@@ -8921,13 +9098,10 @@ document.addEventListener('keydown', (e) => {
     }
 
     const activeAgentTab = getActiveAgentTab();
-    const activeElement = document.activeElement;
-    const agentPanelHasFocus = !!(
-        activeAgentTab
-        && editorManager?.agentContainer
-        && editorManager.agentContainer.style.display !== 'none'
-        && activeElement
-        && editorManager.agentContainer.contains(activeElement)
+    const blockingOverlayOpen = !!(
+        (searchBar && searchBar.style.display === 'flex')
+        || (addServerModal && addServerModal.style.display === 'flex')
+        || (agentSetupModal && agentSetupModal.style.display === 'flex')
     );
     if (
         e.key === 'Escape'
@@ -8935,7 +9109,8 @@ document.addEventListener('keydown', (e) => {
         && !e.metaKey
         && !e.altKey
         && activeAgentTab?.busy
-        && agentPanelHasFocus
+        && isAgentTabVisible(activeAgentTab)
+        && !blockingOverlayOpen
     ) {
         e.preventDefault();
         void editorManager.cancelActiveAgentPrompt();

@@ -974,6 +974,7 @@ class AcpRuntime extends EventEmitter {
                 toolCall: item.toolCall,
                 options: item.options,
                 status: item.status,
+                createdAt: item.createdAt || '',
                 order: item.order,
                 selectedOptionId: item.selectedOptionId || ''
             }))
@@ -1398,6 +1399,7 @@ class AcpRuntime extends EventEmitter {
                 this.#advanceSyntheticStreamTurn(tab);
                 const nextToolCall = {
                     ...update,
+                    createdAt: new Date().toISOString(),
                     order: this.#nextTimelineOrder(tab)
                 };
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
@@ -1410,6 +1412,7 @@ class AcpRuntime extends EventEmitter {
                     toolCallId: update.toolCallId,
                     title: '',
                     status: 'pending',
+                    createdAt: new Date().toISOString(),
                     order: this.#nextTimelineOrder(tab)
                 };
                 const nextToolCall = {
@@ -1498,6 +1501,7 @@ class AcpRuntime extends EventEmitter {
             role,
             kind,
             text,
+            createdAt: new Date().toISOString(),
             order: this.#nextTimelineOrder(tab)
         };
         tab.messages.push(message);
@@ -1533,6 +1537,7 @@ class AcpRuntime extends EventEmitter {
             kind: message.kind,
             text: message.text,
             streamKey: message.streamKey || crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
             order: this.#nextTimelineOrder(tab),
             attachments: Array.isArray(message.attachments)
                 ? message.attachments.map((attachment) =>
@@ -1565,6 +1570,7 @@ class AcpRuntime extends EventEmitter {
             toolCall: params.toolCall,
             options: params.options,
             status: 'pending',
+            createdAt: new Date().toISOString(),
             order: this.#nextTimelineOrder(tab),
             selectedOptionId: '',
             resolve: null
@@ -1579,6 +1585,7 @@ class AcpRuntime extends EventEmitter {
                 toolCall: request.toolCall,
                 options: request.options,
                 status: request.status,
+                createdAt: request.createdAt,
                 order: request.order,
                 selectedOptionId: request.selectedOptionId
             }
