@@ -562,6 +562,7 @@ class EditorManager {
         this.agentCommandIndex = 0;
         this.isApplyingAgentPromptState = false;
         this.suppressAgentCommandMenu = false;
+        this.agentEmbeddedEditors = [];
 
         this.initTerminalControls();
         this.initResizer();
@@ -1856,6 +1857,7 @@ class EditorManager {
     }
 
     renderAgentPanel(agentTab) {
+        this.disposeAgentEmbeddedEditors();
         this.agentHeader.textContent = '';
         this.agentMeta.textContent = '';
 
@@ -2069,20 +2071,21 @@ class EditorManager {
                 summary.appendChild(
                     buildAgentSectionSummaryLabel(section.label)
                 );
-                const preview = buildAgentSectionSummaryPreview(section.text);
+                const preview = section.preview || buildAgentSectionSummaryPreview(
+                    section.text
+                );
                 if (preview) {
                     summary.appendChild(
                         buildAgentSectionSummaryPreviewNode(preview)
                     );
                 }
-                const body = document.createElement('pre');
-                body.className = 'agent-tool-call-body';
-                body.textContent = section.text;
                 details.open = shouldExpandAgentTimelineSections(
                     toolCall.status
                 );
                 details.appendChild(summary);
-                details.appendChild(body);
+                details.appendChild(
+                    this.buildAgentSectionBody(details, section)
+                );
                 sectionContainer.appendChild(details);
             }
             node.appendChild(sectionContainer);
@@ -2154,20 +2157,21 @@ class EditorManager {
                 summary.appendChild(
                     buildAgentSectionSummaryLabel(section.label)
                 );
-                const preview = buildAgentSectionSummaryPreview(section.text);
+                const preview = section.preview || buildAgentSectionSummaryPreview(
+                    section.text
+                );
                 if (preview) {
                     summary.appendChild(
                         buildAgentSectionSummaryPreviewNode(preview)
                     );
                 }
-                const body = document.createElement('pre');
-                body.className = 'agent-tool-call-body';
-                body.textContent = section.text;
                 details.open = shouldExpandAgentTimelineSections(
                     permission.status || 'pending'
                 );
                 details.appendChild(summary);
-                details.appendChild(body);
+                details.appendChild(
+                    this.buildAgentSectionBody(details, section)
+                );
                 sectionContainer.appendChild(details);
             }
             card.appendChild(sectionContainer);
@@ -2226,6 +2230,158 @@ class EditorManager {
         }
 
         return card;
+    }
+
+    disposeAgentEmbeddedEditors() {
+        for (const disposable of this.agentEmbeddedEditors) {
+            try {
+                disposable.dispose();
+            } catch {
+                // Ignore embedded editor disposal failures.
+            }
+        }
+        this.agentEmbeddedEditors = [];
+    }
+
+    buildAgentSectionBody(details, section) {
+        if (
+            section?.kind === 'diff'
+            && this.monacoInstance
+            && typeof section.newText === 'string'
+        ) {
+            return this.buildAgentDiffSectionBody(details, section);
+        }
+        if (
+            section?.kind === 'code'
+            && this.monacoInstance
+            && typeof section.text === 'string'
+        ) {
+            return this.buildAgentCodeSectionBody(details, section);
+        }
+        const body = document.createElement('pre');
+        body.className = 'agent-tool-call-body';
+        body.textContent = section?.text || '';
+        return body;
+    }
+
+    buildAgentCodeSectionBody(details, section) {
+        const host = document.createElement('div');
+        host.className = 'agent-tool-call-code-host';
+        const editorNode = document.createElement('div');
+        editorNode.className = 'agent-tool-call-editor';
+        editorNode.style.height = `${estimateAgentCodeEditorHeight(
+            section.text
+        )}px`;
+        host.appendChild(editorNode);
+
+        const uri = this.monacoInstance.Uri.from({
+            scheme: 'agent-code',
+            path: normalizeAgentEditorPath(section.path || '/snippet.txt')
+        });
+        const model = this.monacoInstance.editor.createModel(
+            section.text || '',
+            undefined,
+            uri
+        );
+        const editor = this.monacoInstance.editor.create(
+            editorNode,
+            {
+                model,
+                readOnly: true,
+                theme: 'solarized-dark',
+                automaticLayout: true,
+                scrollBeyondLastLine: false,
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                glyphMargin: false,
+                folding: false,
+                renderWhitespace: 'selection',
+                wordWrap: 'off',
+                fontSize: IS_MOBILE ? 14 : 12,
+                fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", "
+                    + '"SFMono-Regular", "SF Mono", '
+                    + '"JetBrains Mono", Menlo, Consolas, monospace'
+            }
+        );
+        this.agentEmbeddedEditors.push(editor, model);
+        details.addEventListener('toggle', () => {
+            if (details.open) {
+                requestAnimationFrame(() => {
+                    editor.layout();
+                });
+            }
+        });
+        return host;
+    }
+
+    buildAgentDiffSectionBody(details, section) {
+        const host = document.createElement('div');
+        host.className = 'agent-tool-call-diff-host';
+        const diffNode = document.createElement('div');
+        diffNode.className = 'agent-tool-call-editor diff';
+        diffNode.style.height = `${estimateAgentDiffEditorHeight(
+            section.oldText || '',
+            section.newText || ''
+        )}px`;
+        host.appendChild(diffNode);
+
+        const basePath = normalizeAgentEditorPath(
+            section.path || '/snippet.txt'
+        );
+        const originalModel = this.monacoInstance.editor.createModel(
+            section.oldText || '',
+            undefined,
+            this.monacoInstance.Uri.from({
+                scheme: 'agent-diff',
+                path: basePath,
+                query: 'original'
+            })
+        );
+        const modifiedModel = this.monacoInstance.editor.createModel(
+            section.newText || '',
+            undefined,
+            this.monacoInstance.Uri.from({
+                scheme: 'agent-diff',
+                path: basePath,
+                query: 'modified'
+            })
+        );
+        const diffEditor = this.monacoInstance.editor.createDiffEditor(
+            diffNode,
+            {
+                readOnly: true,
+                theme: 'solarized-dark',
+                automaticLayout: true,
+                scrollBeyondLastLine: false,
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                glyphMargin: false,
+                renderSideBySide: false,
+                originalEditable: false,
+                diffWordWrap: 'off',
+                fontSize: IS_MOBILE ? 14 : 12,
+                fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", "
+                    + '"SFMono-Regular", "SF Mono", '
+                    + '"JetBrains Mono", Menlo, Consolas, monospace'
+            }
+        );
+        diffEditor.setModel({
+            original: originalModel,
+            modified: modifiedModel
+        });
+        this.agentEmbeddedEditors.push(
+            diffEditor,
+            originalModel,
+            modifiedModel
+        );
+        details.addEventListener('toggle', () => {
+            if (details.open) {
+                requestAnimationFrame(() => {
+                    diffEditor.layout();
+                });
+            }
+        });
+        return host;
     }
 
     async submitActiveAgentPrompt() {
@@ -5646,6 +5802,129 @@ function summarizeToolCallContent(toolCall) {
     return truncateAgentDetail(lines.join('\n\n'));
 }
 
+function getToolCallDiffItems(toolCall) {
+    if (!Array.isArray(toolCall?.content)) return [];
+    return toolCall.content.filter((item) =>
+        item?.type === 'diff'
+        && item.path
+        && typeof item.newText === 'string'
+    );
+}
+
+function resourceUriToPath(uri) {
+    if (!uri || typeof uri !== 'string') return '';
+    if (uri.startsWith('file://')) {
+        try {
+            return decodeURIComponent(new URL(uri).pathname);
+        } catch {
+            return uri.slice('file://'.length);
+        }
+    }
+    return '';
+}
+
+function getToolCallTextContentBlocks(toolCall) {
+    if (!Array.isArray(toolCall?.content)) return [];
+    const blocks = [];
+    for (const item of toolCall.content) {
+        if (item?.type !== 'content' || !item.content) {
+            continue;
+        }
+        if (
+            item.content.type === 'text'
+            && typeof item.content.text === 'string'
+            && item.content.text
+        ) {
+            blocks.push({
+                text: item.content.text,
+                path: ''
+            });
+            continue;
+        }
+        const resource = item.content.resource;
+        if (
+            item.content.type === 'resource'
+            && resource
+            && typeof resource.text === 'string'
+            && resource.text
+        ) {
+            blocks.push({
+                text: resource.text,
+                path: resourceUriToPath(resource.uri)
+            });
+        }
+    }
+    return blocks;
+}
+
+function normalizeAgentEditorPath(path) {
+    const value = String(path || '').trim();
+    if (!value) return '/snippet.txt';
+    return value.startsWith('/') ? value : `/${value}`;
+}
+
+function countTextLines(text) {
+    const value = String(text || '');
+    return value ? value.split('\n').length : 1;
+}
+
+function estimateAgentCodeEditorHeight(text) {
+    const lines = countTextLines(text);
+    return Math.min(Math.max(lines * 18 + 20, 120), 420);
+}
+
+function estimateAgentDiffEditorHeight(oldText, newText) {
+    const lines = Math.max(
+        countTextLines(oldText),
+        countTextLines(newText)
+    );
+    return Math.min(Math.max(lines * 18 + 46, 180), 520);
+}
+
+function buildAgentStructuredContentSections(toolCall, summaryText = '') {
+    const sections = [];
+
+    for (const item of getToolCallDiffItems(toolCall)) {
+        sections.push({
+            label: 'Diff',
+            preview: normalizeToolPathLabel(item.path),
+            text: truncateAgentDetail(item.newText || ''),
+            kind: 'diff',
+            path: item.path,
+            oldText: item.oldText || '',
+            newText: item.newText || ''
+        });
+    }
+
+    const textBlocks = getToolCallTextContentBlocks(toolCall);
+    if (textBlocks.length === 0) {
+        return sections;
+    }
+
+    const combinedText = truncateAgentDetail(
+        textBlocks.map((block) => block.text).join('\n\n')
+    );
+    if (!combinedText || isAgentSectionRedundant(combinedText, summaryText)) {
+        return sections;
+    }
+
+    const firstPath = getFirstToolPath(toolCall);
+    const resourcePath = textBlocks.find((block) => block.path)?.path || '';
+    const codePath = resourcePath || (
+        ['read', 'edit'].includes(toolCall?.kind)
+            ? firstPath
+            : ''
+    );
+    sections.push({
+        label: 'Content',
+        preview: codePath ? normalizeToolPathLabel(codePath) : '',
+        text: combinedText,
+        kind: codePath ? 'code' : 'text',
+        path: codePath
+    });
+    return sections;
+}
+
 function getAgentToolTitle(toolCall) {
     const rawInputCommand = typeof toolCall?.rawInput?.cmd === 'string'
         ? toolCall.rawInput.cmd
@@ -5728,21 +6007,40 @@ function buildAgentToolSections(toolCall, summaryText = '') {
     ) {
         sections.push({
             label: 'Input',
-            text: truncateAgentDetail(rawInput)
+            text: truncateAgentDetail(rawInput),
+            kind: 'text'
         });
     }
+    sections.push(...buildAgentStructuredContentSections(toolCall, summaryText));
+    const hasStructuredContent = sections.some((section) =>
+        section.label === 'Content' || section.label === 'Diff'
+    );
     const content = summarizeToolCallContent(toolCall);
-    if (content && !isAgentSectionRedundant(content, summaryText)) {
+    if (
+        !hasStructuredContent
+        && content
+        && !isAgentSectionRedundant(content, summaryText)
+    ) {
         sections.push({
             label: 'Content',
-            text: content
+            text: content,
+            kind: 'text'
         });
     }
     const rawOutput = summarizeAgentRawOutput(toolCall?.rawOutput);
     if (rawOutput && !isAgentSectionRedundant(rawOutput, summaryText)) {
+        const codePath = ['read', 'edit'].includes(toolCall?.kind)
+            ? getFirstToolPath(toolCall)
+            : '';
         sections.push({
             label: 'Output',
-            text: rawOutput
+            text: rawOutput,
+            kind: codePath
+                && !/^STD(?:OUT|ERR)\n/.test(rawOutput)
+                ? 'code'
+                : 'text',
+            path: codePath,
+            preview: codePath ? normalizeToolPathLabel(codePath) : ''
         });
     }
     return sections;
@@ -5810,7 +6108,8 @@ function buildAgentPermissionSections(permission, summaryText = '') {
     if (selectedOption) {
         sections.push({
             label: 'Decision',
-            text: getPermissionOptionDisplayLabel(selectedOption)
+            text: getPermissionOptionDisplayLabel(selectedOption),
+            kind: 'text'
         });
     }
     const optionLines = permission?.status === 'pending'
@@ -5824,7 +6123,8 @@ function buildAgentPermissionSections(permission, summaryText = '') {
     if (optionLines.length > 0) {
         sections.push({
             label: 'Options',
-            text: optionLines.join('\n')
+            text: optionLines.join('\n'),
+            kind: 'text'
         });
     }
     return sections;
@@ -8726,6 +9026,11 @@ document.addEventListener('keydown', (e) => {
                 );
                 if (targetKey) {
                     editorManager.activateWorkspaceTab(targetKey);
+                    if (isAgentWorkspaceTabKey(targetKey)) {
+                        requestAnimationFrame(() => {
+                            editorManager.agentPrompt?.focus();
+                        });
+                    }
                 }
             } else if (editorManager.pane.style.display !== 'none') {
                 if (isAgentWorkspaceTabKey(activeKey)) {

@@ -26,6 +26,8 @@ const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
     ? process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS !== '0'
     : /codex/i.test(targetAgentLabel);
 const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
+const expectDiffEditor = process.env.TABMINAL_EXPECT_DIFF_EDITOR === '1';
+const expectCodeEditor = process.env.TABMINAL_EXPECT_CODE_EDITOR === '1';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
     0,
@@ -43,6 +45,7 @@ const setupClaudeRegion = process.env.TABMINAL_SETUP_CLAUDE_REGION || '';
 const setupClaudeCredentials =
     process.env.TABMINAL_SETUP_CLAUDE_CREDENTIALS || '';
 const setupCopilotToken = process.env.TABMINAL_SETUP_COPILOT_TOKEN || '';
+const skipConfigSwitch = process.env.TABMINAL_SKIP_CONFIG_SWITCH === '1';
 const attachmentFiles = String(
     process.env.TABMINAL_ATTACHMENT_FILES || ''
 )
@@ -1214,44 +1217,46 @@ async function main() {
         });
     }
 
-    for (const [selectorRole, label] of [
-        ['model', 'model'],
-        ['thought_level', 'thought']
-    ]) {
-        const switchedConfig = await evaluate(
-            toExpression(`
-                () => {
-                    const select = document.querySelector(
-                        '.agent-panel-mode-select[data-selector-role="${selectorRole}"]'
-                    );
-                    if (!select || select.options.length < 2) return '';
-                    const options = Array.from(select.options);
-                    const next = options.find(
-                        (option) => option.value !== select.value
-                    );
-                    if (!next) return '';
-                    select.value = next.value;
-                    select.dispatchEvent(new Event('change', { bubbles: true }));
-                    return next.textContent.trim();
-                }
-            `)
-        );
-        log(`switched-${label}`, switchedConfig || 'unchanged');
-        if (switchedConfig) {
-            await waitFor(`${label}-updated`, async () => {
-                return await evaluate(
-                    toExpression(`
-                        () => Array.isArray(window.__fetchLog)
-                            && window.__fetchLog.some((entry) =>
-                                /\\/api\\/agents\\/tabs\\/[^/]+\\/config$/.test(
-                                    entry.url || ''
+    if (!skipConfigSwitch) {
+        for (const [selectorRole, label] of [
+            ['model', 'model'],
+            ['thought_level', 'thought']
+        ]) {
+            const switchedConfig = await evaluate(
+                toExpression(`
+                    () => {
+                        const select = document.querySelector(
+                            '.agent-panel-mode-select[data-selector-role="${selectorRole}"]'
+                        );
+                        if (!select || select.options.length < 2) return '';
+                        const options = Array.from(select.options);
+                        const next = options.find(
+                            (option) => option.value !== select.value
+                        );
+                        if (!next) return '';
+                        select.value = next.value;
+                        select.dispatchEvent(new Event('change', { bubbles: true }));
+                        return next.textContent.trim();
+                    }
+                `)
+            );
+            log(`switched-${label}`, switchedConfig || 'unchanged');
+            if (switchedConfig) {
+                await waitFor(`${label}-updated`, async () => {
+                    return await evaluate(
+                        toExpression(`
+                            () => Array.isArray(window.__fetchLog)
+                                && window.__fetchLog.some((entry) =>
+                                    /\\/api\\/agents\\/tabs\\/[^/]+\\/config$/.test(
+                                        entry.url || ''
+                                    )
                                 )
-                            )
-                    `),
-                    15000,
-                    250
-                );
-            });
+                        `),
+                        15000,
+                        250
+                    );
+                });
+            }
         }
     }
 
@@ -1479,6 +1484,63 @@ async function main() {
                     () => document.querySelectorAll(
                         '.agent-path-link[href^="/"]'
                     ).length > 0
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectDiffEditor || expectCodeEditor) {
+        await waitFor('tool-sections-expanded', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const sections = Array.from(document.querySelectorAll(
+                            '.agent-tool-call-section'
+                        ));
+                        if (sections.length === 0) return false;
+                        for (const section of sections) {
+                            section.open = true;
+                        }
+                        return sections.every((section) => section.open);
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectDiffEditor) {
+        await waitFor('diff-editor', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const diff = document.querySelector(
+                            '.agent-tool-call-editor.diff'
+                        );
+                        const lineNumbers = document.querySelector(
+                            '.agent-tool-call-editor .line-numbers'
+                        );
+                        return !!(diff && lineNumbers);
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectCodeEditor) {
+        await waitFor('code-editor', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const editors = Array.from(document.querySelectorAll(
+                            '.agent-tool-call-editor'
+                        )).filter((node) =>
+                            !node.classList.contains('diff')
+                        );
+                        const lineNumbers = document.querySelector(
+                            '.agent-tool-call-editor .line-numbers'
+                        );
+                        return editors.length > 0 && !!lineNumbers;
+                    }
                 `)
             );
         }, 20000, 250);

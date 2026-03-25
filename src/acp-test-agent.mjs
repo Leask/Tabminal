@@ -275,6 +275,61 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
+            if (/diff-smoke/i.test(promptText)) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call',
+                        toolCallId: 'diff-tool',
+                        title: 'Update sample.js',
+                        kind: 'edit',
+                        status: 'pending',
+                        locations: [{ path: '/tmp/sample.js' }],
+                        rawInput: { path: '/tmp/sample.js' }
+                    }
+                });
+                await sleep(30, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call_update',
+                        toolCallId: 'diff-tool',
+                        status: 'completed',
+                        content: [
+                            {
+                                type: 'diff',
+                                path: '/tmp/sample.js',
+                                oldText: 'const answer = 1;\\n',
+                                newText: 'const answer = 42;\\n'
+                            },
+                            {
+                                type: 'content',
+                                content: {
+                                    type: 'resource',
+                                    resource: {
+                                        uri: 'file:///tmp/sample.js',
+                                        mimeType: 'text/javascript',
+                                        text: 'const answer = 42;\\n'
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'diff-result',
+                        content: {
+                            type: 'text',
+                            text: 'Rendered diff smoke payload.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
             if (/permission/i.test(promptText)) {
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,

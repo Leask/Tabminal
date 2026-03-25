@@ -1881,6 +1881,23 @@ kbd {
     padding: 8px 9px;
 }
 
+.agent-tool-call-code-host,
+.agent-tool-call-diff-host {
+    margin: 0;
+    padding: 8px 9px;
+}
+
+.agent-tool-call-editor {
+    width: 100%;
+    border: 1px solid rgba(131, 148, 150, 0.18);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.agent-tool-call-editor.diff {
+    min-height: 180px;
+}
+
 .agent-status-pill {
     display: inline-flex;
     align-items: center;
