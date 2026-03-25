@@ -108,7 +108,10 @@ const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
 const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5a2 2 0 1 1 4 0"></path><path d="M5 16a7 7 0 1 0 14 0"></path><path d="M4 16h16"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg>';
 const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
-const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5 9 14a3.5 3.5 0 1 1-5-5l8-8a5 5 0 1 1 7 7l-9 9a6.5 6.5 0 0 1-9-9l8-8"></path></svg>';
+const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.49"></path></svg>';
+const CHEVRON_DOWN_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
+const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="m9 15 3-3 3 3"></path></svg>';
+const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -530,6 +533,7 @@ class EditorManager {
         this.terminalTabHost = document.createElement('div');
         this.terminalTabHost.className = 'terminal-tab-host';
         this.contentContainer.appendChild(this.terminalTabHost);
+        this.terminalLayoutButton = null;
         this.agentContainer = null;
         this.agentHeader = null;
         this.agentMeta = null;
@@ -543,6 +547,7 @@ class EditorManager {
         this.agentPrompt = null;
         this.agentAttachmentInput = null;
         this.agentAttachmentButton = null;
+        this.agentScrollBottomButton = null;
         this.agentAttachmentList = null;
         this.agentSendButton = null;
         this.agentHint = null;
@@ -553,14 +558,100 @@ class EditorManager {
         this.isApplyingAgentPromptState = false;
         this.suppressAgentCommandMenu = false;
 
+        this.initTerminalControls();
         this.initResizer();
         this.initAgentPanel();
         this.initMonaco();
         this.loadIconMap();
     }
 
+    isTerminalTabPinned(session = this.currentSession) {
+        return session?.workspaceState?.terminalDisplayMode === 'tab';
+    }
+
+    canToggleTerminalWorkspaceMode(session = this.currentSession) {
+        return !!session && !isCompactWorkspaceMode();
+    }
+
     hasCompactWorkspaceTabs(session = this.currentSession) {
-        return !!session && isCompactWorkspaceMode();
+        return !!session
+            && (
+                isCompactWorkspaceMode()
+                || this.isTerminalTabPinned(session)
+            );
+    }
+
+    initTerminalControls() {
+        if (!this.terminalWrapper) return;
+
+        this.terminalLayoutButton = document.createElement('button');
+        this.terminalLayoutButton.type = 'button';
+        this.terminalLayoutButton.className = 'terminal-layout-button';
+        this.terminalLayoutButton.style.display = 'none';
+        this.terminalLayoutButton.addEventListener('click', () => {
+            if (!this.canToggleTerminalWorkspaceMode()) return;
+            const nextMode = this.isTerminalTabPinned(this.currentSession)
+                ? 'auto'
+                : 'tab';
+            this.setTerminalDisplayMode(nextMode);
+        });
+        this.terminalWrapper.appendChild(this.terminalLayoutButton);
+    }
+
+    updateTerminalLayoutButton() {
+        if (!this.terminalLayoutButton) return;
+
+        if (!this.canToggleTerminalWorkspaceMode()) {
+            this.terminalLayoutButton.style.display = 'none';
+            this.terminalLayoutButton.classList.remove('active');
+            return;
+        }
+
+        const pinned = this.isTerminalTabPinned(this.currentSession);
+        const label = pinned
+            ? 'Restore automatic terminal layout'
+            : 'Show terminal as a workspace tab';
+
+        this.terminalLayoutButton.style.display = 'inline-flex';
+        this.terminalLayoutButton.classList.toggle('active', pinned);
+        this.terminalLayoutButton.innerHTML = pinned
+            ? TERMINAL_AUTO_MODE_ICON_SVG
+            : TERMINAL_TAB_MODE_ICON_SVG;
+        this.terminalLayoutButton.title = label;
+        this.terminalLayoutButton.setAttribute('aria-label', label);
+    }
+
+    setTerminalDisplayMode(mode) {
+        if (!this.currentSession) return;
+
+        const nextMode = mode === 'tab' ? 'tab' : 'auto';
+        const session = this.currentSession;
+
+        if (isCompactWorkspaceMode()) {
+            session.workspaceState.terminalDisplayMode = 'auto';
+            this.updateTerminalLayoutButton();
+            return;
+        }
+
+        if ((session.workspaceState.terminalDisplayMode || 'auto') === nextMode) {
+            this.updateTerminalLayoutButton();
+            return;
+        }
+
+        session.workspaceState.terminalDisplayMode = nextMode;
+        if (nextMode === 'tab') {
+            session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
+        } else if (
+            isTerminalWorkspaceTabKey(session.workspaceState.activeTabKey || '')
+        ) {
+            session.workspaceState.activeTabKey =
+                this.getPreferredNonTerminalWorkspaceTabKey(session);
+        }
+
+        session.saveState();
+        this.switchTo(session);
+        this.updateEditorPaneVisibility();
+        renderTabs();
     }
 
     getPreferredNonTerminalWorkspaceTabKey(session = this.currentSession) {
@@ -632,6 +723,8 @@ class EditorManager {
             }
             this.terminalWrapper.style.display = compact ? 'none' : 'flex';
         }
+
+        this.updateTerminalLayoutButton();
     }
 
     initAgentPanel() {
@@ -707,6 +800,9 @@ class EditorManager {
             }
             event.preventDefault();
             void this.openFile(href);
+        });
+        this.agentTranscript.addEventListener('scroll', () => {
+            this.updateAgentScrollBottomButton();
         });
 
         const composer = document.createElement('div');
@@ -879,9 +975,25 @@ class EditorManager {
         this.agentFixedActions = document.createElement('div');
         this.agentFixedActions.className = 'agent-panel-fixed-actions';
 
+        this.agentScrollBottomButton = document.createElement('button');
+        this.agentScrollBottomButton.type = 'button';
+        this.agentScrollBottomButton.className =
+            'agent-panel-button secondary icon-only';
+        this.agentScrollBottomButton.innerHTML = CHEVRON_DOWN_ICON_SVG;
+        this.agentScrollBottomButton.title = 'Scroll to latest message';
+        this.agentScrollBottomButton.setAttribute(
+            'aria-label',
+            'Scroll to latest message'
+        );
+        this.agentScrollBottomButton.style.display = 'none';
+        this.agentScrollBottomButton.addEventListener('click', () => {
+            this.scrollAgentTranscriptToBottom();
+        });
+
         this.agentAttachmentButton = document.createElement('button');
         this.agentAttachmentButton.type = 'button';
-        this.agentAttachmentButton.className = 'agent-panel-button secondary';
+        this.agentAttachmentButton.className =
+            'agent-panel-button secondary icon-only agent-attach-button';
         this.agentAttachmentButton.innerHTML = ATTACH_ICON_SVG;
         this.agentAttachmentButton.title = 'Add attachments';
         this.agentAttachmentButton.setAttribute(
@@ -909,6 +1021,7 @@ class EditorManager {
             void this.submitActiveAgentPrompt();
         });
 
+        this.agentFixedActions.appendChild(this.agentScrollBottomButton);
         this.agentFixedActions.appendChild(this.agentModeSelect);
         this.agentFixedActions.appendChild(this.agentSetupButton);
         this.agentFixedActions.appendChild(this.agentNewChatButton);
@@ -1156,6 +1269,8 @@ class EditorManager {
                 requestAnimationFrame(() => this.currentSession.mainFitAddon.fit());
             }
         }
+
+        this.updateTerminalLayoutButton();
     }
 
     toggle() {
@@ -1206,6 +1321,7 @@ class EditorManager {
         if (!session) {
             this.pane.style.display = 'none';
             this.resizer.style.display = 'none';
+            this.updateTerminalLayoutButton();
             return;
         }
 
@@ -1225,6 +1341,7 @@ class EditorManager {
         }
         
         this.updateEditorPaneVisibility();
+        this.updateTerminalLayoutButton();
         
         // Restore layout
         if (session.layoutState) {
@@ -1772,6 +1889,7 @@ class EditorManager {
         } else {
             this.agentTranscript.scrollTop = previousScrollTop;
         }
+        this.updateAgentScrollBottomButton();
         this.agentTools.innerHTML = '';
         this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
@@ -2207,6 +2325,28 @@ class EditorManager {
             'is-spinning',
             !!activity.spinning
         );
+    }
+
+    isAgentTranscriptNearBottom(threshold = 24) {
+        if (!this.agentTranscript) return true;
+        const remaining = this.agentTranscript.scrollHeight
+            - this.agentTranscript.clientHeight
+            - this.agentTranscript.scrollTop;
+        return remaining <= threshold;
+    }
+
+    scrollAgentTranscriptToBottom() {
+        if (!this.agentTranscript) return;
+        this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
+        this.updateAgentScrollBottomButton();
+    }
+
+    updateAgentScrollBottomButton() {
+        if (!this.agentScrollBottomButton || !this.agentTranscript) return;
+        const hasOverflow = this.agentTranscript.scrollHeight
+            > this.agentTranscript.clientHeight + 8;
+        const shouldShow = hasOverflow && !this.isAgentTranscriptNearBottom();
+        this.agentScrollBottomButton.style.display = shouldShow ? '' : 'none';
     }
 
     renderAgentCommandMenu(agentTab = null) {
@@ -3024,7 +3164,11 @@ class Session {
                 ? data.editorState.activeWorkspaceTabKey
                 : (data.editorState?.activeFilePath
                     ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
-                    : '')
+                    : ''),
+            terminalDisplayMode:
+                data.editorState?.terminalDisplayMode === 'tab'
+                    ? 'tab'
+                    : 'auto'
         };
         
         this.layoutState = {
@@ -3252,7 +3396,9 @@ class Session {
             root: this.editorState.root,
             openFiles: this.editorState.openFiles,
             activeFilePath: this.editorState.activeFilePath,
-            activeWorkspaceTabKey: this.workspaceState.activeTabKey || ''
+            activeWorkspaceTabKey: this.workspaceState.activeTabKey || '',
+            terminalDisplayMode:
+                this.workspaceState.terminalDisplayMode || 'auto'
         };
     }
 
@@ -3336,6 +3482,17 @@ class Session {
         if (message.phase === 'started') {
             this.runningExecutionId = String(message.executionId || '');
             this.runningCommand = message.command || '';
+            this.needsAttention = false;
+            this.updateTabUI();
+            if (state.activeSessionKey === this.key) {
+                editorManager.renderEditorTabs();
+            }
+            return;
+        }
+
+        if (message.phase === 'idle') {
+            this.runningExecutionId = '';
+            this.runningCommand = '';
             this.needsAttention = false;
             this.updateTabUI();
             if (state.activeSessionKey === this.key) {
@@ -5375,7 +5532,7 @@ function removeAgentTab(agentTabKey) {
         } else {
             const remaining = getAgentTabsForSession(session);
             session.workspaceState.activeTabKey = remaining[0]?.key
-                || (isCompactWorkspaceMode()
+                || (editorManager.hasCompactWorkspaceTabs(session)
                     ? TERMINAL_WORKSPACE_TAB_KEY
                     : '');
         }
@@ -7007,13 +7164,25 @@ if (editorPane) {
 window.addEventListener('tabminal:layout-modechange', () => {
     const session = getActiveSession();
     if (!session) return;
+    const activeElement = document.activeElement;
+    const terminalHasFocus = !!(
+        terminalEl
+        && activeElement
+        && terminalEl.contains(activeElement)
+    );
 
-    if (
-        !isCompactWorkspaceMode()
+    if (isCompactWorkspaceMode()) {
+        if (terminalHasFocus) {
+            session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
+            session.saveState();
+        }
+    } else if (
+        !editorManager.isTerminalTabPinned(session)
         && isTerminalWorkspaceTabKey(session.workspaceState?.activeTabKey || '')
     ) {
         session.workspaceState.activeTabKey =
             editorManager.getPreferredNonTerminalWorkspaceTabKey(session);
+        session.saveState();
     }
 
     editorManager.switchTo(session);

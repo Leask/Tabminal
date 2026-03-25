@@ -162,6 +162,32 @@ describe('TerminalSession', () => {
         assert.strictEqual(completed.entry.exitCode, 0);
     });
 
+    it('broadcasts idle when a prompt arrives with a dangling execution', async () => {
+        session = new TerminalSession(pty);
+        const client = new MockSocket();
+        session.attach(client);
+        await client.waitForMessages(3);
+        client.sent = [];
+
+        pty.emitData(buildStartSequence('pwd'));
+        pty.emitData(PROMPT_MARKER);
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        const started = payloads.find(
+            (payload) => payload.type === 'execution'
+                && payload.phase === 'started'
+        );
+        const idle = payloads.find(
+            (payload) => payload.type === 'execution'
+                && payload.phase === 'idle'
+        );
+
+        assert.ok(started);
+        assert.ok(idle);
+        assert.strictEqual(idle.executionId, started.executionId);
+        assert.strictEqual(session.currentExecutionId, '');
+    });
+
     it('resets the capture buffer for consecutive commands', () => {
         session = new TerminalSession(pty);
 

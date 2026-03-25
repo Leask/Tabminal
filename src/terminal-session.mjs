@@ -730,6 +730,14 @@ export class TerminalSession {
     }
 
     _handlePromptMarker() {
+        if (this.currentExecutionId) {
+            this._broadcast({
+                type: 'execution',
+                phase: 'idle',
+                executionId: this.currentExecutionId
+            });
+            this.currentExecutionId = '';
+        }
         this.captureBuffer = '';
         this.captureStartedAt = null;
     }
