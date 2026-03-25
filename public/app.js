@@ -2776,6 +2776,24 @@ function openAgentDropdown(session, anchor) {
         agentDropdownEl.appendChild(empty);
     }
 
+    const footer = document.createElement('div');
+    footer.className = 'agent-dropdown-footer';
+    footer.appendChild(
+        document.createTextNode('Agent features are in beta, ')
+    );
+    const issuesLink = document.createElement('a');
+    issuesLink.className = 'agent-dropdown-footer-link';
+    issuesLink.href = 'https://github.com/Leask/Tabminal/issues';
+    issuesLink.target = '_blank';
+    issuesLink.rel = 'noopener noreferrer';
+    issuesLink.textContent = 'report bugs here';
+    issuesLink.addEventListener('click', (event) => {
+        event.stopPropagation();
+    });
+    footer.appendChild(issuesLink);
+    footer.appendChild(document.createTextNode('.'));
+    agentDropdownEl.appendChild(footer);
+
     const rect = anchor.getBoundingClientRect();
     agentDropdownEl.style.display = 'flex';
     agentDropdownEl.style.top = `${rect.bottom + window.scrollY + 6}px`;
@@ -5214,6 +5232,9 @@ async function createAgentTab(session, agentId, options = {}) {
         }
         editorManager.activateAgentTab(agentTab.key);
         editorManager.updateEditorPaneVisibility();
+        requestAnimationFrame(() => {
+            editorManager.agentPrompt?.focus();
+        });
     } else {
         refreshWorkspaceIfSessionActive(session);
     }

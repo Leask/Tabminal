@@ -1892,6 +1892,26 @@ kbd {
     font-weight: 400;
 }
 
+.agent-panel-button:disabled,
+.agent-panel-mode-select:disabled {
+    cursor: not-allowed;
+    color: var(--text-muted);
+    border-color: rgba(131, 148, 150, 0.18);
+    background-color: rgba(88, 110, 117, 0.12);
+    box-shadow: none;
+    opacity: 0.72;
+}
+
+.agent-panel-button:disabled:hover,
+.agent-panel-button:disabled:focus-visible,
+.agent-panel-mode-select:disabled:hover,
+.agent-panel-mode-select:disabled:focus-visible {
+    color: var(--text-muted);
+    border-color: rgba(131, 148, 150, 0.18);
+    background-color: rgba(88, 110, 117, 0.12);
+    outline: none;
+}
+
 .agent-permission-option.secondary,
 .agent-panel-button.secondary {
     background-color: rgba(88, 110, 117, 0.2);
@@ -2280,6 +2300,26 @@ kbd {
     padding: 8px 12px;
     color: var(--text-muted);
     font-size: 0.82rem;
+}
+
+.agent-dropdown-footer {
+    margin-top: 2px;
+    padding: 8px 12px 2px;
+    border-top: 1px solid rgba(131, 148, 150, 0.14);
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+.agent-dropdown-footer-link {
+    color: var(--accent-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.agent-dropdown-footer-link:hover,
+.agent-dropdown-footer-link:focus-visible {
+    color: var(--text-highlight);
 }
 
 .monaco-container {
