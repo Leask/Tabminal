@@ -13,7 +13,7 @@ const {
 const WS_STATE_OPEN = 1;
 const DEFAULT_HISTORY_LIMIT = 512 * 1024; // chars
 const OSC_SEQUENCE_REGEX =
-    /\u001b\]1337;(ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)|TabminalPrompt)\u0007/g;
+    /\u001b\]1337;(ExitCode=(\d+);CommandB64=([a-zA-Z0-9+/=]+)|CommandStartB64=([a-zA-Z0-9+/=]+)|TabminalPrompt)\u0007/g;
 const EXTRA_PRIVATE_MODE_REGEX = /\u001b\[\?(1005|1006|1015)([hl])/g;
 const CSI_SEQUENCE_REGEX = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g;
 const OSC_STRIP_REGEX = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g;
@@ -120,6 +120,8 @@ export class TerminalSession {
         this.captureBuffer = '';
         this.captureStartedAt = null;
         this.lastExecution = null;
+        this.executionCounter = 0;
+        this.currentExecutionId = '';
         this.skipNextShellLog = false;
         this.skipNextShellLogResetTimer = null;
         this.partialSequenceBuffer = '';
@@ -198,6 +200,8 @@ export class TerminalSession {
                     const exitCodeStr = match[2];
                     const cmdB64 = match[3];
                     this._handleExitCodeSequence(exitCodeStr, cmdB64);
+                } else if (sequence.startsWith('CommandStartB64=')) {
+                    this._handleCommandStartSequence(match[4]);
                 } else {
                     this._handlePromptMarker();
                 }
@@ -730,6 +734,21 @@ export class TerminalSession {
         this.captureStartedAt = null;
     }
 
+    _handleCommandStartSequence(cmdB64) {
+        const command = this._decodeCommandSafe(cmdB64);
+        const startedAt = new Date();
+        this.captureStartedAt = startedAt;
+        this.executionCounter += 1;
+        this.currentExecutionId = `exec-${this.executionCounter}`;
+        this._broadcast({
+            type: 'execution',
+            phase: 'started',
+            executionId: this.currentExecutionId,
+            command,
+            startedAt
+        });
+    }
+
     _handleExitCodeSequence(exitCodeStr, cmdB64) {
         if (this.skipNextShellLog) {
             this.skipNextShellLog = false;
@@ -741,6 +760,8 @@ export class TerminalSession {
 
         const exitCode = Number.parseInt(exitCodeStr, 10);
         const command = this._decodeCommandSafe(cmdB64);
+        const executionId = this.currentExecutionId
+            || `exec-${++this.executionCounter}`;
 
         const completedAt = new Date();
         const entry = this._postProcessExecutionEntry({
@@ -754,9 +775,16 @@ export class TerminalSession {
         });
 
         this.lastExecution = entry;
+        this.currentExecutionId = '';
         this._logCommandExecution(entry);
         this.captureBuffer = '';
         this.captureStartedAt = null;
+        this._broadcast({
+            type: 'execution',
+            phase: 'completed',
+            executionId,
+            entry
+        });
 
         // Auto-Fix: If command failed, ask AI for help
         if (exitCode !== 0 && entry.command && this._isAiEnabled()) {

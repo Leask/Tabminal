@@ -15,7 +15,16 @@ _tabminal_bash_preexec() {
     if [[ "${BASH_COMMAND:-}" == "${PROMPT_COMMAND:-}" ]]; then
         return
     fi
+    if [[ -n "${_tabminal_command_running:-}" ]]; then
+        return
+    fi
+    _tabminal_command_running=1
     _tabminal_last_command="$BASH_COMMAND"
+    local command_b64
+    command_b64=$(
+        echo -n "$_tabminal_last_command" | base64 | tr -d '\n'
+    )
+    printf '\x1b]1337;CommandStartB64=%s\x07' "$command_b64"
 }
 
 _tabminal_bash_postexec() {
@@ -33,6 +42,7 @@ _tabminal_bash_postexec() {
 
 _tabminal_apply_prompt_marker() {
     local marker=$'\[\e]1337;TabminalPrompt\a\]'
+    _tabminal_command_running=''
     if [[ "${PS1:-}" != *'TabminalPrompt'* ]]; then
         PS1="${PS1}${marker}"
     fi

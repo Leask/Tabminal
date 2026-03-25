@@ -13,6 +13,10 @@ function buildExitSequence(exitCode, command) {
     const encoded = Buffer.from(command, 'utf8').toString('base64');
     return `\u001b]1337;ExitCode=${exitCode};CommandB64=${encoded}\u0007`;
 }
+function buildStartSequence(command) {
+    const encoded = Buffer.from(command, 'utf8').toString('base64');
+    return `\u001b]1337;CommandStartB64=${encoded}\u0007`;
+}
 const PROMPT_MARKER = '\u001b]1337;TabminalPrompt\u0007';
 
 describe('TerminalSession', () => {
@@ -119,6 +123,7 @@ describe('TerminalSession', () => {
     it('captures execution output between exit markers', () => {
         session = new TerminalSession(pty);
         pty.emitData('leask@Flora$ ' + PROMPT_MARKER);
+        pty.emitData(buildStartSequence('ls'));
         pty.emitData('ls\nfile.txt\n');
         pty.emitData(buildExitSequence(0, 'ls'));
 
@@ -127,6 +132,34 @@ describe('TerminalSession', () => {
         assert.strictEqual(session.lastExecution.exitCode, 0);
         assert.strictEqual(session.lastExecution.input, 'ls');
         assert.strictEqual(session.lastExecution.output, 'file.txt');
+    });
+
+    it('broadcasts execution start and completion events', async () => {
+        session = new TerminalSession(pty);
+        const client = new MockSocket();
+        session.attach(client);
+        await client.waitForMessages(3);
+        client.sent = [];
+
+        pty.emitData(buildStartSequence('pwd'));
+        pty.emitData('/tmp\n');
+        pty.emitData(buildExitSequence(0, 'pwd'));
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        const started = payloads.find(
+            (payload) => payload.type === 'execution'
+                && payload.phase === 'started'
+        );
+        const completed = payloads.find(
+            (payload) => payload.type === 'execution'
+                && payload.phase === 'completed'
+        );
+
+        assert.ok(started);
+        assert.ok(completed);
+        assert.strictEqual(started.command, 'pwd');
+        assert.strictEqual(completed.entry.command, 'pwd');
+        assert.strictEqual(completed.entry.exitCode, 0);
     });
 
     it('resets the capture buffer for consecutive commands', () => {

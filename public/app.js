@@ -105,6 +105,8 @@ const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
+const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5a2 2 0 1 1 4 0"></path><path d="M5 16a7 7 0 1 0 14 0"></path><path d="M4 16h16"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg>';
+const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -705,7 +707,7 @@ class EditorManager {
 
         this.agentPrompt = document.createElement('textarea');
         this.agentPrompt.className = 'agent-panel-input';
-        this.agentPrompt.placeholder = AGENT_PROMPT_PLACEHOLDER;
+        this.agentPrompt.placeholder = AGENT_PROMPT_PLACEHOLDER.join('\n');
         this.agentPrompt.rows = 3;
         this.agentPrompt.addEventListener('input', () => {
             this.updateAgentComposerActions();
@@ -832,23 +834,21 @@ class EditorManager {
         composer.appendChild(this.agentCommandMenu);
         composer.appendChild(actions);
 
-        this.agentHint = document.createElement('div');
-        this.agentHint.className = 'agent-panel-hint';
-        this.agentHintStatus = document.createElement('span');
-        this.agentHintStatus.className = 'agent-status-pill ready';
-        this.agentHintSummary = document.createElement('span');
-        this.agentHintSummary.className = 'agent-panel-hint-summary';
-        this.agentHintHotkey = document.createElement('span');
-        this.agentHintHotkey.className = 'agent-panel-hint-hotkey';
-        this.agentHint.appendChild(this.agentHintStatus);
-        this.agentHint.appendChild(this.agentHintSummary);
-        this.agentHint.appendChild(this.agentHintHotkey);
-        composer.appendChild(this.agentHint);
+        this.agentActivity = document.createElement('div');
+        this.agentActivity.className = 'agent-panel-activity';
+        this.agentActivity.style.display = 'none';
+        this.agentActivityIcon = document.createElement('span');
+        this.agentActivityIcon.className = 'agent-panel-activity-icon';
+        this.agentActivityLabel = document.createElement('span');
+        this.agentActivityLabel.className = 'agent-panel-activity-label';
+        this.agentActivity.appendChild(this.agentActivityIcon);
+        this.agentActivity.appendChild(this.agentActivityLabel);
 
         this.agentContainer.appendChild(header);
         this.agentContainer.appendChild(this.agentTools);
         this.agentContainer.appendChild(this.agentPermissions);
         this.agentContainer.appendChild(this.agentTranscript);
+        this.agentContainer.appendChild(this.agentActivity);
         this.agentContainer.appendChild(composer);
         this.contentContainer.appendChild(this.agentContainer);
     }
@@ -1343,7 +1343,11 @@ class EditorManager {
 
             const icon = document.createElement('span');
             icon.className = 'agent-editor-tab-icon';
-            icon.innerHTML = TERMINAL_TAB_ICON_SVG;
+            applyStatusIconState(
+                icon,
+                TERMINAL_TAB_ICON_SVG,
+                getSessionTerminalIndicatorState(this.currentSession)
+            );
 
             const label = document.createElement('span');
             label.textContent = 'Terminal';
@@ -1394,7 +1398,11 @@ class EditorManager {
 
             const icon = document.createElement('span');
             icon.className = 'agent-editor-tab-icon';
-            icon.innerHTML = AGENT_ICON_SVG;
+            applyStatusIconState(
+                icon,
+                AGENT_ICON_SVG,
+                getAgentTabIndicatorState(agentTab)
+            );
 
             const label = document.createElement('span');
             label.textContent = getAgentDisplayLabel(agentTab);
@@ -1448,10 +1456,12 @@ class EditorManager {
 
         this.currentSession.workspaceState.activeTabKey =
             TERMINAL_WORKSPACE_TAB_KEY;
+        this.currentSession.needsAttention = false;
         if (!isRestore) {
             this.currentSession.saveState();
         }
         this.renderEditorTabs();
+        this.currentSession.updateTabUI();
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.agentContainer.style.display = 'none';
@@ -1562,8 +1572,10 @@ class EditorManager {
 
         this.currentSession.workspaceState.activeTabKey = agentTabKey;
         this.currentSession.workspaceState.lastNonTerminalTabKey = agentTabKey;
+        agentTab.needsAttention = false;
         this.currentSession.saveState();
         this.renderEditorTabs();
+        this.currentSession.updateTabUI();
         this.syncTerminalWorkspacePlacement(agentTabKey);
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
@@ -2031,19 +2043,10 @@ class EditorManager {
         if (!needsSetup && activeAgentTab) {
             activeAgentTab.lastSetupPromptedErrorMessage = '';
         }
-        const feedback = getAgentComposerFeedback(activeAgentTab);
-        if (feedback) {
-            this.agentHint.style.display = '';
-            this.agentHintStatus.className = `agent-status-pill ${feedback.statusClass}`;
-            this.agentHintStatus.textContent = feedback.statusLabel;
-            this.agentHintSummary.textContent = feedback.summary;
-            this.agentHintHotkey.textContent = feedback.hotkey || '';
-            this.agentHintHotkey.style.display = feedback.hotkey ? '' : 'none';
-        } else {
-            this.agentHint.style.display = 'none';
-            this.agentHintSummary.textContent = '';
-            this.agentHintHotkey.textContent = '';
-        }
+        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(
+            activeAgentTab
+        );
+        this.renderAgentActivity(activeAgentTab);
         this.renderAgentCommandMenu(activeAgentTab);
         if (
             activeAgentTab
@@ -2059,6 +2062,32 @@ class EditorManager {
                 this.openAgentSetupForTab(activeAgentTab);
             });
         }
+    }
+
+    renderAgentActivity(agentTab = null) {
+        const activity = getAgentActivityState(agentTab);
+        if (!activity) {
+            this.agentActivity.style.display = 'none';
+            this.agentActivity.classList.remove(
+                'running',
+                'pending',
+                'error'
+            );
+            this.agentActivityLabel.textContent = '';
+            this.agentActivityIcon.innerHTML = '';
+            this.agentActivityIcon.classList.remove('is-spinning');
+            return;
+        }
+
+        this.agentActivity.style.display = '';
+        this.agentActivity.classList.remove('running', 'pending', 'error');
+        this.agentActivity.classList.add(activity.stateClass);
+        this.agentActivityLabel.textContent = activity.label;
+        this.agentActivityIcon.innerHTML = activity.iconSvg;
+        this.agentActivityIcon.classList.toggle(
+            'is-spinning',
+            !!activity.spinning
+        );
     }
 
     renderAgentCommandMenu(agentTab = null) {
@@ -2150,8 +2179,8 @@ class EditorManager {
 
 const AGENT_PROMPT_PLACEHOLDER = [
     'Life! The Universe! Everything!',
-    '// Host ... · CWD ... · Mode ... · Status ...',
-    '// ⇧⏎ / ⌃J inserts a newline.'
+    '# Host:/path · Mode · Ready',
+    '# / for commands, ⇧⏎ or ⌃J inserts a newline.'
 ];
 
 const editorManager = new EditorManager();
@@ -2594,6 +2623,11 @@ class Session {
         this.rows = data.rows || 24;
         
         this.saveStateTimer = null;
+        this.runningCommand = '';
+        this.runningExecutionId = '';
+        this.lastExecutionEntry = null;
+        this.needsAttention = false;
+        this.lastNotifiedExecutionId = '';
 
         this.editorState = {
             isVisible: data.editorState?.isVisible || false,
@@ -2801,7 +2835,26 @@ class Session {
         }
 
         const titleEl = tab.querySelector('.title');
-        if (titleEl) titleEl.textContent = this.title;
+        const titleTextEl = tab.querySelector('.tab-title-text');
+        if (titleTextEl) {
+            titleTextEl.textContent = this.title;
+        } else if (titleEl) {
+            titleEl.textContent = this.title;
+        }
+
+        const titleIconEl = tab.querySelector('.tab-status-icon');
+        applyStatusIconState(
+            titleIconEl,
+            TERMINAL_TAB_ICON_SVG,
+            getSessionTerminalIndicatorState(this)
+        );
+
+        const agentBtn = tab.querySelector('.toggle-agent-btn');
+        applyStatusIconState(
+            agentBtn,
+            AGENT_ICON_SVG,
+            getSessionAgentIndicatorState(this)
+        );
 
         const metaEl = tab.querySelector('.meta-cwd');
         if (metaEl) {
@@ -2897,6 +2950,64 @@ class Session {
             case 'status':
                 if (state.activeSessionKey === this.key) setStatus(this.server, message.status);
                 break;
+            case 'execution':
+                this.handleExecutionMessage(message);
+                break;
+        }
+    }
+
+    handleExecutionMessage(message) {
+        if (message.phase === 'started') {
+            this.runningExecutionId = String(message.executionId || '');
+            this.runningCommand = message.command || '';
+            this.needsAttention = false;
+            this.updateTabUI();
+            if (state.activeSessionKey === this.key) {
+                editorManager.renderEditorTabs();
+            }
+            return;
+        }
+
+        if (message.phase !== 'completed') {
+            return;
+        }
+
+        const executionId = String(
+            message.executionId
+            || this.runningExecutionId
+            || `${message.entry?.completedAt || ''}:${message.entry?.command || ''}`
+        );
+        this.lastExecutionEntry = message.entry || null;
+        this.runningExecutionId = '';
+        this.runningCommand = '';
+
+        if (!isTerminalViewVisible(this)) {
+            this.needsAttention = true;
+            if (this.lastNotifiedExecutionId !== executionId) {
+                this.lastNotifiedExecutionId = executionId;
+                const command = this.lastExecutionEntry?.command || 'command';
+                const exitCode = Number.isFinite(this.lastExecutionEntry?.exitCode)
+                    ? this.lastExecutionEntry.exitCode
+                    : null;
+                const type = exitCode === 0 ? 'success' : 'warning';
+                const statusText = exitCode === 0
+                    ? 'completed'
+                    : `finished with exit code ${exitCode}`;
+                alert(
+                    `${command} ${statusText} on ${getDisplayHost(this.server)}.`,
+                    {
+                        type,
+                        title: 'Terminal'
+                    }
+                );
+            }
+        } else {
+            this.needsAttention = false;
+        }
+
+        this.updateTabUI();
+        if (state.activeSessionKey === this.key) {
+            editorManager.renderEditorTabs();
         }
     }
 
@@ -2948,6 +3059,9 @@ class AgentTab {
         this.id = data.id;
         this.key = makeAgentTabKey(this.serverId, this.id);
         this.socket = null;
+        this.needsAttention = false;
+        this.runCounter = 0;
+        this.lastCompletedRunCounter = 0;
         this.update(data);
         this.connect();
     }
@@ -2962,6 +3076,7 @@ class AgentTab {
     notifyUi() {
         const session = this.getLinkedSession();
         if (!session) return;
+        session.updateTabUI();
         refreshWorkspaceIfSessionActive(session);
     }
 
@@ -2985,6 +3100,15 @@ class AgentTab {
         this.availableCommands = Array.isArray(data.availableCommands)
             ? data.availableCommands
             : [];
+        this.needsAttention = Boolean(this.needsAttention);
+        this.runCounter = Number.isFinite(this.runCounter)
+            ? this.runCounter
+            : (this.busy ? 1 : 0);
+        this.lastCompletedRunCounter = Number.isFinite(
+            this.lastCompletedRunCounter
+        )
+            ? this.lastCompletedRunCounter
+            : 0;
         this.timelineCounter = 0;
         this.messages = Array.isArray(data.messages)
             ? data.messages.map((message) => this.#normalizeMessage(message))
@@ -3044,6 +3168,7 @@ class AgentTab {
     }
 
     handleMessage(message) {
+        const wasBusy = this.busy;
         switch (message.type) {
             case 'snapshot':
                 this.update(message.tab || {});
@@ -3100,6 +3225,32 @@ class AgentTab {
                 break;
             default:
                 break;
+        }
+        if (!wasBusy && this.busy) {
+            this.runCounter += 1;
+            this.needsAttention = false;
+        } else if (
+            wasBusy
+            && !this.busy
+            && message.type !== 'snapshot'
+            && this.lastCompletedRunCounter !== this.runCounter
+        ) {
+            this.lastCompletedRunCounter = this.runCounter;
+            if (!isAgentTabVisible(this)) {
+                this.needsAttention = true;
+                const label = getAgentBaseName(this);
+                const title = this.errorMessage ? `${label} error` : label;
+                const messageText = this.errorMessage
+                    || 'Finished responding in this workspace.';
+                alert(messageText, {
+                    type: this.errorMessage ? 'warning' : 'success',
+                    title
+                });
+            } else {
+                this.needsAttention = false;
+            }
+        } else if (isAgentTabVisible(this)) {
+            this.needsAttention = false;
         }
         this.notifyUi();
     }
@@ -3406,6 +3557,76 @@ function getActiveAgentTab() {
     return state.agentTabs.get(activeKey) || null;
 }
 
+function getStatusIconMarkup(baseIconSvg, state = 'idle') {
+    if (state === 'running') return SPINNER_ICON_SVG;
+    if (state === 'attention') return BELL_ICON_SVG;
+    return baseIconSvg;
+}
+
+function applyStatusIconState(element, baseIconSvg, state = 'idle') {
+    if (!element) return;
+    element.innerHTML = getStatusIconMarkup(baseIconSvg, state);
+    element.classList.toggle('is-running', state === 'running');
+    element.classList.toggle('is-attention', state === 'attention');
+}
+
+function getSessionTerminalIndicatorState(session) {
+    if (!session) return 'idle';
+    if (session.runningCommand) return 'running';
+    if (session.needsAttention) return 'attention';
+    return 'idle';
+}
+
+function getAgentTabIndicatorState(agentTab) {
+    if (!agentTab) return 'idle';
+    if (agentTab.busy) return 'running';
+    if (agentTab.needsAttention) return 'attention';
+    return 'idle';
+}
+
+function getSessionAgentIndicatorState(session) {
+    const tabs = getAgentTabsForSession(session);
+    if (tabs.some((tab) => tab.busy)) return 'running';
+    if (tabs.some((tab) => tab.needsAttention)) return 'attention';
+    return 'idle';
+}
+
+function isTerminalViewVisible(session) {
+    if (!session || state.activeSessionKey !== session.key) return false;
+    if (document.visibilityState !== 'visible') return false;
+    if (!editorManager.hasCompactWorkspaceTabs(session)) return true;
+    return editorManager.getActiveWorkspaceTabKey(session)
+        === TERMINAL_WORKSPACE_TAB_KEY;
+}
+
+function isAgentTabVisible(agentTab) {
+    const session = agentTab?.getLinkedSession?.() || null;
+    if (!session || state.activeSessionKey !== session.key) return false;
+    if (document.visibilityState !== 'visible') return false;
+    return editorManager.getActiveWorkspaceTabKey(session) === agentTab.key;
+}
+
+function clearTerminalAttentionIfVisible(session) {
+    if (!session?.needsAttention || !isTerminalViewVisible(session)) return;
+    session.needsAttention = false;
+    session.updateTabUI();
+    if (state.activeSessionKey === session.key) {
+        editorManager.renderEditorTabs();
+    }
+}
+
+function clearAgentAttentionIfVisible(agentTab) {
+    if (!agentTab?.needsAttention || !isAgentTabVisible(agentTab)) return;
+    agentTab.needsAttention = false;
+    agentTab.notifyUi();
+}
+
+function clearVisibleAttentionState(session = getActiveSession()) {
+    if (!session) return;
+    clearTerminalAttentionIfVisible(session);
+    clearAgentAttentionIfVisible(getActiveAgentTab());
+}
+
 function normalizeAgentModes(modes) {
     if (!Array.isArray(modes)) return [];
     return modes
@@ -3527,6 +3748,7 @@ function buildAgentPromptPlaceholder(agentTab) {
     if (!agentTab) {
         return AGENT_PROMPT_PLACEHOLDER.join('\n');
     }
+    const feedback = getAgentComposerFeedback(agentTab);
     const session = agentTab.getLinkedSession();
     const modeLabel = getCurrentAgentModeLabel(agentTab);
     const cwd = agentTab.cwd
@@ -3537,19 +3759,19 @@ function buildAgentPromptPlaceholder(agentTab) {
         : '';
     const host = getDisplayHost(agentTab.server);
     const location = cwd ? `${host}:${cwd}` : host;
-    const status = String(agentTab.status || 'ready');
-    const statusLabel = status
-        ? status.charAt(0).toUpperCase() + status.slice(1)
-        : 'Ready';
+    const statusLabel = feedback?.statusLabel || 'Ready';
     const metaLine = [
         location,
         modeLabel,
         statusLabel
     ].filter(Boolean).join(' · ');
+    const helperLine = feedback?.hotkey
+        ? `# / for commands, ${feedback.hotkey} ⇧⏎ or ⌃J inserts a newline.`
+        : AGENT_PROMPT_PLACEHOLDER[2];
     return [
         AGENT_PROMPT_PLACEHOLDER[0],
-        `// ${metaLine}`,
-        AGENT_PROMPT_PLACEHOLDER[2]
+        `# ${metaLine}`,
+        helperLine
     ].join('\n');
 }
 
@@ -3557,22 +3779,23 @@ function getAgentMessageRoleLabel(agentTab, message) {
     const role = String(message?.role || 'assistant').toLowerCase();
     const kind = String(message?.kind || 'message').toLowerCase();
 
-    let roleLabel = message?.role || 'assistant';
-    let icon = '';
-    if (role === 'user') {
-        roleLabel = getAgentSessionUser(agentTab);
-        icon = '😺 ';
-    } else if (role === 'assistant') {
-        roleLabel = getAgentBaseName(agentTab);
-        icon = '🤖 ';
-    }
-
-    const displayRoleLabel = `${icon}${roleLabel}`.trim();
+    const displayRoleLabel = getAgentRoleDisplayLabel(agentTab, role);
 
     if (kind === 'message') {
         return displayRoleLabel;
     }
     return `${displayRoleLabel} · ${message.kind || kind}`;
+}
+
+function getAgentRoleDisplayLabel(agentTab, role = 'assistant') {
+    const normalizedRole = String(role || 'assistant').toLowerCase();
+    if (normalizedRole === 'user') {
+        return `😺 ${getAgentSessionUser(agentTab)}`.trim();
+    }
+    if (normalizedRole === 'assistant') {
+        return `🤖 ${getAgentBaseName(agentTab)}`.trim();
+    }
+    return role || 'assistant';
 }
 
 function getAgentTimelineItems(agentTab) {
@@ -3620,13 +3843,14 @@ function getAgentTimelineItems(agentTab) {
 
 function getAgentDisplayLabel(agentTab) {
     if (!agentTab) return 'Agent';
+    const baseName = getAgentBaseName(agentTab);
     const session = agentTab.getLinkedSession();
     if (!session) {
-        return agentTab.agentLabel || 'Agent';
+        return baseName || 'Agent';
     }
 
     const siblings = getAgentTabsForSession(session)
-        .filter((tab) => tab.agentLabel === agentTab.agentLabel)
+        .filter((tab) => getAgentBaseName(tab) === baseName)
         .sort((left, right) => {
             const created = (left.createdAt || '').localeCompare(
                 right.createdAt || ''
@@ -3635,15 +3859,15 @@ function getAgentDisplayLabel(agentTab) {
             return left.id.localeCompare(right.id);
         });
     if (siblings.length <= 1) {
-        return agentTab.agentLabel || 'Agent';
+        return baseName || 'Agent';
     }
     const index = siblings.findIndex((tab) => tab.key === agentTab.key);
     const suffix = index >= 0 ? index + 1 : siblings.length;
-    return `${agentTab.agentLabel || 'Agent'} #${suffix}`;
+    return `${baseName || 'Agent'} #${suffix}`;
 }
 
 function buildAgentTimelineRoleLabel(agentTab, kind) {
-    return `${getAgentBaseName(agentTab)} · ${kind}`;
+    return `${getAgentRoleDisplayLabel(agentTab, 'assistant')} · ${kind}`;
 }
 
 function normalizeStatusClass(status = '') {
@@ -3865,6 +4089,57 @@ function getAgentComposerFeedback(agentTab) {
         summary: 'Ready for the next turn.',
         hotkey: ''
     };
+}
+
+function getAgentActivityState(agentTab) {
+    if (!agentTab) return null;
+
+    const pendingPermission = getAgentOrderedMapValues(
+        agentTab.permissions
+    ).find((permission) => permission.status === 'pending');
+    if (pendingPermission) {
+        return {
+            stateClass: 'pending',
+            label: 'Waiting for approval…',
+            iconSvg: BELL_ICON_SVG,
+            spinning: false
+        };
+    }
+
+    const activeTool = getAgentOrderedMapValues(agentTab.toolCalls).find(
+        (toolCall) => {
+            const statusClass = normalizeStatusClass(toolCall.status);
+            return statusClass === 'pending' || statusClass === 'running';
+        }
+    );
+    if (activeTool) {
+        return {
+            stateClass: 'running',
+            label: `Thinking… ${getAgentToolTitle(activeTool)}`,
+            iconSvg: SPINNER_ICON_SVG,
+            spinning: true
+        };
+    }
+
+    if (agentTab.status === 'restoring') {
+        return {
+            stateClass: 'running',
+            label: 'Restoring…',
+            iconSvg: SPINNER_ICON_SVG,
+            spinning: true
+        };
+    }
+
+    if (agentTab.busy) {
+        return {
+            stateClass: 'running',
+            label: 'Thinking…',
+            iconSvg: SPINNER_ICON_SVG,
+            spinning: true
+        };
+    }
+
+    return null;
 }
 
 function escapeHtml(text) {
@@ -5706,7 +5981,6 @@ function createTabElement(session) {
 
     const agentBtn = document.createElement('button');
     agentBtn.className = 'toggle-agent-btn';
-    agentBtn.innerHTML = AGENT_ICON_SVG;
     agentBtn.title = 'Open Agent';
     agentBtn.onclick = async (e) => {
         e.stopPropagation();
@@ -5746,6 +6020,12 @@ function createTabElement(session) {
 
     const title = document.createElement('div');
     title.className = 'title';
+    const titleIcon = document.createElement('span');
+    titleIcon.className = 'tab-status-icon';
+    title.appendChild(titleIcon);
+    const titleText = document.createElement('span');
+    titleText.className = 'tab-title-text';
+    title.appendChild(titleText);
 
     const metaId = document.createElement('div');
     metaId.className = 'meta';
@@ -5808,7 +6088,8 @@ function createTabElement(session) {
         if (e.cancelable) e.preventDefault(); // Prevent mouse emulation (hover/click)
         switchToSession(session.key);
     });
-    
+
+    session.updateTabUI();
     return tab;
 }
 
@@ -6046,6 +6327,11 @@ const notificationManager = new NotificationManager();
 document.addEventListener('click', () => {
     notificationManager.requestPermission();
 }, { once: true, capture: true });
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        clearVisibleAttentionState();
+    }
+});
 // #endregion
 
 // #region Toast Manager
@@ -6151,6 +6437,7 @@ async function switchToSession(sessionKey, options = {}) {
     
     // Sync editor state
     editorManager.switchTo(session);
+    clearVisibleAttentionState(session);
     if (session.server.lastSystemData) {
         updateSystemStatus(session.server.lastSystemData, session.server.lastLatency, session.server);
     }

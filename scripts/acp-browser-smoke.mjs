@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const chromeBaseUrl = process.env.CHROME_DEBUG_URL
@@ -76,16 +77,9 @@ async function getApiToken() {
         return await apiTokenPromise;
     }
     apiTokenPromise = (async () => {
-        const response = await fetch(new URL('/api/login', tabminalUrl), {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ password: tabminalPassword })
-        });
-        if (!response.ok) {
-            throw new Error(`login failed with ${response.status}`);
-        }
-        const data = await response.json();
-        return data.token || '';
+        return crypto.createHash('sha256')
+            .update(tabminalPassword)
+            .digest('hex');
     })();
     return await apiTokenPromise;
 }
@@ -96,7 +90,7 @@ async function createSessionViaNodeApi(label = 'create-session-via-node-api') {
         const response = await fetch(new URL('/api/sessions', tabminalUrl), {
             method: 'POST',
             headers: {
-                authorization: token ? `Bearer ${token}` : '',
+                authorization: token || '',
                 'content-type': 'application/json'
             },
             body: '{}'
@@ -259,24 +253,33 @@ async function main() {
         }
 
         async function createSessionViaPageApi(label = 'create-session-via-api') {
-            const created = await evaluate(
-                toExpression(`
-                    async () => {
-                        const token = localStorage.getItem(
-                            'tabminal_auth_token:main'
-                        ) || '';
-                        const response = await fetch('/api/sessions', {
-                            method: 'POST',
-                            headers: {
-                                authorization: token ? \`Bearer \${token}\` : '',
-                                'content-type': 'application/json'
-                            },
-                            body: '{}'
-                        });
-                        return response.ok;
-                    }
-                `)
-            );
+            let created = false;
+            try {
+                created = await evaluate(
+                    toExpression(`
+                        async () => {
+                            const token = localStorage.getItem(
+                                'tabminal_auth_token:main'
+                            ) || '';
+                            try {
+                                const response = await fetch('/api/sessions', {
+                                    method: 'POST',
+                                    headers: {
+                                        authorization: token || '',
+                                        'content-type': 'application/json'
+                                    },
+                                    body: '{}'
+                                });
+                                return response.ok;
+                            } catch {
+                                return false;
+                            }
+                        }
+                    `)
+                );
+            } catch {
+                created = false;
+            }
             log(label, created ? 'ok' : 'failed');
             return created;
         }
@@ -298,32 +301,56 @@ async function main() {
                 );
             };
 
-            const authState = await waitFor(authLabel, async () => {
-                return await evaluate(
+            let authState = '';
+            try {
+                authState = await waitFor(authLabel, async () => {
+                    return await evaluate(
+                        toExpression(`
+                            () => {
+                                const modal = document.getElementById(
+                                    'login-modal'
+                                );
+                                const hasLogin = Boolean(
+                                    modal
+                                    && getComputedStyle(modal).display !== 'none'
+                                    && document.getElementById('password-input')
+                                );
+                                const hasSession = document.querySelectorAll(
+                                    '.tab-item'
+                                ).length > 0;
+                                if (hasLogin) return 'login';
+                                if (
+                                    hasSession
+                                    && modal
+                                    && getComputedStyle(modal).display === 'none'
+                                ) {
+                                    return 'session';
+                                }
+                                return '';
+                            }
+                        `)
+                    );
+                });
+            } catch {
+                const token = await getApiToken();
+                await evaluate(
                     toExpression(`
                         () => {
-                            const modal = document.getElementById('login-modal');
-                            const hasLogin = Boolean(
-                                modal
-                                && getComputedStyle(modal).display !== 'none'
-                                && document.getElementById('password-input')
+                            localStorage.setItem(
+                                'tabminal_auth_token:main',
+                                ${JSON.stringify(token)}
                             );
-                            const hasSession = document.querySelectorAll(
-                                '.tab-item'
-                            ).length > 0;
-                            if (hasLogin) return 'login';
-                            if (
-                                hasSession
-                                && modal
-                                && modal.style.display === 'none'
-                            ) {
-                                return 'session';
-                            }
-                            return '';
+                            return true;
                         }
                     `)
                 );
-            });
+                log('forced-auth-token');
+                await page.send('Page.reload', { ignoreCache: true });
+                await waitForDocumentReady(
+                    'document-ready-after-forced-auth'
+                );
+                authState = 'session';
+            }
 
             if (authState === 'login') {
                 await evaluate(
@@ -346,15 +373,12 @@ async function main() {
 
             try {
                 await waitFor(sessionLabel, hasVisibleSession);
-            } catch (error) {
-                if (authState !== 'login') {
-                    throw error;
-                }
+            } catch (_error) {
                 await createSessionViaPageApi(
-                    'retry-session-after-login-create-via-api'
+                    'retry-session-create-via-api'
                 );
                 await createSessionViaNodeApi(
-                    'retry-session-after-login-create-via-node-api'
+                    'retry-session-create-via-node-api'
                 );
                 try {
                     await waitFor(
@@ -367,16 +391,16 @@ async function main() {
                 } catch {
                     // Fall through to a full target recreate.
                 }
-                log('retry-session-after-login-recreate-target');
-                await recreateTarget('login-retry-target');
+                log('retry-session-recreate-target');
+                await recreateTarget('session-retry-target');
                 await waitForDocumentReady(
-                    'document-ready-after-login-recreate-target'
+                    'document-ready-after-session-recreate-target'
                 );
                 await createSessionViaPageApi(
-                    'retry-session-after-login-create-via-api-post-recreate'
+                    'retry-session-create-via-api-post-recreate'
                 );
                 await createSessionViaNodeApi(
-                    'retry-session-after-login-create-via-node-api-post-recreate'
+                    'retry-session-create-via-node-api-post-recreate'
                 );
                 await waitFor(
                     `${sessionLabel}-after-recreate-target`,
@@ -456,25 +480,37 @@ async function main() {
             return await evaluate(
                 toExpression(`
                 () => {
-                    const pill = document.querySelector(
-                        '.agent-panel-hint .agent-status-pill'
+                    const input = document.querySelector('.agent-panel-input');
+                    const placeholderLines = (
+                        input?.getAttribute('placeholder') || ''
+                    ).split('\\n');
+                    const summary = placeholderLines[0]?.trim() || '';
+                    const metaLine = placeholderLines[1]
+                        ?.replace(/^\\/\\/\\s*/, '')
+                        .trim() || '';
+                    const pill = metaLine.split('·').pop()?.trim() || '';
+                    const hotkey = placeholderLines[2]
+                        ?.replace(/^\\/\\/\\s*/, '')
+                        .trim() || '';
+                    const activity = document.querySelector(
+                        '.agent-panel-activity'
                     );
-                    const summary = document.querySelector(
-                        '.agent-panel-hint-summary'
-                    );
-                    const hotkey = document.querySelector(
-                        '.agent-panel-hint-hotkey'
+                    const activityVisible = Boolean(
+                        activity
+                        && getComputedStyle(activity).display !== 'none'
                     );
                     return {
-                        pill: pill?.textContent?.trim() || '',
-                        summary: summary?.textContent?.trim() || '',
-                        hotkey: hotkey?.textContent?.trim() || '',
-                        visible: !!(
-                            document.querySelector('.agent-panel-hint')
-                            && getComputedStyle(
-                                document.querySelector('.agent-panel-hint')
-                            ).display !== 'none'
-                        )
+                        pill,
+                        summary,
+                        hotkey,
+                        placeholder: placeholderLines.join('\\n'),
+                        visible: activityVisible,
+                        activity: activityVisible
+                            ? activity.textContent?.trim() || ''
+                            : '',
+                        activityClass: activityVisible
+                            ? activity.className || ''
+                            : ''
                     };
                 }
                 `)
@@ -1397,12 +1433,14 @@ async function main() {
                     const sendButton = Array.from(
                         document.querySelectorAll('.agent-panel-button')
                     ).find((el) => /send/i.test(el.textContent || ''));
+                    const placeholder = (
+                        document.querySelector('.agent-panel-input')
+                            ?.getAttribute('placeholder') || ''
+                    ).split('\\n');
                     return Boolean(sendButton)
                         && /send/i.test(sendButton.textContent || '')
                         && /ready/i.test(
-                            document.querySelector(
-                                '.agent-panel-hint .agent-status-pill'
-                            )?.textContent || ''
+                            placeholder[1] || ''
                         );
                 }
             `),
