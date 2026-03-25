@@ -454,6 +454,39 @@ describe('AcpManager', () => {
         assert.equal(definition.config.hasGeminiApiKey, true);
     });
 
+    it('reports saved Copilot token config in definitions', async () => {
+        let persistedConfigs = {
+            copilot: {
+                env: {
+                    COPILOT_GITHUB_TOKEN: 'test-token'
+                }
+            }
+        };
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new FakeRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            loadConfigs: async () => persistedConfigs,
+            saveConfigs: async (configs) => {
+                persistedConfigs = structuredClone(configs);
+            }
+        });
+        manager.definitions = [{
+            id: 'copilot',
+            label: 'GitHub Copilot',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const [definition] = await manager.listDefinitions();
+
+        assert.equal(definition.available, true);
+        assert.equal(definition.config.hasCopilotToken, true);
+    });
+
     it('merges and clears saved agent config values', async () => {
         const { manager, getPersistedConfigs } = createManager();
         manager.definitions.push({
@@ -485,6 +518,31 @@ describe('AcpManager', () => {
             ANTHROPIC_VERTEX_PROJECT_ID: 'proj-a',
             CLOUD_ML_REGION: 'us-central1'
         });
+    });
+
+    it('stores and clears saved Copilot token config values', async () => {
+        const { manager, getPersistedConfigs } = createManager();
+        manager.definitions.push({
+            id: 'copilot',
+            label: 'GitHub Copilot',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        });
+
+        await manager.updateAgentConfig('copilot', {
+            env: {
+                COPILOT_GITHUB_TOKEN: 'alpha'
+            }
+        });
+
+        await manager.updateAgentConfig('copilot', {
+            env: {},
+            clearEnvKeys: ['COPILOT_GITHUB_TOKEN']
+        });
+
+        assert.deepEqual(getPersistedConfigs().copilot.env, {});
     });
 
     it('starts a fresh runtime after agent config changes', async () => {

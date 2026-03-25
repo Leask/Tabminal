@@ -26,6 +26,11 @@ const AGENT_CONFIG_ENV_KEYS = {
         'GOOGLE_CLOUD_PROJECT',
         'CLOUD_ML_REGION',
         'GOOGLE_APPLICATION_CREDENTIALS'
+    ],
+    copilot: [
+        'COPILOT_GITHUB_TOKEN',
+        'GH_TOKEN',
+        'GITHUB_TOKEN'
     ]
 };
 
@@ -74,16 +79,73 @@ function buildAgentConfigSummary(agentId, config = {}) {
                     env.GOOGLE_APPLICATION_CREDENTIALS
                 )
             };
+        case 'copilot':
+            return {
+                hasCopilotToken: hasConfiguredValue(
+                    env.COPILOT_GITHUB_TOKEN
+                        || env.GH_TOKEN
+                        || env.GITHUB_TOKEN
+                )
+            };
         default:
             return {};
     }
 }
 
+let ghCopilotCliInstalledCache = null;
+let ghAuthTokenCache = null;
+
+function hasGhCopilotCliInstalled() {
+    if (typeof ghCopilotCliInstalledCache === 'boolean') {
+        return ghCopilotCliInstalledCache;
+    }
+    if (!commandExists('gh')) {
+        ghCopilotCliInstalledCache = false;
+        return ghCopilotCliInstalledCache;
+    }
+    const result = spawnSync('gh', ['copilot', '--', '--version'], {
+        encoding: 'utf8'
+    });
+    ghCopilotCliInstalledCache = result.status === 0;
+    return ghCopilotCliInstalledCache;
+}
+
+function readGhAuthToken() {
+    if (typeof ghAuthTokenCache === 'string') {
+        return ghAuthTokenCache;
+    }
+    if (!commandExists('gh')) {
+        ghAuthTokenCache = '';
+        return ghAuthTokenCache;
+    }
+    const result = spawnSync('gh', ['auth', 'token'], {
+        encoding: 'utf8'
+    });
+    ghAuthTokenCache = result.status === 0
+        ? String(result.stdout || '').trim()
+        : '';
+    return ghAuthTokenCache;
+}
+
 function mergeDefinitionEnv(definition, agentConfig = {}) {
-    return {
+    const env = {
         ...process.env,
         ...normalizeConfiguredEnv(definition.id, agentConfig.env)
     };
+    if (definition.id === 'copilot') {
+        const hasToken = Boolean(
+            env.COPILOT_GITHUB_TOKEN
+            || env.GH_TOKEN
+            || env.GITHUB_TOKEN
+        );
+        if (!hasToken) {
+            const ghToken = readGhAuthToken();
+            if (ghToken) {
+                env.GH_TOKEN = ghToken;
+            }
+        }
+    }
+    return env;
 }
 
 function hasGhCopilotWrapper() {
@@ -198,9 +260,15 @@ function getDefinitionAvailability(definition, agentConfig = {}) {
                 reason: 'Install the gh-copilot extension first'
             };
         }
+        if (!hasGhCopilotCliInstalled()) {
+            return {
+                available: false,
+                reason: 'Run gh copilot once to install Copilot CLI'
+            };
+        }
         return {
-            available: false,
-            reason: 'Run gh copilot once to install Copilot CLI'
+            available: true,
+            reason: ''
         };
     }
 
@@ -234,6 +302,14 @@ function formatAgentStartupError(definition, error) {
         return 'GitHub Copilot CLI is not installed on this host yet. Run '
             + '`gh copilot` once to download it, or install a standalone '
             + '`copilot` binary and restart Tabminal.';
+    }
+    if (
+        definition?.id === 'copilot'
+        && /auth|login|token|unauthorized|forbidden/i.test(rawMessage)
+    ) {
+        return 'GitHub Copilot is not authenticated on this host. Reuse an '
+            + 'existing `copilot login`, rely on `gh auth login`, or save a '
+            + 'COPILOT_GITHUB_TOKEN in Tabminal setup before starting again.';
     }
     return rawMessage;
 }

@@ -37,6 +37,7 @@ const setupClaudeVertexProject = process.env.TABMINAL_SETUP_CLAUDE_VERTEX_PROJEC
 const setupClaudeRegion = process.env.TABMINAL_SETUP_CLAUDE_REGION || '';
 const setupClaudeCredentials =
     process.env.TABMINAL_SETUP_CLAUDE_CREDENTIALS || '';
+const setupCopilotToken = process.env.TABMINAL_SETUP_COPILOT_TOKEN || '';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -52,6 +53,7 @@ function hasSetupConfig() {
         || setupClaudeVertexProject
         || setupClaudeRegion
         || setupClaudeCredentials
+        || setupCopilotToken
     );
 }
 
@@ -65,6 +67,47 @@ async function getJson(url) {
         throw new Error(`${url} -> ${response.status}`);
     }
     return await response.json();
+}
+
+let apiTokenPromise = null;
+
+async function getApiToken() {
+    if (apiTokenPromise) {
+        return await apiTokenPromise;
+    }
+    apiTokenPromise = (async () => {
+        const response = await fetch(new URL('/api/login', tabminalUrl), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password: tabminalPassword })
+        });
+        if (!response.ok) {
+            throw new Error(`login failed with ${response.status}`);
+        }
+        const data = await response.json();
+        return data.token || '';
+    })();
+    return await apiTokenPromise;
+}
+
+async function createSessionViaNodeApi(label = 'create-session-via-node-api') {
+    try {
+        const token = await getApiToken();
+        const response = await fetch(new URL('/api/sessions', tabminalUrl), {
+            method: 'POST',
+            headers: {
+                authorization: token ? `Bearer ${token}` : '',
+                'content-type': 'application/json'
+            },
+            body: '{}'
+        });
+        const created = response.ok;
+        log(label, created ? 'ok' : `failed:${response.status}`);
+        return created;
+    } catch (error) {
+        log(label, `failed:${error.message}`);
+        return false;
+    }
 }
 
 class CdpClient {
@@ -215,10 +258,46 @@ async function main() {
             });
         }
 
+        async function createSessionViaPageApi(label = 'create-session-via-api') {
+            const created = await evaluate(
+                toExpression(`
+                    async () => {
+                        const token = localStorage.getItem(
+                            'tabminal_auth_token:main'
+                        ) || '';
+                        const response = await fetch('/api/sessions', {
+                            method: 'POST',
+                            headers: {
+                                authorization: token ? \`Bearer \${token}\` : '',
+                                'content-type': 'application/json'
+                            },
+                            body: '{}'
+                        });
+                        return response.ok;
+                    }
+                `)
+            );
+            log(label, created ? 'ok' : 'failed');
+            return created;
+        }
+
         async function ensureAuthedSession({
             authLabel = 'auth-or-session',
             sessionLabel = 'session-ready'
         } = {}) {
+            const hasVisibleSession = async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById('login-modal');
+                            return document.querySelectorAll('.tab-item').length > 0
+                                && modal
+                                && getComputedStyle(modal).display === 'none';
+                        }
+                    `)
+                );
+            };
+
             const authState = await waitFor(authLabel, async () => {
                 return await evaluate(
                     toExpression(`
@@ -265,18 +344,45 @@ async function main() {
                 log('reused-existing-auth');
             }
 
-            await waitFor(sessionLabel, async () => {
-                return await evaluate(
-                    toExpression(`
-                        () => {
-                            const modal = document.getElementById('login-modal');
-                            return document.querySelectorAll('.tab-item').length > 0
-                                && modal
-                                && modal.style.display === 'none';
-                        }
-                    `)
+            try {
+                await waitFor(sessionLabel, hasVisibleSession);
+            } catch (error) {
+                if (authState !== 'login') {
+                    throw error;
+                }
+                await createSessionViaPageApi(
+                    'retry-session-after-login-create-via-api'
                 );
-            });
+                await createSessionViaNodeApi(
+                    'retry-session-after-login-create-via-node-api'
+                );
+                try {
+                    await waitFor(
+                        `${sessionLabel}-after-api-create`,
+                        hasVisibleSession,
+                        10000,
+                        250
+                    );
+                    return;
+                } catch {
+                    // Fall through to a full target recreate.
+                }
+                log('retry-session-after-login-recreate-target');
+                await recreateTarget('login-retry-target');
+                await waitForDocumentReady(
+                    'document-ready-after-login-recreate-target'
+                );
+                await createSessionViaPageApi(
+                    'retry-session-after-login-create-via-api-post-recreate'
+                );
+                await createSessionViaNodeApi(
+                    'retry-session-after-login-create-via-node-api-post-recreate'
+                );
+                await waitFor(
+                    `${sessionLabel}-after-recreate-target`,
+                    hasVisibleSession
+                );
+            }
         }
 
         async function hasFinalMessage() {
@@ -500,6 +606,10 @@ async function main() {
                             'agent-setup-claude-credentials',
                             ${JSON.stringify(setupClaudeCredentials)}
                         );
+                        setValue(
+                            'agent-setup-copilot-token',
+                            ${JSON.stringify(setupCopilotToken)}
+                        );
                         document.getElementById('agent-setup-form')?.requestSubmit();
                         return true;
                     }
@@ -545,6 +655,55 @@ async function main() {
                         }
                     `),
                     20000,
+                    250
+                );
+            });
+        }
+
+        async function waitForAgentTabCreationOrSetup(
+            existingCount,
+            expectedLabel,
+            label = 'agent-tab-created'
+        ) {
+            return await waitFor(label, async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById(
+                                'agent-setup-modal'
+                            );
+                            const isSetupOpen = Boolean(
+                                modal
+                                && getComputedStyle(modal).display !== 'none'
+                            );
+                            if (isSetupOpen) {
+                                return 'setup';
+                            }
+                            const tabs = Array.from(
+                                document.querySelectorAll('.agent-editor-tab')
+                            );
+                            const active = tabs.find((tab) =>
+                                tab.classList.contains('active')
+                            );
+                            const count = tabs.filter((tab) =>
+                                (tab.textContent || '').includes(
+                                    ${JSON.stringify(targetAgentLabel)}
+                                )
+                            ).length;
+                            const hasExpectedActive = Boolean(active)
+                                && (
+                                    active.textContent || ''
+                                ).includes(${JSON.stringify(expectedLabel)});
+                            if (
+                                count >= ${JSON.stringify(existingCount + 1)}
+                                && hasExpectedActive
+                            ) {
+                                return 'created';
+                            }
+                            return '';
+                        }
+                    `),
+                    15000,
                     250
                 );
             });
@@ -779,32 +938,29 @@ async function main() {
     const expectedSecondAgentLabel = existingAgentTabCount === 0
         ? `${targetAgentLabel} #2`
         : `${targetAgentLabel} #${existingAgentTabCount + 2}`;
-    await waitFor('agent-tab-created', async () => {
-        return await evaluate(
-            toExpression(`
-                () => {
-                    const tabs = Array.from(
-                        document.querySelectorAll('.agent-editor-tab')
-                    );
-                    const active = tabs.find((tab) =>
-                        tab.classList.contains('active')
-                    );
-                    const count = tabs.filter((tab) =>
-                        (tab.textContent || '').includes(
-                            ${JSON.stringify(targetAgentLabel)}
-                        )
-                    ).length;
-                    return count >= ${
-                        existingAgentTabCount + 1
-                    } && Boolean(active) && (
-                        active.textContent || ''
-                    ).includes(${JSON.stringify(expectedAgentLabel)});
-                }
-            `),
-            15000,
-            250
+    const createOutcome = await waitForAgentTabCreationOrSetup(
+        existingAgentTabCount,
+        expectedAgentLabel
+    );
+    if (createOutcome === 'setup') {
+        if (!hasSetupConfig()) {
+            throw new Error('Agent creation fell back to setup without config');
+        }
+        await submitSetupModal();
+        log('submitted-runtime-agent-setup-before-tab');
+        const setupOutcome = await waitForSetupOutcome(existingAgentTabCount);
+        log('runtime-agent-setup-before-tab-outcome', setupOutcome);
+        if (setupOutcome !== 'created') {
+            throw new Error(
+                `Runtime setup did not create the initial agent tab (${setupOutcome})`
+            );
+        }
+        await waitForAgentTabCreationOrSetup(
+            existingAgentTabCount,
+            expectedAgentLabel,
+            'agent-tab-created-after-setup'
         );
-    });
+    }
 
     await waitFor('agent-panel', async () => {
         return await evaluate(
@@ -1113,10 +1269,67 @@ async function main() {
         }, 20000, 250);
     }
 
-    await waitFor('ready-hint-after-final', async () => {
+    const finalHint = await readComposerHint();
+    log('composer-hint-after-final', JSON.stringify(finalHint));
+
+    if (/needs approval/i.test(finalHint.pill)) {
+        await waitFor('late-permission-controls', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll(
+                        '.agent-permission-card .agent-permission-option'
+                    ).length > 0
+                `),
+                10000,
+                250
+            );
+        });
+
+        const latePermissionOptions = await evaluate(
+            toExpression(`
+                () => Array.from(document.querySelectorAll(
+                    '.agent-permission-card .agent-permission-option'
+                )).map((el) => el.textContent.trim())
+            `)
+        );
+        log(
+            'late-permission-options',
+            JSON.stringify(latePermissionOptions)
+        );
+
+        await evaluate(
+            toExpression(`
+                () => {
+                    const buttons = Array.from(document.querySelectorAll(
+                        '.agent-permission-card .agent-permission-option'
+                    ));
+                    const target = buttons.find((el) =>
+                        !/cancel/i.test(el.textContent || '')
+                    ) || buttons[0];
+                    target?.click();
+                    return Boolean(target);
+                }
+            `)
+        );
+        log('resolved-late-permission');
+    }
+
+    await waitFor('idle-after-final', async () => {
         const hint = await readComposerHint();
-        return /ready/i.test(hint.pill)
-            && /next turn/i.test(hint.summary);
+        const readyHint = /ready/i.test(hint.pill)
+            && /next turn|start a new task/i.test(hint.summary);
+        const sendState = await evaluate(
+            toExpression(`
+                () => {
+                    const button = Array.from(
+                        document.querySelectorAll('.agent-panel-button')
+                    ).find((el) => /send/i.test(el.textContent || ''));
+                    return Boolean(button)
+                        && !/stop/i.test(button.textContent || '');
+                }
+            `)
+        );
+        return readyHint || sendState;
     });
 
     if (expectCommandsAfterFinal) {

@@ -84,6 +84,9 @@ const agentSetupClaudeCredentials = document.getElementById(
 );
 const agentSetupClaudeNote = document.getElementById('agent-setup-claude-note');
 const agentSetupCopilot = document.getElementById('agent-setup-copilot');
+const agentSetupCopilotToken = document.getElementById(
+    'agent-setup-copilot-token'
+);
 const agentSetupCopilotNote = document.getElementById(
     'agent-setup-copilot-note'
 );
@@ -2250,6 +2253,7 @@ function openAgentSetupModal(definition, serverId, options = {}) {
     agentSetupClaudeProject.value = '';
     agentSetupClaudeRegion.value = '';
     agentSetupClaudeCredentials.value = '';
+    agentSetupCopilotToken.value = '';
 
     const config = definition.config || {};
 
@@ -2283,11 +2287,16 @@ function openAgentSetupModal(definition, serverId, options = {}) {
         updateClaudeSetupFields();
     } else if (definition.id === 'copilot') {
         agentSetupCopilot.hidden = false;
-        agentSetupCopilotNote.textContent =
-            'Install GitHub Copilot CLI on this host. The fastest path here is '
-            + '`gh copilot`, then relaunch the dropdown after the CLI is ready.';
-        agentSetupSave.hidden = true;
-        agentSetupReset.hidden = true;
+        agentSetupCopilotNote.textContent = [
+            describeConfiguredSecrets(
+                'Saved auth',
+                [config.hasCopilotToken ? 'COPILOT_GITHUB_TOKEN' : '']
+            ),
+            'Existing `copilot login` or `gh auth login` on this host will be '
+                + 'used automatically when available.',
+            'Paste a GitHub token only if you need an explicit headless auth '
+                + 'override for this host.'
+        ].filter(Boolean).join(' ');
     } else {
         agentSetupCopilot.hidden = false;
         agentSetupCopilotNote.textContent =
@@ -2344,6 +2353,10 @@ async function saveAgentSetupConfig() {
                 'CLOUD_ML_REGION',
                 'GOOGLE_APPLICATION_CREDENTIALS'
             );
+        }
+    } else if (agentId === 'copilot') {
+        if (agentSetupCopilotToken.value.trim()) {
+            env.COPILOT_GITHUB_TOKEN = agentSetupCopilotToken.value.trim();
         }
     }
 
@@ -2448,7 +2461,8 @@ function shouldOpenAgentSetupForError(definition, message = '') {
         );
     }
     if (definition.id === 'copilot') {
-        return /copilot|not installed/i.test(message);
+        return /copilot|not installed|auth|login|token|unauthorized|forbidden/i
+            .test(message);
     }
     return false;
 }
@@ -3650,10 +3664,13 @@ function getAgentComposerFeedback(agentTab) {
     ).find((permission) => permission.status === 'pending');
     if (pendingPermission) {
         const permissionTitle = getAgentPermissionTitle(pendingPermission);
+        const hasOptions = hasResolvablePermissionOptions(pendingPermission);
         return {
             statusClass: 'pending',
             statusLabel: 'Needs approval',
-            summary: `Choose an approval option for ${permissionTitle}.`,
+            summary: hasOptions
+                ? `Choose an approval option for ${permissionTitle}.`
+                : `Waiting for approval outside Tabminal for ${permissionTitle}.`,
             hotkey: 'Esc stops.'
         };
     }
@@ -4254,11 +4271,21 @@ function buildAgentPermissionMeta(permission) {
     return buildAgentToolMeta(permission?.toolCall || {});
 }
 
+function hasResolvablePermissionOptions(permission) {
+    return Array.isArray(permission?.options) && permission.options.length > 0;
+}
+
 function buildAgentPermissionSummary(permission) {
     const leading = [];
     const statusLabel = getAgentPermissionStatusLabel(permission);
     if (permission?.status === 'pending') {
-        leading.push('Approval is required to continue.');
+        if (hasResolvablePermissionOptions(permission)) {
+            leading.push('Approval is required to continue.');
+        } else {
+            leading.push(
+                'Approval is required outside Tabminal to continue.'
+            );
+        }
     } else if (statusLabel) {
         leading.push(
             `${statusLabel.charAt(0).toUpperCase()}${statusLabel.slice(1)}.`
@@ -4375,11 +4402,11 @@ function buildAgentSetupMessage(definition) {
             + 'this host.';
     }
     if (definition.id === 'copilot') {
-        return 'GitHub Copilot CLI needs local setup before ACP can run. '
-            + 'If you use GitHub CLI, install the gh-copilot extension and '
-            + 'run `gh copilot` once to download/setup the CLI. Otherwise, '
-            + 'expose a standalone `copilot` binary in PATH, then reopen '
-            + 'this dropdown.';
+        return 'GitHub Copilot can use a local `copilot login`, GitHub CLI '
+            + 'auth from `gh auth login`, or an explicit '
+            + 'COPILOT_GITHUB_TOKEN. If the CLI is not installed yet, run '
+            + '`gh copilot` once or expose a standalone `copilot` binary in '
+            + 'PATH, then reopen this dropdown.';
     }
     if (definition.reason === 'not installed') {
         return `Install or expose ${definition.setupCommandLabel || definition.commandLabel} on the current `
