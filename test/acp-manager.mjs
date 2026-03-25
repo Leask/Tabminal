@@ -27,6 +27,7 @@ class FakeRuntime extends EventEmitter {
         this.cancelled = [];
         this.permissions = [];
         this.modeChanges = [];
+        this.configChanges = [];
         this.disposed = false;
         this.idleScheduled = false;
         this.restoredTabs = [];
@@ -54,6 +55,31 @@ class FakeRuntime extends EventEmitter {
             ],
             availableCommands: [
                 { name: 'review', description: 'Review code' }
+            ],
+            configOptions: [
+                {
+                    id: 'model',
+                    name: 'Model',
+                    category: 'model',
+                    type: 'select',
+                    currentValue: 'gpt-5.4',
+                    options: [
+                        { value: 'gpt-5.4', name: 'GPT-5.4' },
+                        { value: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' }
+                    ]
+                },
+                {
+                    id: 'thought_level',
+                    name: 'Thought Level',
+                    category: 'thought_level',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' }
+                    ]
+                }
             ],
             messages: [],
             toolCalls: [],
@@ -93,6 +119,31 @@ class FakeRuntime extends EventEmitter {
             ],
             availableCommands: [
                 { name: 'review', description: 'Review code' }
+            ],
+            configOptions: [
+                {
+                    id: 'model',
+                    name: 'Model',
+                    category: 'model',
+                    type: 'select',
+                    currentValue: 'gpt-5.4',
+                    options: [
+                        { value: 'gpt-5.4', name: 'GPT-5.4' },
+                        { value: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' }
+                    ]
+                },
+                {
+                    id: 'thought_level',
+                    name: 'Thought Level',
+                    category: 'thought_level',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' }
+                    ]
+                }
             ],
             messages: [{
                 id: 'restored-message',
@@ -138,6 +189,19 @@ class FakeRuntime extends EventEmitter {
                 { id: 'review', name: 'Review' }
             ]
         };
+    }
+
+    async setConfigOption(tabId, configId, valueId) {
+        this.configChanges.push({ tabId, configId, valueId });
+        const tab = this.tabs.get(tabId);
+        if (tab) {
+            tab.configOptions = (tab.configOptions || []).map((option) => (
+                option.id === configId
+                    ? { ...option, currentValue: valueId }
+                    : option
+            ));
+        }
+        return this.serializeTab(this.tabs.get(tabId));
     }
 
     async closeTab(tabId) {
@@ -388,6 +452,26 @@ describe('AcpManager', () => {
         });
 
         assert.equal(tab.currentModeId, 'review');
+    });
+
+    it('updates session config options when requested', async () => {
+        const { manager } = createManager();
+        const tab = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+
+        const updated = await manager.setConfigOption(
+            tab.id,
+            'thought_level',
+            'high'
+        );
+
+        const thoughtLevel = updated.configOptions.find(
+            (option) => option.id === 'thought_level'
+        );
+        assert.equal(thoughtLevel?.currentValue, 'high');
     });
 
     it('reuses cached runtime commands and modes when a later tab omits them', async () => {

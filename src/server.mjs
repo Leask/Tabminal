@@ -493,6 +493,27 @@ router.post('/api/agents/tabs/:tabId/mode', async (ctx) => {
     }
 });
 
+router.post('/api/agents/tabs/:tabId/config', async (ctx) => {
+    const { tabId } = ctx.params;
+    const { configId, valueId } = ctx.request.body || {};
+    if (!configId || typeof configId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'configId is required' };
+        return;
+    }
+    if (!valueId || typeof valueId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'valueId is required' };
+        return;
+    }
+    try {
+        ctx.body = await acpManager.setConfigOption(tabId, configId, valueId);
+    } catch (error) {
+        ctx.status = 500;
+        ctx.body = { error: error?.message || 'Failed to update agent setting' };
+    }
+});
+
 router.delete('/api/agents/tabs/:tabId', async (ctx) => {
     const { tabId } = ctx.params;
     await acpManager.closeTab(tabId);

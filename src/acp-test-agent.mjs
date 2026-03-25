@@ -49,7 +49,9 @@ class TabminalTestAgent {
         const sessionId = crypto.randomUUID();
         this.sessions.set(sessionId, {
             controller: null,
-            modeId: 'default'
+            modeId: 'default',
+            modelId: 'gpt-5.4',
+            thoughtLevel: 'medium'
         });
         return {
             sessionId,
@@ -81,6 +83,31 @@ class TabminalTestAgent {
                     description: 'Explain a file or concept',
                     input: { hint: 'What should be explained?' }
                 }
+            ],
+            configOptions: [
+                {
+                    id: 'model',
+                    name: 'Model',
+                    category: 'model',
+                    type: 'select',
+                    currentValue: 'gpt-5.4',
+                    options: [
+                        { value: 'gpt-5.4', name: 'GPT-5.4' },
+                        { value: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' }
+                    ]
+                },
+                {
+                    id: 'thought_level',
+                    name: 'Thought Level',
+                    category: 'thought_level',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' }
+                    ]
+                }
             ]
         };
     }
@@ -101,6 +128,51 @@ class TabminalTestAgent {
         return {
             currentModeId: params.modeId
         };
+    }
+
+    async setSessionConfigOption(params) {
+        const session = this.sessions.get(params.sessionId);
+        if (!session) {
+            throw new Error('Session not found');
+        }
+        if (params.configId === 'model') {
+            session.modelId = params.value;
+        } else if (params.configId === 'thought_level') {
+            session.thoughtLevel = params.value;
+        }
+        const configOptions = [
+            {
+                id: 'model',
+                name: 'Model',
+                category: 'model',
+                type: 'select',
+                currentValue: session.modelId,
+                options: [
+                    { value: 'gpt-5.4', name: 'GPT-5.4' },
+                    { value: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' }
+                ]
+            },
+            {
+                id: 'thought_level',
+                name: 'Thought Level',
+                category: 'thought_level',
+                type: 'select',
+                currentValue: session.thoughtLevel,
+                options: [
+                    { value: 'low', name: 'Low' },
+                    { value: 'medium', name: 'Medium' },
+                    { value: 'high', name: 'High' }
+                ]
+            }
+        ];
+        await this.connection.sessionUpdate({
+            sessionId: params.sessionId,
+            update: {
+                sessionUpdate: 'config_option_update',
+                configOptions
+            }
+        });
+        return { configOptions };
     }
 
     async prompt(params) {

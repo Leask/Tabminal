@@ -595,6 +595,8 @@ class AcpRuntime extends EventEmitter {
         this.terminals = new Map();
         this.cachedAvailableModes = [];
         this.cachedAvailableCommands = [];
+        this.cachedConfigOptions = [];
+        this.cachedModelState = null;
     }
 
     #resolveAvailableModes(availableModes, existingModes = []) {
@@ -625,15 +627,78 @@ class AcpRuntime extends EventEmitter {
         return this.cachedAvailableCommands;
     }
 
+    #buildSyntheticModelConfigOption(modelState) {
+        const availableModels = Array.isArray(modelState?.availableModels)
+            ? modelState.availableModels
+            : [];
+        const currentModelId = typeof modelState?.currentModelId === 'string'
+            ? modelState.currentModelId
+            : '';
+        if (!currentModelId || availableModels.length === 0) {
+            return null;
+        }
+        return {
+            id: '__tabminal_model__',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: currentModelId,
+            options: availableModels.map((model) => ({
+                value: model?.modelId || model?.id || '',
+                name: model?.name || model?.modelId || model?.id || '',
+                description: model?.description || ''
+            })).filter((option) => option.value && option.name)
+        };
+    }
+
+    #resolveConfigOptions(
+        configOptions,
+        existingConfigOptions = [],
+        modelState = null
+    ) {
+        let nextOptions = Array.isArray(configOptions) && configOptions.length > 0
+            ? configOptions
+            : Array.isArray(existingConfigOptions)
+                && existingConfigOptions.length > 0
+                ? existingConfigOptions
+                : this.cachedConfigOptions;
+
+        if (modelState?.currentModelId && Array.isArray(modelState.availableModels)) {
+            this.cachedModelState = modelState;
+        }
+        const syntheticModel = this.#buildSyntheticModelConfigOption(
+            modelState || this.cachedModelState
+        );
+        if (syntheticModel) {
+            const hasModelOption = Array.isArray(nextOptions) && nextOptions.some(
+                (option) => option?.category === 'model'
+            );
+            if (!hasModelOption) {
+                nextOptions = [
+                    ...nextOptions.filter(
+                        (option) => option?.id !== syntheticModel.id
+                    ),
+                    syntheticModel
+                ];
+            }
+        }
+        if (Array.isArray(nextOptions) && nextOptions.length > 0) {
+            this.cachedConfigOptions = nextOptions;
+        }
+        return nextOptions;
+    }
+
     #buildTab({
         id,
         acpSessionId,
         terminalSessionId,
         cwd,
         createdAt,
+        title = '',
         currentModeId = '',
         availableModes = [],
-        availableCommands = []
+        availableCommands = [],
+        configOptions = []
     }) {
         return {
             id,
@@ -646,6 +711,7 @@ class AcpRuntime extends EventEmitter {
             cwd,
             acpSessionId,
             createdAt: createdAt || new Date().toISOString(),
+            title: typeof title === 'string' ? title : '',
             status: 'ready',
             busy: false,
             errorMessage: '',
@@ -658,6 +724,7 @@ class AcpRuntime extends EventEmitter {
             currentModeId,
             availableModes,
             availableCommands,
+            configOptions,
             clients: new Set(),
             messageCounter: 0,
             timelineCounter: 0
@@ -774,14 +841,21 @@ class AcpRuntime extends EventEmitter {
         const availableCommands = this.#resolveAvailableCommands(
             response.availableCommands
         );
+        const configOptions = this.#resolveConfigOptions(
+            response.configOptions,
+            [],
+            response.models
+        );
         const tab = this.#buildTab({
             id: meta.id,
             acpSessionId: response.sessionId,
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
+            title: response.title || '',
             currentModeId: response.modes?.currentModeId || '',
             availableModes,
-            availableCommands
+            availableCommands,
+            configOptions
         });
         if (meta.modeId && typeof this.connection.setSessionMode === 'function') {
             try {
@@ -823,7 +897,8 @@ class AcpRuntime extends EventEmitter {
             acpSessionId: meta.acpSessionId,
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
-            createdAt: meta.createdAt
+            createdAt: meta.createdAt,
+            title: meta.title || ''
         });
         tab.status = 'restoring';
         tab.busy = true;
@@ -843,6 +918,9 @@ class AcpRuntime extends EventEmitter {
                 tab.acpSessionId = restoredSessionId;
                 this.sessionToTabId.set(tab.acpSessionId, tab.id);
             }
+            if (typeof response?.title === 'string') {
+                tab.title = response.title;
+            }
             tab.currentModeId = response?.modes?.currentModeId || '';
             tab.availableModes = this.#resolveAvailableModes(
                 response?.modes?.availableModes,
@@ -851,6 +929,11 @@ class AcpRuntime extends EventEmitter {
             tab.availableCommands = this.#resolveAvailableCommands(
                 response?.availableCommands,
                 tab.availableCommands
+            );
+            tab.configOptions = this.#resolveConfigOptions(
+                response?.configOptions,
+                tab.configOptions,
+                response?.models
             );
             tab.status = 'ready';
             tab.busy = false;
@@ -872,6 +955,7 @@ class AcpRuntime extends EventEmitter {
             agentId: tab.agentId,
             agentLabel: tab.agentLabel,
             commandLabel: tab.commandLabel,
+            title: tab.title || '',
             terminalSessionId: tab.terminalSessionId,
             cwd: tab.cwd,
             createdAt: tab.createdAt,
@@ -881,6 +965,7 @@ class AcpRuntime extends EventEmitter {
             currentModeId: tab.currentModeId,
             availableModes: tab.availableModes,
             availableCommands: tab.availableCommands,
+            configOptions: tab.configOptions,
             messages: tab.messages,
             toolCalls: Array.from(tab.toolCalls.values()),
             permissions: Array.from(tab.permissions.values()).map((item) => ({
@@ -1056,9 +1141,11 @@ class AcpRuntime extends EventEmitter {
                         availableCommands: tab.availableCommands
                     },
                     tab: {
+                        title: tab.title,
                         currentModeId: tab.currentModeId,
                         availableModes: tab.availableModes,
-                        availableCommands: tab.availableCommands
+                        availableCommands: tab.availableCommands,
+                        configOptions: tab.configOptions
                     }
                 });
             }
@@ -1166,8 +1253,73 @@ class AcpRuntime extends EventEmitter {
                 currentModeId: tab.currentModeId
             },
             tab: {
+                title: tab.title,
                 currentModeId: tab.currentModeId,
-                availableModes: tab.availableModes
+                availableModes: tab.availableModes,
+                availableCommands: tab.availableCommands,
+                configOptions: tab.configOptions
+            }
+        });
+        return this.serializeTab(tab);
+    }
+
+    async setConfigOption(tabId, configId, valueId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        if (!configId || typeof configId !== 'string') {
+            throw new Error('Config ID is required');
+        }
+        if (!valueId || typeof valueId !== 'string') {
+            throw new Error('Config value is required');
+        }
+
+        if (
+            configId === '__tabminal_model__'
+            && typeof this.connection.unstable_setSessionModel === 'function'
+        ) {
+            await this.connection.unstable_setSessionModel({
+                sessionId: tab.acpSessionId,
+                modelId: valueId
+            });
+            tab.configOptions = this.#resolveConfigOptions(
+                tab.configOptions.map((option) => (
+                    option?.id === configId
+                        ? { ...option, currentValue: valueId }
+                        : option
+                )),
+                tab.configOptions
+            );
+        } else {
+            if (typeof this.connection.setSessionConfigOption !== 'function') {
+                throw new Error(
+                    'Agent does not support session configuration changes'
+                );
+            }
+            const response = await this.connection.setSessionConfigOption({
+                sessionId: tab.acpSessionId,
+                configId,
+                value: valueId
+            });
+            tab.configOptions = this.#resolveConfigOptions(
+                response?.configOptions,
+                tab.configOptions
+            );
+        }
+
+        this.#broadcast(tab, {
+            type: 'session_update',
+            update: {
+                sessionUpdate: 'config_option_update',
+                configOptions: tab.configOptions
+            },
+            tab: {
+                title: tab.title,
+                currentModeId: tab.currentModeId,
+                availableModes: tab.availableModes,
+                availableCommands: tab.availableCommands,
+                configOptions: tab.configOptions
             }
         });
         return this.serializeTab(tab);
@@ -1277,6 +1429,19 @@ class AcpRuntime extends EventEmitter {
                     tab.availableCommands
                 );
                 break;
+            case 'config_option_update':
+                tab.configOptions = this.#resolveConfigOptions(
+                    update.configOptions,
+                    tab.configOptions
+                );
+                break;
+            case 'session_info_update':
+                if (typeof update.title === 'string') {
+                    tab.title = update.title;
+                } else if (update.title === null) {
+                    tab.title = '';
+                }
+                break;
             default:
                 break;
         }
@@ -1285,9 +1450,11 @@ class AcpRuntime extends EventEmitter {
             type: 'session_update',
             update: broadcastUpdate,
             tab: {
+                title: tab.title,
                 currentModeId: tab.currentModeId,
                 availableModes: tab.availableModes,
-                availableCommands: tab.availableCommands
+                availableCommands: tab.availableCommands,
+                configOptions: tab.configOptions
             }
         });
     }
@@ -1426,6 +1593,8 @@ class AcpRuntime extends EventEmitter {
         const needsHydration = (
             !Array.isArray(tab.availableCommands)
             || tab.availableCommands.length === 0
+            || !Array.isArray(tab.configOptions)
+            || tab.configOptions.length === 0
         );
         if (
             !needsHydration
@@ -1447,6 +1616,9 @@ class AcpRuntime extends EventEmitter {
                 tab.acpSessionId = restoredSessionId;
                 this.sessionToTabId.set(tab.acpSessionId, tab.id);
             }
+            if (typeof response?.title === 'string') {
+                tab.title = response.title;
+            }
             if (response?.modes?.currentModeId) {
                 tab.currentModeId = response.modes.currentModeId;
             }
@@ -1457,6 +1629,11 @@ class AcpRuntime extends EventEmitter {
             tab.availableCommands = this.#resolveAvailableCommands(
                 response?.availableCommands,
                 tab.availableCommands
+            );
+            tab.configOptions = this.#resolveConfigOptions(
+                response?.configOptions,
+                tab.configOptions,
+                response?.models
             );
         } catch {
             // Ignore metadata hydration failures for fresh sessions.
@@ -1640,9 +1817,16 @@ export class AcpManager {
         let availableCommands = Array.isArray(serialized.availableCommands)
             ? serialized.availableCommands
             : [];
+        let configOptions = Array.isArray(serialized.configOptions)
+            ? serialized.configOptions
+            : [];
 
         if (
-            (availableModes.length > 0 && availableCommands.length > 0)
+            (
+                availableModes.length > 0
+                && availableCommands.length > 0
+                && configOptions.length > 0
+            )
             || !(runtime?.tabs instanceof Map)
         ) {
             return serialized;
@@ -1664,7 +1848,18 @@ export class AcpManager {
             ) {
                 availableCommands = runtimeTab.availableCommands;
             }
-            if (availableModes.length > 0 && availableCommands.length > 0) {
+            if (
+                configOptions.length === 0
+                && Array.isArray(runtimeTab.configOptions)
+                && runtimeTab.configOptions.length > 0
+            ) {
+                configOptions = runtimeTab.configOptions;
+            }
+            if (
+                availableModes.length > 0
+                && availableCommands.length > 0
+                && configOptions.length > 0
+            ) {
                 break;
             }
         }
@@ -1672,6 +1867,7 @@ export class AcpManager {
         if (
             availableModes === serialized.availableModes
             && availableCommands === serialized.availableCommands
+            && configOptions === serialized.configOptions
         ) {
             return serialized;
         }
@@ -1679,7 +1875,8 @@ export class AcpManager {
         return {
             ...serialized,
             availableModes,
-            availableCommands
+            availableCommands,
+            configOptions
         };
     }
 
@@ -1957,6 +2154,14 @@ export class AcpManager {
             throw new Error('Agent tab not found');
         }
         return await tabEntry.runtime.setMode(tabId, modeId);
+    }
+
+    async setConfigOption(tabId, configId, valueId) {
+        const tabEntry = this.tabs.get(tabId);
+        if (!tabEntry) {
+            throw new Error('Agent tab not found');
+        }
+        return await tabEntry.runtime.setConfigOption(tabId, configId, valueId);
     }
 
     async resolvePermission(tabId, permissionId, optionId) {

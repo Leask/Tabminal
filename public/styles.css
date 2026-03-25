@@ -1607,6 +1607,14 @@ kbd {
     line-height: 1.4;
 }
 
+.agent-panel-top-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    flex: 0 0 34px;
+}
+
 .agent-panel-header {
     display: flex;
     flex-direction: column;
@@ -1655,16 +1663,22 @@ kbd {
 .agent-panel-mode-select {
     min-width: 112px;
     max-width: 180px;
-    padding: 8px 12px;
+    padding: 8px 32px 8px 12px;
     border-radius: 8px;
     border: 1px solid var(--border-color);
     background-color: rgba(7, 54, 66, 0.45);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='12' height='12' stroke='%2393a1a1' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: calc(100% - 10px) center;
+    background-repeat: no-repeat;
+    background-size: 12px 12px;
     color: var(--text-highlight);
     cursor: pointer;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 11px;
     font-weight: 400;
     line-height: 1.45;
+    appearance: none;
+    -webkit-appearance: none;
 }
 
 .agent-panel-tools,
@@ -2340,6 +2354,18 @@ kbd {
     color: var(--text-muted);
 }
 
+.agent-activity-cancel {
+    width: 17px;
+    height: 17px;
+    min-width: 17px;
+    min-height: 17px;
+    padding: 0;
+    margin: 0;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    line-height: 1;
+}
+
 .agent-panel-activity.running {
     color: var(--text-base);
 }
@@ -2372,6 +2398,27 @@ kbd {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.agent-panel-queue {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 12px 4px;
+}
+
+.agent-queue-item {
+    position: relative;
+    border: 1px solid rgba(131, 148, 150, 0.22);
+    border-radius: 10px;
+    padding: 9px 44px 10px 11px;
+    background-color: rgba(7, 54, 66, 0.24);
+}
+
+.agent-queue-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
 }
 
 .agent-panel-hint-summary {

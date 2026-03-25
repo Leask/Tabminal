@@ -1057,7 +1057,19 @@ async function main() {
         toExpression(`
             () => ({
                 modeOptions: Array.from(
-                    document.querySelectorAll('.agent-panel-mode-select option')
+                    document.querySelectorAll(
+                        '.agent-panel-mode-select[data-selector-role="mode"] option'
+                    )
+                ).map((option) => option.textContent.trim()),
+                modelOptions: Array.from(
+                    document.querySelectorAll(
+                        '.agent-panel-mode-select[data-selector-role="model"] option'
+                    )
+                ).map((option) => option.textContent.trim()),
+                thoughtOptions: Array.from(
+                    document.querySelectorAll(
+                        '.agent-panel-mode-select[data-selector-role="thought_level"] option'
+                    )
                 ).map((option) => option.textContent.trim()),
                 commandChips: Array.from(
                     document.querySelectorAll('.agent-command-chip')
@@ -1147,7 +1159,9 @@ async function main() {
     const switchedMode = await evaluate(
         toExpression(`
             () => {
-                const select = document.querySelector('.agent-panel-mode-select');
+                const select = document.querySelector(
+                    '.agent-panel-mode-select[data-selector-role="mode"]'
+                );
                 if (!select || select.options.length < 2) return '';
                 const options = Array.from(select.options);
                 const requestedMode = ${JSON.stringify(targetMode)};
@@ -1198,6 +1212,47 @@ async function main() {
                 250
             );
         });
+    }
+
+    for (const [selectorRole, label] of [
+        ['model', 'model'],
+        ['thought_level', 'thought']
+    ]) {
+        const switchedConfig = await evaluate(
+            toExpression(`
+                () => {
+                    const select = document.querySelector(
+                        '.agent-panel-mode-select[data-selector-role="${selectorRole}"]'
+                    );
+                    if (!select || select.options.length < 2) return '';
+                    const options = Array.from(select.options);
+                    const next = options.find(
+                        (option) => option.value !== select.value
+                    );
+                    if (!next) return '';
+                    select.value = next.value;
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                    return next.textContent.trim();
+                }
+            `)
+        );
+        log(`switched-${label}`, switchedConfig || 'unchanged');
+        if (switchedConfig) {
+            await waitFor(`${label}-updated`, async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => Array.isArray(window.__fetchLog)
+                            && window.__fetchLog.some((entry) =>
+                                /\\/api\\/agents\\/tabs\\/[^/]+\\/config$/.test(
+                                    entry.url || ''
+                                )
+                            )
+                    `),
+                    15000,
+                    250
+                );
+            });
+        }
     }
 
     if (attachmentFiles.length > 0) {
@@ -1524,12 +1579,12 @@ async function main() {
         return await evaluate(
             toExpression(`
                 () => {
-                    const button = Array.from(
-                        document.querySelectorAll('.agent-panel-button')
-                    ).find((el) => /stop/i.test(el.textContent || ''));
+                    const button = document.querySelector(
+                        '.agent-activity-cancel'
+                    );
                     return Boolean(button)
                         && button.disabled === false
-                        && /stop/i.test(button.textContent || '');
+                        && getComputedStyle(button).display !== 'none';
                 }
             `),
             15000,
@@ -1540,9 +1595,9 @@ async function main() {
     await evaluate(
         toExpression(`
             () => {
-                const stopButton = Array.from(
-                    document.querySelectorAll('.agent-panel-button')
-                ).find((el) => /stop/i.test(el.textContent || ''));
+                const stopButton = document.querySelector(
+                    '.agent-activity-cancel'
+                );
                 stopButton?.click();
                 return true;
             }
@@ -1622,19 +1677,22 @@ async function main() {
             );
         }, 30000, 500);
 
-        await evaluate(
+        const createdSecondAgent = await evaluate(
             toExpression(`
                 () => {
-                    const button = Array.from(
-                        document.querySelectorAll('.agent-panel-button.secondary')
-                    ).find((el) => /new chat/i.test(el.textContent || ''));
+                    const button = document.querySelector(
+                        '.agent-panel-top-button'
+                    );
                     if (!button) return false;
                     button.click();
                     return true;
                 }
             `)
         );
-        log('created-second-agent');
+        log(
+            'created-second-agent',
+            createdSecondAgent ? 'clicked' : 'missing-button'
+        );
 
         await waitFor('second-agent-restored', async () => {
             return await evaluate(
