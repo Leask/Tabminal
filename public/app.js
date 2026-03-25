@@ -776,6 +776,21 @@ class EditorManager {
             }
 
             if (
+                agentTab
+                && Number.isInteger(agentTab.promptHistoryIndex)
+                && event.key !== 'ArrowUp'
+                && event.key !== 'ArrowDown'
+                && ![
+                    'Shift',
+                    'Control',
+                    'Alt',
+                    'Meta'
+                ].includes(event.key)
+            ) {
+                this.exitAgentPromptHistoryBrowsing(agentTab);
+            }
+
+            if (
                 event.ctrlKey
                 && !event.metaKey
                 && !event.altKey
@@ -2255,6 +2270,14 @@ class EditorManager {
             { suppressCommandMenu: true }
         );
         return true;
+    }
+
+    exitAgentPromptHistoryBrowsing(agentTab) {
+        if (!agentTab || !Number.isInteger(agentTab.promptHistoryIndex)) {
+            return;
+        }
+        agentTab.promptHistoryIndex = null;
+        agentTab.promptDraft = this.agentPrompt?.value || '';
     }
 
     applyAgentCommandSuggestion() {
