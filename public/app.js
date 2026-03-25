@@ -2292,10 +2292,10 @@ function openAgentSetupModal(definition, serverId, options = {}) {
                 'Saved auth',
                 [config.hasCopilotToken ? 'COPILOT_GITHUB_TOKEN' : '']
             ),
-            'Existing `copilot login` or `gh auth login` on this host will be '
-                + 'used automatically when available.',
-            'Paste a GitHub token only if you need an explicit headless auth '
-                + 'override for this host.'
+            'Existing `copilot login` or `gh auth login` on this host may be '
+                + 'reused when this backend can see them.',
+            'For headless use, `COPILOT_GITHUB_TOKEN` is the most reliable '
+                + 'auth path.'
         ].filter(Boolean).join(' ');
     } else {
         agentSetupCopilot.hidden = false;
@@ -4402,11 +4402,12 @@ function buildAgentSetupMessage(definition) {
             + 'this host.';
     }
     if (definition.id === 'copilot') {
-        return 'GitHub Copilot can use a local `copilot login`, GitHub CLI '
-            + 'auth from `gh auth login`, or an explicit '
-            + 'COPILOT_GITHUB_TOKEN. If the CLI is not installed yet, run '
-            + '`gh copilot` once or expose a standalone `copilot` binary in '
-            + 'PATH, then reopen this dropdown.';
+        return 'GitHub Copilot can sometimes reuse a local `copilot login` '
+            + 'or GitHub CLI auth from `gh auth login`, but '
+            + '`COPILOT_GITHUB_TOKEN` is the reliable headless path. If the '
+            + 'CLI is not installed yet, run `gh copilot` once or expose a '
+            + 'standalone `copilot` binary in PATH, then reopen this '
+            + 'dropdown.';
     }
     if (definition.reason === 'not installed') {
         return `Install or expose ${definition.setupCommandLabel || definition.commandLabel} on the current `

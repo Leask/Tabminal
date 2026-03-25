@@ -307,9 +307,10 @@ function formatAgentStartupError(definition, error) {
         definition?.id === 'copilot'
         && /auth|login|token|unauthorized|forbidden/i.test(rawMessage)
     ) {
-        return 'GitHub Copilot is not authenticated on this host. Reuse an '
-            + 'existing `copilot login`, rely on `gh auth login`, or save a '
-            + 'COPILOT_GITHUB_TOKEN in Tabminal setup before starting again.';
+        return 'GitHub Copilot is not authenticated on this host. If this '
+            + 'backend can already see a `copilot login` or `gh auth` token '
+            + 'it may reuse them, but `COPILOT_GITHUB_TOKEN` is the reliable '
+            + 'headless fix in Tabminal setup.';
     }
     return rawMessage;
 }
