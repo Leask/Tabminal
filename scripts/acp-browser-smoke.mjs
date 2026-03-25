@@ -486,11 +486,11 @@ async function main() {
                     ).split('\\n');
                     const summary = placeholderLines[0]?.trim() || '';
                     const metaLine = placeholderLines[1]
-                        ?.replace(/^\\/\\/\\s*/, '')
+                        ?.replace(/^(?:#|\\/\\/)\\s*/, '')
                         .trim() || '';
                     const pill = metaLine.split('·').pop()?.trim() || '';
                     const hotkey = placeholderLines[2]
-                        ?.replace(/^\\/\\/\\s*/, '')
+                        ?.replace(/^(?:#|\\/\\/)\\s*/, '')
                         .trim() || '';
                     const activity = document.querySelector(
                         '.agent-panel-activity'
@@ -589,10 +589,10 @@ async function main() {
                 const hint = await readComposerHint();
                 const activeState = /starting|running|responding/i.test(hint.pill)
                     || /needs approval/i.test(hint.pill);
-                const activeSummary = /working|waiting on|waiting for|drafting|summarizing|choose an approval option/i
-                    .test(hint.summary);
+                const activeActivity = /thinking|running|starting|waiting for approval|restoring/i
+                    .test(hint.activity);
                 return activeState
-                    && activeSummary
+                    && (activeActivity || hint.visible)
                     && /Esc stops/i.test(hint.hotkey);
             }, 30000, 250);
         }
@@ -1181,11 +1181,11 @@ async function main() {
         const hint = await readComposerHint();
         const activeState = /starting|running|responding/i.test(hint.pill)
             || /needs approval/i.test(hint.pill);
-        const activeSummary = /working|waiting on|waiting for|drafting|summarizing|choose an approval option/i
-            .test(hint.summary);
+        const activeActivity = /thinking|running|starting|waiting for approval|restoring/i
+            .test(hint.activity);
         if (
             activeState
-            && activeSummary
+            && (activeActivity || hint.visible)
             && /Esc stops/i.test(hint.hotkey)
         ) {
             return 'active';
@@ -1222,7 +1222,7 @@ async function main() {
         await waitFor('permission-hint', async () => {
             const hint = await readComposerHint();
             return /needs approval/i.test(hint.pill)
-                && /waiting on|choose an approval option/i.test(hint.summary);
+                && /waiting for approval/i.test(hint.activity || '');
         });
 
         await waitFor('permission-sections-expanded', async () => {

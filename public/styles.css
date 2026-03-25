@@ -2065,7 +2065,7 @@ kbd {
     background-color: rgba(7, 54, 66, 0.45);
     color: var(--text-highlight);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 400;
     line-height: 1.45;
 }
@@ -2162,6 +2162,10 @@ kbd {
     color: var(--text-base);
 }
 
+.agent-panel-activity.tool {
+    color: var(--accent-color);
+}
+
 .agent-panel-activity.pending {
     color: var(--warning-color);
 }
@@ -2218,12 +2222,18 @@ kbd {
     cursor: help;
 }
 
+.agent-dropdown-entry {
+    position: relative;
+}
+
 .agent-dropdown-item {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
     text-align: left;
+    width: 100%;
+    padding-right: 38px;
 }
 
 .agent-dropdown-label {
@@ -2234,6 +2244,36 @@ kbd {
 .agent-dropdown-meta {
     font-size: 10px;
     color: var(--text-muted);
+}
+
+.agent-dropdown-info {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 22px;
+    height: 22px;
+    border: 1px solid rgba(131, 148, 150, 0.28);
+    background: rgba(7, 54, 66, 0.82);
+    color: var(--text-muted);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 11px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent-dropdown-info span {
+    transform: translateY(-0.5px);
+}
+
+.agent-dropdown-info:hover {
+    color: var(--text-highlight);
+    border-color: rgba(38, 139, 210, 0.42);
+    background-color: rgba(38, 139, 210, 0.18);
 }
 
 .agent-dropdown-empty {

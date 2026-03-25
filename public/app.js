@@ -99,11 +99,12 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
+const RECENT_AGENT_USAGE_STORAGE_KEY = 'tabminal_recent_agent_usage';
 const FILE_WORKSPACE_TAB_PREFIX = 'file:';
 const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
 const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
+const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
 const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5a2 2 0 1 1 4 0"></path><path d="M5 16a7 7 0 1 0 14 0"></path><path d="M4 16h16"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg>';
 const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
@@ -2203,6 +2204,56 @@ function updateAgentDefinitions(serverId, definitions) {
     );
 }
 
+function loadRecentAgentUsage() {
+    try {
+        const raw = localStorage.getItem(RECENT_AGENT_USAGE_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveRecentAgentUsage(value) {
+    try {
+        localStorage.setItem(
+            RECENT_AGENT_USAGE_STORAGE_KEY,
+            JSON.stringify(value)
+        );
+    } catch {
+        // Ignore storage failures.
+    }
+}
+
+function markAgentDefinitionUsed(agentId) {
+    if (!agentId) return;
+    const usage = loadRecentAgentUsage();
+    usage[agentId] = Date.now();
+    saveRecentAgentUsage(usage);
+}
+
+function sortAgentDefinitions(definitions) {
+    const usage = loadRecentAgentUsage();
+    return [...definitions].sort((left, right) => {
+        const leftAvailable = left.available !== false ? 0 : 1;
+        const rightAvailable = right.available !== false ? 0 : 1;
+        if (leftAvailable !== rightAvailable) {
+            return leftAvailable - rightAvailable;
+        }
+
+        const leftRecent = Number(usage[left.id] || 0);
+        const rightRecent = Number(usage[right.id] || 0);
+        if (leftRecent !== rightRecent) {
+            return rightRecent - leftRecent;
+        }
+
+        return String(left.label || '').localeCompare(
+            String(right.label || '')
+        );
+    });
+}
+
 function getAgentDefinition(serverId, agentId) {
     return getAgentDefinitionsForServer(serverId).find(
         (definition) => definition.id === agentId
@@ -2498,10 +2549,15 @@ function shouldOpenAgentSetupForError(definition, message = '') {
 
 function openAgentDropdown(session, anchor) {
     if (!session || !anchor) return;
-    const definitions = getAgentDefinitionsForServer(session.serverId);
+    const definitions = sortAgentDefinitions(
+        getAgentDefinitionsForServer(session.serverId)
+    );
     agentDropdownEl.innerHTML = '';
 
     for (const definition of definitions) {
+        const entry = document.createElement('div');
+        entry.className = 'agent-dropdown-entry';
+
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'agent-dropdown-item';
@@ -2521,6 +2577,7 @@ function openAgentDropdown(session, anchor) {
         button.appendChild(meta);
         button.onclick = async (event) => {
             event.stopPropagation();
+            markAgentDefinitionUsed(definition.id);
             if (definition.available === false) {
                 closeAgentDropdown();
                 openAgentSetupModal(definition, session.serverId, {
@@ -2556,7 +2613,30 @@ function openAgentDropdown(session, anchor) {
                 button.disabled = definition.available === false;
             }
         };
-        agentDropdownEl.appendChild(button);
+        entry.appendChild(button);
+
+        if (definition.websiteUrl) {
+            const infoButton = document.createElement('button');
+            infoButton.type = 'button';
+            infoButton.className = 'agent-dropdown-info';
+            infoButton.title = `Open ${definition.label}`;
+            infoButton.setAttribute(
+                'aria-label',
+                `Open ${definition.label} website`
+            );
+            infoButton.innerHTML = '<span aria-hidden="true">i</span>';
+            infoButton.onclick = (event) => {
+                event.stopPropagation();
+                window.open(
+                    definition.websiteUrl,
+                    '_blank',
+                    'noopener,noreferrer'
+                );
+            };
+            entry.appendChild(infoButton);
+        }
+
+        agentDropdownEl.appendChild(entry);
     }
 
     if (definitions.length === 0) {
@@ -2564,11 +2644,6 @@ function openAgentDropdown(session, anchor) {
         empty.className = 'agent-dropdown-empty';
         empty.textContent = 'No agents available';
         agentDropdownEl.appendChild(empty);
-    } else if (definitions.some((definition) => definition.available === false)) {
-        const note = document.createElement('div');
-        note.className = 'agent-dropdown-empty';
-        note.textContent = 'Agents run on the current host. Install or configure them there.';
-        agentDropdownEl.appendChild(note);
     }
 
     const rect = anchor.getBoundingClientRect();
@@ -4113,9 +4188,13 @@ function getAgentActivityState(agentTab) {
         }
     );
     if (activeTool) {
+        const toolStatusClass = normalizeStatusClass(activeTool.status);
+        const toolTitle = getAgentToolTitle(activeTool);
         return {
-            stateClass: 'running',
-            label: `Thinking… ${getAgentToolTitle(activeTool)}`,
+            stateClass: 'tool',
+            label: toolStatusClass === 'pending'
+                ? `Starting ${toolTitle}…`
+                : `Running ${toolTitle}…`,
             iconSvg: SPINNER_ICON_SVG,
             spinning: true
         };
@@ -4743,33 +4822,26 @@ function buildAgentDefinitionMeta(definition) {
     if (definition.available === false) {
         if (definition.id === 'gemini'
             && definition.reason === 'API key missing') {
-            return 'Set GEMINI_API_KEY or GOOGLE_API_KEY on this host';
+            return 'Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` on this host';
         }
         if (
             definition.id === 'copilot'
             && /gh copilot/i.test(definition.reason || '')
         ) {
-            return 'Run gh copilot once on this host to install Copilot CLI';
+            return 'Run `gh copilot` once on this host to install Copilot CLI';
         }
         if (
             definition.id === 'copilot'
             && /gh-copilot/i.test(definition.reason || '')
         ) {
-            return 'Install the gh-copilot extension, then run gh copilot';
+            return 'Install the `gh-copilot` extension, then run `gh copilot`';
         }
         if (definition.reason === 'not installed') {
-            return `Install or expose: ${definition.setupCommandLabel || definition.commandLabel}`;
+            return `Install or expose \`${definition.setupCommandLabel || definition.commandLabel}\``;
         }
         return definition.reason || 'Unavailable';
     }
-    if (definition.id === 'codex') {
-        return 'Codex ACP adapter · requires codex login on this host';
-    }
-    if (definition.id === 'claude') {
-        return 'Claude Code ACP adapter · supports Claude login, '
-            + 'ANTHROPIC_API_KEY, or Vertex auth on this host';
-    }
-    return definition.description || definition.commandLabel || '';
+    return 'I am ready to assist you :)';
 }
 
 function buildAgentSetupMessage(definition) {

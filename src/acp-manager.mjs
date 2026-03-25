@@ -175,6 +175,7 @@ function makeBuiltInDefinitions() {
             id: 'gemini',
             label: 'Gemini CLI',
             description: 'Google Gemini CLI over ACP',
+            websiteUrl: 'https://github.com/google-gemini/gemini-cli',
             command: hasGeminiBinary ? 'gemini' : NPX_COMMAND,
             args: hasGeminiBinary
                 ? ['--acp']
@@ -187,6 +188,7 @@ function makeBuiltInDefinitions() {
             id: 'codex',
             label: 'Codex CLI',
             description: 'Codex ACP adapter',
+            websiteUrl: 'https://openai.com/codex/',
             command: NPX_COMMAND,
             args: ['@zed-industries/codex-acp@latest'],
             commandLabel: 'npx @zed-industries/codex-acp@latest'
@@ -195,6 +197,7 @@ function makeBuiltInDefinitions() {
             id: 'claude',
             label: 'Claude Agent',
             description: 'Claude Code ACP adapter',
+            websiteUrl: 'https://www.anthropic.com/claude-code',
             command: NPX_COMMAND,
             args: ['@zed-industries/claude-code-acp@latest'],
             commandLabel: 'npx @zed-industries/claude-code-acp@latest'
@@ -203,6 +206,7 @@ function makeBuiltInDefinitions() {
             id: 'copilot',
             label: 'GitHub Copilot',
             description: 'GitHub Copilot CLI ACP server',
+            websiteUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli',
             command: hasCopilotBinary ? 'copilot' : 'gh',
             args: hasCopilotBinary
                 ? ['--acp', '--stdio']
@@ -1557,6 +1561,7 @@ export class AcpManager {
                 id: definition.id,
                 label: definition.label,
                 description: definition.description,
+                websiteUrl: definition.websiteUrl || '',
                 commandLabel: definition.commandLabel,
                 setupCommandLabel: definition.setupCommandLabel || '',
                 available: availability.available,
