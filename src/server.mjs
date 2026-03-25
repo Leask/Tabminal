@@ -282,6 +282,48 @@ router.get('/api/agents', async (ctx) => {
     ctx.body = await acpManager.listState();
 });
 
+router.get('/api/agents/config', async (ctx) => {
+    ctx.body = {
+        configs: await acpManager.listAgentConfigs()
+    };
+});
+
+router.put('/api/agents/config/:agentId', async (ctx) => {
+    const { agentId } = ctx.params;
+    const { env, clearEnvKeys } = ctx.request.body || {};
+    try {
+        const configState = await acpManager.updateAgentConfig(agentId, {
+            env: typeof env === 'object' && env ? env : {},
+            clearEnvKeys: Array.isArray(clearEnvKeys) ? clearEnvKeys : []
+        });
+        ctx.body = {
+            config: configState,
+            definitions: await acpManager.listDefinitions()
+        };
+    } catch (error) {
+        ctx.status = 400;
+        ctx.body = {
+            error: error?.message || 'Failed to save agent config'
+        };
+    }
+});
+
+router.delete('/api/agents/config/:agentId', async (ctx) => {
+    const { agentId } = ctx.params;
+    try {
+        const configState = await acpManager.clearAgentConfig(agentId);
+        ctx.body = {
+            config: configState,
+            definitions: await acpManager.listDefinitions()
+        };
+    } catch (error) {
+        ctx.status = 400;
+        ctx.body = {
+            error: error?.message || 'Failed to clear agent config'
+        };
+    }
+});
+
 router.post('/api/agents/tabs', async (ctx) => {
     const { agentId, cwd, terminalSessionId, modeId } = ctx.request.body || {};
     if (!agentId || typeof agentId !== 'string') {

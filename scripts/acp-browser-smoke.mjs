@@ -7,7 +7,8 @@ const tabminalUrl = process.env.TABMINAL_URL
 const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
 const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
-    || 'Inspect this project briefly and request permission to edit a sample file.';
+    || `Read ${process.cwd()}/package.json and ${process.cwd()}/README.md, `
+        + 'then summarize this project briefly.';
 const finalMessageMode = process.env.TABMINAL_FINAL_MESSAGE_MODE || 'pattern';
 const finalMessagePattern = process.env.TABMINAL_FINAL_MESSAGE_PATTERN
     || 'all set';
@@ -17,7 +18,8 @@ const expectTool = process.env.TABMINAL_EXPECT_TOOL === '1';
 const expectCommandsAfterFinal = process.env.TABMINAL_EXPECT_COMMANDS_AFTER_FINAL
     === '1';
 const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
-    !== '0';
+    ? process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS !== '0'
+    : /codex/i.test(targetAgentLabel);
 const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
@@ -25,10 +27,32 @@ const expectToolCount = Math.max(
     Number.parseInt(process.env.TABMINAL_EXPECT_TOOL_COUNT || '0', 10) || 0
 );
 const skipRestoreTail = process.env.TABMINAL_SKIP_RESTORE_TAIL === '1';
+const setupGeminiApiKey = process.env.TABMINAL_SETUP_GEMINI_API_KEY || '';
+const setupGoogleApiKey = process.env.TABMINAL_SETUP_GOOGLE_API_KEY || '';
+const setupClaudeApiKey = process.env.TABMINAL_SETUP_CLAUDE_API_KEY || '';
+const setupClaudeUseVertex = process.env.TABMINAL_SETUP_CLAUDE_USE_VERTEX
+    === '1';
+const setupClaudeVertexProject = process.env.TABMINAL_SETUP_CLAUDE_VERTEX_PROJECT
+    || '';
+const setupClaudeRegion = process.env.TABMINAL_SETUP_CLAUDE_REGION || '';
+const setupClaudeCredentials =
+    process.env.TABMINAL_SETUP_CLAUDE_CREDENTIALS || '';
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
     console.log(`[ACP Browser Smoke] ${step}${suffix}`);
+}
+
+function hasSetupConfig() {
+    return Boolean(
+        setupGeminiApiKey
+        || setupGoogleApiKey
+        || setupClaudeApiKey
+        || setupClaudeUseVertex
+        || setupClaudeVertexProject
+        || setupClaudeRegion
+        || setupClaudeCredentials
+    );
 }
 
 function delay(ms) {
@@ -265,12 +289,28 @@ async function main() {
                     const idle = !Array.from(
                         document.querySelectorAll('.agent-panel-button')
                     ).some((el) => /stop/i.test(el.textContent || ''));
+                    const assistantBodies = Array.from(
+                        document.querySelectorAll(
+                            '.agent-message.assistant .agent-message-body'
+                        )
+                    ).map((el) => el.textContent);
+                    const hasAssistantContent = assistantBodies.some((text) =>
+                        (text || '').trim().length > 0
+                    );
+                    const hasToolCall = document.querySelectorAll(
+                        '.agent-tool-call'
+                    ).length > 0;
                     if (${
                         JSON.stringify(finalMessageMode)
                     } === 'idle') {
                         return idle && bodies.some((text) =>
                             (text || '').trim().length > 0
                         );
+                    }
+                    if (${
+                        JSON.stringify(finalMessageMode)
+                    } === 'state') {
+                        return idle && (hasAssistantContent || hasToolCall);
                     }
                     const matcher = new RegExp(
                         ${JSON.stringify(finalMessagePattern)},
@@ -288,6 +328,20 @@ async function main() {
                 () => document.querySelectorAll(
                     '.agent-permission-card .agent-permission-option'
                 ).length > 0
+                `)
+            );
+        }
+
+        async function hasSetupAction() {
+            return await evaluate(
+                toExpression(`
+                () => Array.from(
+                    document.querySelectorAll('.agent-panel-button')
+                ).some((el) => {
+                    const text = (el.textContent || '').trim();
+                    return /setup/i.test(text)
+                        && getComputedStyle(el).display !== 'none';
+                })
                 `)
             );
         }
@@ -319,6 +373,181 @@ async function main() {
                 }
                 `)
             );
+        }
+
+        async function waitForPromptOutcome(
+            label = 'permission-final-or-setup',
+            timeoutMs = 45000
+        ) {
+            return await waitFor(label, async () => {
+                if (await hasPermissionRequest()) {
+                    return 'permission';
+                }
+                if (await hasFinalMessage()) {
+                    return 'final';
+                }
+                if (hasSetupConfig() && await hasSetupAction()) {
+                    return 'setup';
+                }
+                return '';
+            }, timeoutMs, 250);
+        }
+
+        async function handleRuntimeSetup() {
+            const currentAgentTabCount = await evaluate(
+                toExpression(`
+                    () => Array.from(
+                        document.querySelectorAll('.agent-editor-tab')
+                    ).filter((tab) => (tab.textContent || '').includes(
+                        ${JSON.stringify(targetAgentLabel)}
+                    )).length
+                `)
+            );
+            await evaluate(
+                toExpression(`
+                    () => {
+                        const button = Array.from(
+                            document.querySelectorAll('.agent-panel-button')
+                        ).find((el) => /setup/i.test(el.textContent || ''));
+                        button?.click();
+                        return true;
+                    }
+                `)
+            );
+            log('opened-runtime-agent-setup');
+
+            await waitFor('agent-setup-modal', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById(
+                                'agent-setup-modal'
+                            );
+                            return Boolean(
+                                modal
+                                && getComputedStyle(modal).display !== 'none'
+                            );
+                        }
+                    `)
+                );
+            });
+
+            await submitSetupModal();
+            log('submitted-runtime-agent-setup');
+
+            const setupOutcome = await waitForSetupOutcome(currentAgentTabCount);
+            log('runtime-agent-setup-outcome', setupOutcome);
+            if (setupOutcome !== 'created') {
+                throw new Error(
+                    `Runtime setup did not create a retry tab (${setupOutcome})`
+                );
+            }
+
+            await waitFor('active-hint-after-setup', async () => {
+                const hint = await readComposerHint();
+                const activeState = /starting|running|responding/i.test(hint.pill)
+                    || /needs approval/i.test(hint.pill);
+                const activeSummary = /working|waiting on|waiting for|drafting|summarizing|choose an approval option/i
+                    .test(hint.summary);
+                return activeState
+                    && activeSummary
+                    && /Esc stops/i.test(hint.hotkey);
+            }, 30000, 250);
+        }
+
+        async function submitSetupModal() {
+            await evaluate(
+                toExpression(`
+                    () => {
+                        const setValue = (id, value) => {
+                            const input = document.getElementById(id);
+                            if (!input) return;
+                            input.value = value;
+                            input.dispatchEvent(new Event('input', {
+                                bubbles: true
+                            }));
+                        };
+                        setValue(
+                            'agent-setup-gemini-key',
+                            ${JSON.stringify(setupGeminiApiKey)}
+                        );
+                        setValue(
+                            'agent-setup-google-key',
+                            ${JSON.stringify(setupGoogleApiKey)}
+                        );
+                        setValue(
+                            'agent-setup-claude-key',
+                            ${JSON.stringify(setupClaudeApiKey)}
+                        );
+                        const useVertex = document.getElementById(
+                            'agent-setup-claude-use-vertex'
+                        );
+                        if (useVertex) {
+                            useVertex.checked = ${JSON.stringify(setupClaudeUseVertex)};
+                            useVertex.dispatchEvent(new Event('change', {
+                                bubbles: true
+                            }));
+                        }
+                        setValue(
+                            'agent-setup-claude-project',
+                            ${JSON.stringify(setupClaudeVertexProject)}
+                        );
+                        setValue(
+                            'agent-setup-claude-region',
+                            ${JSON.stringify(setupClaudeRegion)}
+                        );
+                        setValue(
+                            'agent-setup-claude-credentials',
+                            ${JSON.stringify(setupClaudeCredentials)}
+                        );
+                        document.getElementById('agent-setup-form')?.requestSubmit();
+                        return true;
+                    }
+                `)
+            );
+        }
+
+        async function waitForSetupOutcome(existingCount) {
+            return await waitFor('agent-setup-outcome', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const modal = document.getElementById(
+                                'agent-setup-modal'
+                            );
+                            const isOpen = Boolean(
+                                modal
+                                && getComputedStyle(modal).display !== 'none'
+                            );
+                            const feedback = document.getElementById(
+                                'agent-setup-feedback'
+                            );
+                            const count = Array.from(
+                                document.querySelectorAll('.agent-editor-tab')
+                            ).filter((tab) => (tab.textContent || '').includes(
+                                ${JSON.stringify(targetAgentLabel)}
+                            )).length;
+                            if (count > ${JSON.stringify(existingCount)}) {
+                                return 'created';
+                            }
+                            if (
+                                isOpen
+                                && feedback
+                                && !feedback.hidden
+                                && /saved/i.test(feedback.textContent || '')
+                            ) {
+                                return 'saved';
+                            }
+                            if (!isOpen) {
+                                return 'closed';
+                            }
+                            return '';
+                        }
+                    `),
+                    20000,
+                    250
+                );
+            });
         }
 
         await evaluate(
@@ -416,7 +645,8 @@ async function main() {
                 document.querySelectorAll('.agent-dropdown-item')
             ).map((el) => ({
                 text: el.textContent.trim(),
-                disabled: el.disabled
+                disabled: el.disabled,
+                unavailable: el.classList.contains('unavailable')
             }))
         `)
     );
@@ -432,7 +662,7 @@ async function main() {
         `)
     );
 
-    const picked = await evaluate(
+    const targetInitiallyUnavailable = await evaluate(
         toExpression(`
             () => {
                 const items = Array.from(
@@ -442,16 +672,104 @@ async function main() {
                     el.textContent.includes(
                         ${JSON.stringify(targetAgentLabel)}
                     )
-                ) || items.find((el) => !el.disabled);
-                if (!target) return '';
-                const text = target.textContent.trim();
-                target.click();
-                return text;
+                );
+                return Boolean(
+                    target && target.classList.contains('unavailable')
+                );
             }
         `)
     );
-    if (!picked) {
-        throw new Error('No selectable ACP agent was found in the dropdown');
+
+    let picked = '';
+    let agentTabCreatedFromSetup = false;
+
+    if (targetInitiallyUnavailable && hasSetupConfig()) {
+        await evaluate(
+            toExpression(`
+                () => {
+                    const items = Array.from(
+                        document.querySelectorAll('.agent-dropdown-item')
+                    );
+                    const target = items.find((el) =>
+                        el.textContent.includes(
+                            ${JSON.stringify(targetAgentLabel)}
+                        )
+                    );
+                    target?.click();
+                    return true;
+                }
+            `)
+        );
+        log('opened-agent-setup');
+
+        await waitFor('agent-setup-modal', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const modal = document.getElementById(
+                            'agent-setup-modal'
+                        );
+                        return Boolean(
+                            modal
+                            && getComputedStyle(modal).display !== 'none'
+                        );
+                    }
+                `)
+            );
+        });
+
+        await submitSetupModal();
+        log('submitted-agent-setup');
+
+        const setupOutcome = await waitForSetupOutcome(existingAgentTabCount);
+        log('agent-setup-outcome', setupOutcome);
+        if (setupOutcome === 'created') {
+            agentTabCreatedFromSetup = true;
+            picked = targetAgentLabel;
+        } else {
+            await evaluate(
+                toExpression(`
+                    () => {
+                        document.getElementById('agent-setup-cancel')?.click();
+                        document.querySelector('.toggle-agent-btn')?.click();
+                        return true;
+                    }
+                `)
+            );
+            log('reopened-agent-dropdown-after-setup');
+
+            await waitFor('agent-dropdown-refreshed', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll('.agent-dropdown-item').length > 0
+                    `)
+                );
+            });
+        }
+    }
+
+    if (!agentTabCreatedFromSetup) {
+        picked = await evaluate(
+            toExpression(`
+                () => {
+                    const items = Array.from(
+                        document.querySelectorAll('.agent-dropdown-item')
+                    );
+                    const target = items.find((el) =>
+                        el.textContent.includes(
+                            ${JSON.stringify(targetAgentLabel)}
+                        )
+                    ) || items.find((el) => !el.disabled);
+                    if (!target) return '';
+                    const text = target.textContent.trim();
+                    target.click();
+                    return text;
+                }
+            `)
+        );
+        if (!picked) {
+            throw new Error('No selectable ACP agent was found in the dropdown');
+        }
     }
     log('picked-agent', picked);
 
@@ -667,16 +985,31 @@ async function main() {
     );
     log('submitted-agent-prompt');
 
-    await waitFor('active-hint', async () => {
+    const postPromptState = await waitFor('active-or-setup-or-final', async () => {
         const hint = await readComposerHint();
         const activeState = /starting|running|responding/i.test(hint.pill)
             || /needs approval/i.test(hint.pill);
         const activeSummary = /working|waiting on|waiting for|drafting|summarizing|choose an approval option/i
             .test(hint.summary);
-        return activeState
+        if (
+            activeState
             && activeSummary
-            && /Esc stops/i.test(hint.hotkey);
+            && /Esc stops/i.test(hint.hotkey)
+        ) {
+            return 'active';
+        }
+        if (hasSetupConfig() && await hasSetupAction()) {
+            return 'setup';
+        }
+        if (await hasPermissionRequest() || await hasFinalMessage()) {
+            return 'final';
+        }
+        return '';
     });
+
+    if (postPromptState === 'setup') {
+        await handleRuntimeSetup();
+    }
 
     const fetchLogAfterPrompt = await evaluate(
         toExpression(`
@@ -687,11 +1020,13 @@ async function main() {
     );
     log('fetch-log-after-prompt', JSON.stringify(fetchLogAfterPrompt));
 
-    await waitFor('permission-or-final', async () => {
-        return await hasPermissionRequest() || await hasFinalMessage();
-    });
+    let promptOutcome = await waitForPromptOutcome();
+    if (promptOutcome === 'setup') {
+        await handleRuntimeSetup();
+        promptOutcome = await waitForPromptOutcome('permission-final-after-setup');
+    }
 
-    if (await hasPermissionRequest()) {
+    if (promptOutcome === 'permission') {
         await waitFor('permission-hint', async () => {
             const hint = await readComposerHint();
             return /needs approval/i.test(hint.pill)

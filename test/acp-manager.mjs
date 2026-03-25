@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
     AcpManager,
+    buildTerminalSpawnRequest,
     mergeAgentMessageText
 } from '../src/acp-manager.mjs';
 
@@ -14,8 +15,11 @@ class FakeRuntime extends EventEmitter {
         super();
         this.definition = definition;
         this.cwd = options.cwd;
-        this.runtimeId = `rt-${definition.id}-${this.cwd}`;
+        this.runtimeId = options.runtimeStoreKey
+            ? `rt-${options.runtimeStoreKey}`
+            : `rt-${definition.id}-${this.cwd}`;
         this.runtimeKey = `${definition.id}::${this.cwd}`;
+        this.runtimeStoreKey = options.runtimeStoreKey || this.runtimeKey;
         this.tabs = new Map();
         this.createdTabs = [];
         this.closedTabs = [];
@@ -204,12 +208,17 @@ async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
 describe('AcpManager', () => {
     function createManager() {
         let persistedTabs = [];
+        let persistedConfigs = {};
         const manager = new AcpManager({
             runtimeFactory: (definition, options) =>
                 new FakeRuntime(definition, options),
             loadTabs: async () => persistedTabs,
             saveTabs: async (tabs) => {
                 persistedTabs = structuredClone(tabs);
+            },
+            loadConfigs: async () => persistedConfigs,
+            saveConfigs: async (configs) => {
+                persistedConfigs = structuredClone(configs);
             }
         });
         manager.definitions = [{
@@ -222,7 +231,8 @@ describe('AcpManager', () => {
         }];
         return {
             manager,
-            getPersistedTabs: () => persistedTabs
+            getPersistedTabs: () => persistedTabs,
+            getPersistedConfigs: () => persistedConfigs
         };
     }
 
@@ -409,6 +419,124 @@ describe('AcpManager', () => {
 
         assert.deepEqual(second.availableCommands, first.availableCommands);
         assert.deepEqual(second.availableModes, first.availableModes);
+    });
+
+    it('treats saved Gemini keys as available config', async () => {
+        let persistedConfigs = {
+            gemini: {
+                env: {
+                    GEMINI_API_KEY: 'test-key'
+                }
+            }
+        };
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new FakeRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            loadConfigs: async () => persistedConfigs,
+            saveConfigs: async (configs) => {
+                persistedConfigs = structuredClone(configs);
+            }
+        });
+        manager.definitions = [{
+            id: 'gemini',
+            label: 'Gemini CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const [definition] = await manager.listDefinitions();
+
+        assert.equal(definition.available, true);
+        assert.equal(definition.config.hasGeminiApiKey, true);
+    });
+
+    it('merges and clears saved agent config values', async () => {
+        const { manager, getPersistedConfigs } = createManager();
+        manager.definitions.push({
+            id: 'claude',
+            label: 'Claude Agent',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        });
+
+        await manager.updateAgentConfig('claude', {
+            env: {
+                ANTHROPIC_API_KEY: 'alpha',
+                CLAUDE_CODE_USE_VERTEX: '1',
+                ANTHROPIC_VERTEX_PROJECT_ID: 'proj-a'
+            }
+        });
+
+        await manager.updateAgentConfig('claude', {
+            env: {
+                CLOUD_ML_REGION: 'us-central1'
+            },
+            clearEnvKeys: ['CLAUDE_CODE_USE_VERTEX']
+        });
+
+        assert.deepEqual(getPersistedConfigs().claude.env, {
+            ANTHROPIC_API_KEY: 'alpha',
+            ANTHROPIC_VERTEX_PROJECT_ID: 'proj-a',
+            CLOUD_ML_REGION: 'us-central1'
+        });
+    });
+
+    it('starts a fresh runtime after agent config changes', async () => {
+        const { manager } = createManager();
+        manager.definitions.push({
+            id: 'gemini',
+            label: 'Gemini CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        });
+
+        await manager.updateAgentConfig('gemini', {
+            env: { GEMINI_API_KEY: 'alpha' }
+        });
+        const first = await manager.createTab({
+            agentId: 'gemini',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+        await manager.updateAgentConfig('gemini', {
+            env: { GEMINI_API_KEY: 'beta' }
+        });
+        const second = await manager.createTab({
+            agentId: 'gemini',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-2'
+        });
+
+        assert.equal(manager.runtimes.size, 2);
+        assert.notEqual(first.runtimeId, second.runtimeId);
+    });
+
+    it('wraps shell-like terminal commands when args are omitted', () => {
+        const request = buildTerminalSpawnRequest({
+            command: 'ls -la /tmp'
+        });
+
+        assert.equal(request.shell, true);
+        assert.ok(request.args.length > 0);
+    });
+
+    it('keeps explicit terminal args as argv execution', () => {
+        const request = buildTerminalSpawnRequest({
+            command: 'ls',
+            args: ['-la', '/tmp']
+        });
+
+        assert.equal(request.shell, false);
+        assert.equal(request.command, 'ls');
+        assert.deepEqual(request.args, ['-la', '/tmp']);
     });
 
     it('switches modes for an existing agent tab', async () => {

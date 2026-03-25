@@ -16,6 +16,85 @@ const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
 const NPX_COMMAND = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const TEST_AGENT_PATH = path.join(CURRENT_DIR, 'acp-test-agent.mjs');
+const AGENT_CONFIG_ENV_KEYS = {
+    gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    claude: [
+        'ANTHROPIC_API_KEY',
+        'CLAUDE_CODE_USE_VERTEX',
+        'ANTHROPIC_VERTEX_PROJECT_ID',
+        'GCLOUD_PROJECT',
+        'GOOGLE_CLOUD_PROJECT',
+        'CLOUD_ML_REGION',
+        'GOOGLE_APPLICATION_CREDENTIALS'
+    ]
+};
+
+function getAllowedAgentEnvKeys(agentId) {
+    return AGENT_CONFIG_ENV_KEYS[agentId] || [];
+}
+
+function normalizeConfiguredEnv(agentId, env) {
+    const allowedKeys = new Set(getAllowedAgentEnvKeys(agentId));
+    if (!allowedKeys.size || !env || typeof env !== 'object') {
+        return {};
+    }
+    const normalized = {};
+    for (const [key, value] of Object.entries(env)) {
+        if (!allowedKeys.has(key)) continue;
+        normalized[key] = typeof value === 'string' ? value : '';
+    }
+    return normalized;
+}
+
+function hasConfiguredValue(value) {
+    return typeof value === 'string' && value.trim().length > 0;
+}
+
+function buildAgentConfigSummary(agentId, config = {}) {
+    const env = normalizeConfiguredEnv(agentId, config.env);
+    switch (agentId) {
+        case 'gemini':
+            return {
+                hasGeminiApiKey: hasConfiguredValue(env.GEMINI_API_KEY),
+                hasGoogleApiKey: hasConfiguredValue(env.GOOGLE_API_KEY)
+            };
+        case 'claude':
+            return {
+                hasAnthropicApiKey: hasConfiguredValue(env.ANTHROPIC_API_KEY),
+                useVertex: env.CLAUDE_CODE_USE_VERTEX === '1',
+                hasVertexProjectId: hasConfiguredValue(
+                    env.ANTHROPIC_VERTEX_PROJECT_ID
+                ),
+                vertexProjectId:
+                    env.ANTHROPIC_VERTEX_PROJECT_ID || '',
+                gcloudProject:
+                    env.GCLOUD_PROJECT || env.GOOGLE_CLOUD_PROJECT || '',
+                cloudMlRegion: env.CLOUD_ML_REGION || '',
+                hasGoogleCredentials: hasConfiguredValue(
+                    env.GOOGLE_APPLICATION_CREDENTIALS
+                )
+            };
+        default:
+            return {};
+    }
+}
+
+function mergeDefinitionEnv(definition, agentConfig = {}) {
+    return {
+        ...process.env,
+        ...normalizeConfiguredEnv(definition.id, agentConfig.env)
+    };
+}
+
+function hasGhCopilotWrapper() {
+    if (!commandExists('gh')) return false;
+    const result = spawnSync('gh', ['extension', 'list'], {
+        encoding: 'utf8'
+    });
+    return result.status === 0
+        && typeof result.stdout === 'string'
+        && result.stdout.includes('gh-copilot');
+}
 
 function commandExists(command) {
     const checker = process.platform === 'win32' ? 'where' : 'which';
@@ -27,6 +106,8 @@ function commandExists(command) {
 
 function makeBuiltInDefinitions() {
     const hasGeminiBinary = commandExists('gemini');
+    const hasCopilotBinary = commandExists('copilot');
+    const hasGhCopilot = hasGhCopilotWrapper();
     const definitions = [
         {
             id: 'gemini',
@@ -60,9 +141,16 @@ function makeBuiltInDefinitions() {
             id: 'copilot',
             label: 'GitHub Copilot',
             description: 'GitHub Copilot CLI ACP server',
-            command: 'copilot',
-            args: ['--acp', '--stdio'],
-            commandLabel: 'copilot --acp --stdio'
+            command: hasCopilotBinary ? 'copilot' : 'gh',
+            args: hasCopilotBinary
+                ? ['--acp', '--stdio']
+                : ['copilot', '--', '--acp', '--stdio'],
+            commandLabel: hasCopilotBinary
+                ? 'copilot --acp --stdio'
+                : 'gh copilot -- --acp --stdio',
+            setupCommandLabel: hasGhCopilot
+                ? 'gh copilot'
+                : 'Install GitHub Copilot CLI'
         }
     ];
     if (process.env.TABMINAL_ENABLE_TEST_AGENT === '1') {
@@ -78,7 +166,7 @@ function makeBuiltInDefinitions() {
     return definitions;
 }
 
-function getDefinitionAvailability(definition) {
+function getDefinitionAvailability(definition, agentConfig = {}) {
     if (!commandExists(definition.command)) {
         return {
             available: false,
@@ -86,9 +174,11 @@ function getDefinitionAvailability(definition) {
         };
     }
 
+    const runtimeEnv = mergeDefinitionEnv(definition, agentConfig);
+
     if (definition.id === 'gemini') {
         const hasApiKey = Boolean(
-            process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
+            runtimeEnv.GEMINI_API_KEY || runtimeEnv.GOOGLE_API_KEY
         );
         if (!hasApiKey) {
             return {
@@ -96,6 +186,22 @@ function getDefinitionAvailability(definition) {
                 reason: 'API key missing'
             };
         }
+    }
+
+    if (
+        definition.id === 'copilot'
+        && definition.command === 'gh'
+    ) {
+        if (!hasGhCopilotWrapper()) {
+            return {
+                available: false,
+                reason: 'Install the gh-copilot extension first'
+            };
+        }
+        return {
+            available: false,
+            reason: 'Run gh copilot once to install Copilot CLI'
+        };
     }
 
     return {
@@ -124,11 +230,20 @@ function formatAgentStartupError(definition, error) {
             + 'CLOUD_ML_REGION, and Google Cloud credentials before '
             + 'starting Tabminal.';
     }
+    if (definition?.id === 'copilot' && /not installed/i.test(rawMessage)) {
+        return 'GitHub Copilot CLI is not installed on this host yet. Run '
+            + '`gh copilot` once to download it, or install a standalone '
+            + '`copilot` binary and restart Tabminal.';
+    }
     return rawMessage;
 }
 
 function makeRuntimeKey(agentId, cwd) {
     return `${agentId}::${path.resolve(cwd)}`;
+}
+
+function makeRuntimeStoreKey(agentId, cwd, configVersion = 0) {
+    return `${makeRuntimeKey(agentId, cwd)}::cfg:${configVersion}`;
 }
 
 function normalizeEnvList(envList) {
@@ -155,6 +270,45 @@ function truncateUtf8(text, byteLimit) {
         slice = slice.subarray(1);
     }
     return '';
+}
+
+export function buildTerminalSpawnRequest(request = {}) {
+    const command = String(request.command || '').trim();
+    const args = Array.isArray(request.args)
+        ? request.args.filter((value) => typeof value === 'string')
+        : [];
+    if (!command) {
+        throw new Error('Terminal command is required');
+    }
+    if (args.length > 0) {
+        return {
+            command,
+            args,
+            shell: false
+        };
+    }
+
+    const requiresShell = /[\s|&;<>()$`*?[\]{}~]/.test(command);
+    if (!requiresShell) {
+        return {
+            command,
+            args: [],
+            shell: false
+        };
+    }
+
+    const shell = process.platform === 'win32'
+        ? process.env.ComSpec || 'cmd.exe'
+        : process.env.SHELL || '/bin/sh';
+    const shellArgs = process.platform === 'win32'
+        ? ['/d', '/s', '/c', command]
+        : ['-lc', command];
+
+    return {
+        command: shell,
+        args: shellArgs,
+        shell: true
+    };
 }
 
 export function mergeAgentMessageText(previousText, chunkText) {
@@ -195,7 +349,9 @@ class LocalExecTerminal {
             ...normalizeEnvList(request.env)
         };
 
-        this.child = spawn(request.command, request.args || [], {
+        const spawnRequest = buildTerminalSpawnRequest(request);
+
+        this.child = spawn(spawnRequest.command, spawnRequest.args, {
             cwd: request.cwd || process.cwd(),
             env,
             stdio: ['ignore', 'pipe', 'pipe']
@@ -213,6 +369,19 @@ class LocalExecTerminal {
 
         this.child.stdout?.on('data', append);
         this.child.stderr?.on('data', append);
+        this.child.on('error', (error) => {
+            if (this.closed) return;
+            append(error?.message || 'Terminal command failed.');
+            this.closed = true;
+            this.exitStatus = {
+                exitCode: null,
+                signal: null
+            };
+            for (const waiter of this.waiters) {
+                waiter(this.exitStatus);
+            }
+            this.waiters.length = 0;
+        });
         this.child.on('exit', (code, signal) => {
             this.closed = true;
             this.exitStatus = {
@@ -264,6 +433,8 @@ class AcpRuntime extends EventEmitter {
         this.cwd = path.resolve(options.cwd || process.cwd());
         this.runtimeId = options.runtimeId || crypto.randomUUID();
         this.runtimeKey = makeRuntimeKey(definition.id, this.cwd);
+        this.runtimeStoreKey = options.runtimeStoreKey || this.runtimeKey;
+        this.env = options.env || process.env;
         this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
         this.connection = null;
         this.process = null;
@@ -362,7 +533,7 @@ class AcpRuntime extends EventEmitter {
     async #startInternal() {
         const child = spawn(this.definition.command, this.definition.args, {
             cwd: this.cwd,
-            env: process.env,
+            env: this.env,
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
@@ -1113,9 +1284,97 @@ export class AcpManager {
         this.tabs = new Map();
         this.loadTabs = options.loadTabs || persistence.loadAgentTabs;
         this.saveTabs = options.saveTabs || persistence.saveAgentTabs;
+        this.loadConfigs = options.loadConfigs || persistence.loadAgentConfigs;
+        this.saveConfigs = options.saveConfigs || persistence.saveAgentConfigs;
         this.persistenceChain = Promise.resolve();
         this.disposing = false;
         this.restoring = false;
+        this.agentConfigs = {};
+        this.agentConfigVersions = new Map();
+        this.configLoaded = false;
+    }
+
+    getAgentConfigVersion(agentId) {
+        return this.agentConfigVersions.get(agentId) || 0;
+    }
+
+    async ensureConfigsLoaded() {
+        if (this.configLoaded) {
+            return this.agentConfigs;
+        }
+        this.agentConfigs = await this.loadConfigs();
+        this.configLoaded = true;
+        return this.agentConfigs;
+    }
+
+    getAgentConfig(agentId) {
+        return this.agentConfigs?.[agentId] || { env: {} };
+    }
+
+    getSerializedAgentConfig(agentId) {
+        return buildAgentConfigSummary(
+            agentId,
+            this.getAgentConfig(agentId)
+        );
+    }
+
+    async listAgentConfigs() {
+        await this.ensureConfigsLoaded();
+        const configs = {};
+        for (const definition of this.definitions) {
+            configs[definition.id] = this.getSerializedAgentConfig(
+                definition.id
+            );
+        }
+        return configs;
+    }
+
+    async updateAgentConfig(agentId, nextConfig = {}) {
+        await this.ensureConfigsLoaded();
+        const definition = this.definitions.find((entry) => entry.id === agentId);
+        if (!definition) {
+            throw new Error('Unknown agent');
+        }
+        const currentConfig = this.getAgentConfig(agentId);
+        const currentEnv = normalizeConfiguredEnv(agentId, currentConfig.env);
+        const nextEnv = normalizeConfiguredEnv(agentId, nextConfig.env);
+        const clearEnvKeys = Array.isArray(nextConfig.clearEnvKeys)
+            ? nextConfig.clearEnvKeys.filter((key) =>
+                getAllowedAgentEnvKeys(agentId).includes(key)
+            )
+            : [];
+        const mergedEnv = {
+            ...currentEnv,
+            ...nextEnv
+        };
+        for (const key of clearEnvKeys) {
+            delete mergedEnv[key];
+        }
+        this.agentConfigs = {
+            ...this.agentConfigs,
+            [agentId]: {
+                env: mergedEnv
+            }
+        };
+        this.agentConfigVersions.set(
+            agentId,
+            this.getAgentConfigVersion(agentId) + 1
+        );
+        await this.queuePersistence(() => this.saveConfigs(this.agentConfigs));
+        return this.getSerializedAgentConfig(agentId);
+    }
+
+    async clearAgentConfig(agentId) {
+        await this.ensureConfigsLoaded();
+        const nextConfigs = { ...this.agentConfigs };
+        delete nextConfigs[agentId];
+        this.agentConfigs = nextConfigs;
+        this.agentConfigVersions.set(
+            agentId,
+            this.getAgentConfigVersion(agentId) + 1
+        );
+        await this.queuePersistence(() => this.saveConfigs(this.agentConfigs));
+        return this.getSerializedAgentConfig(agentId);
     }
 
     #applyRuntimeMetadataFallback(runtime, serialized) {
@@ -1198,28 +1457,37 @@ export class AcpManager {
     }
 
     async listDefinitions() {
+        await this.ensureConfigsLoaded();
         return this.definitions.map((definition) => {
-            const availability = getDefinitionAvailability(definition);
+            const availability = getDefinitionAvailability(
+                definition,
+                this.getAgentConfig(definition.id)
+            );
             return {
-            id: definition.id,
-            label: definition.label,
-            description: definition.description,
-            commandLabel: definition.commandLabel,
-            available: availability.available,
-            reason: availability.reason
-        };
+                id: definition.id,
+                label: definition.label,
+                description: definition.description,
+                commandLabel: definition.commandLabel,
+                setupCommandLabel: definition.setupCommandLabel || '',
+                available: availability.available,
+                reason: availability.reason,
+                config: this.getSerializedAgentConfig(definition.id)
+            };
         });
     }
 
     async listState() {
+        await this.ensureConfigsLoaded();
         return {
             restoring: this.restoring,
             definitions: await this.listDefinitions(),
+            configs: await this.listAgentConfigs(),
             tabs: Array.from(this.tabs.values()).map((entry) => entry.serialize())
         };
     }
 
     async createTab(options) {
+        await this.ensureConfigsLoaded();
         const definition = this.definitions.find(
             (entry) => entry.id === options.agentId
         );
@@ -1229,19 +1497,30 @@ export class AcpManager {
 
         const cwd = path.resolve(options.cwd || process.cwd());
         const runtimeKey = makeRuntimeKey(definition.id, cwd);
-        let runtimeEntry = this.runtimes.get(runtimeKey);
+        const runtimeStoreKey = makeRuntimeStoreKey(
+            definition.id,
+            cwd,
+            this.getAgentConfigVersion(definition.id)
+        );
+        let runtimeEntry = this.runtimes.get(runtimeStoreKey);
         let createdRuntime = false;
         if (!runtimeEntry) {
             const runtime = this.runtimeFactory(definition, {
                 cwd,
-                idleTimeoutMs: this.idleTimeoutMs
+                idleTimeoutMs: this.idleTimeoutMs,
+                runtimeStoreKey,
+                env: mergeDefinitionEnv(
+                    definition,
+                    this.getAgentConfig(definition.id)
+                )
             });
             runtimeEntry = {
                 runtime,
                 definition,
-                runtimeKey
+                runtimeKey,
+                runtimeStoreKey
             };
-            this.runtimes.set(runtimeKey, runtimeEntry);
+            this.runtimes.set(runtimeStoreKey, runtimeEntry);
             createdRuntime = true;
             runtime.on('runtime_exit', () => {
                 if (this.disposing) return;
@@ -1249,7 +1528,7 @@ export class AcpManager {
                     if (tabEntry.runtime !== runtime) continue;
                     this.tabs.delete(tabId);
                 }
-                this.runtimes.delete(runtimeKey);
+                this.runtimes.delete(runtimeStoreKey);
                 void this.persistTabs();
             });
         }
@@ -1286,7 +1565,7 @@ export class AcpManager {
             const shouldDisposeRuntime = createdRuntime
                 || runtimeEntry.runtime.tabs.size === 0;
             if (shouldDisposeRuntime) {
-                this.runtimes.delete(runtimeKey);
+                this.runtimes.delete(runtimeStoreKey);
                 await runtimeEntry.runtime.dispose().catch(() => {});
             }
             throw new Error(formatAgentStartupError(definition, error));
@@ -1294,6 +1573,7 @@ export class AcpManager {
     }
 
     async restoreTabs(validTerminalSessionIds = new Set()) {
+        await this.ensureConfigsLoaded();
         const entries = await this.loadTabs();
         let changed = false;
 
@@ -1314,7 +1594,11 @@ export class AcpManager {
                 continue;
             }
 
-            const availability = getDefinitionAvailability(definition);
+            const agentConfig = this.getAgentConfig(definition.id);
+            const availability = getDefinitionAvailability(
+                definition,
+                agentConfig
+            );
             if (!availability.available) {
                 changed = true;
                 continue;
@@ -1322,25 +1606,33 @@ export class AcpManager {
 
             const cwd = path.resolve(meta.cwd || process.cwd());
             const runtimeKey = makeRuntimeKey(definition.id, cwd);
-            let runtimeEntry = this.runtimes.get(runtimeKey);
+            const runtimeStoreKey = makeRuntimeStoreKey(
+                definition.id,
+                cwd,
+                this.getAgentConfigVersion(definition.id)
+            );
+            let runtimeEntry = this.runtimes.get(runtimeStoreKey);
             if (!runtimeEntry) {
                 const runtime = this.runtimeFactory(definition, {
                     cwd,
-                    idleTimeoutMs: this.idleTimeoutMs
+                    idleTimeoutMs: this.idleTimeoutMs,
+                    runtimeStoreKey,
+                    env: mergeDefinitionEnv(definition, agentConfig)
                 });
                 runtimeEntry = {
                     runtime,
                     definition,
-                    runtimeKey
+                    runtimeKey,
+                    runtimeStoreKey
                 };
-                this.runtimes.set(runtimeKey, runtimeEntry);
+                this.runtimes.set(runtimeStoreKey, runtimeEntry);
                 runtime.on('runtime_exit', () => {
                     if (this.disposing) return;
                     for (const [tabId, tabEntry] of this.tabs.entries()) {
                         if (tabEntry.runtime !== runtime) continue;
                         this.tabs.delete(tabId);
                     }
-                    this.runtimes.delete(runtimeKey);
+                    this.runtimes.delete(runtimeStoreKey);
                     void this.persistTabs();
                 });
             }
@@ -1437,7 +1729,9 @@ export class AcpManager {
                 return;
             }
             await tabEntry.runtime.dispose();
-            this.runtimes.delete(tabEntry.runtime.runtimeKey);
+            this.runtimes.delete(
+                tabEntry.runtime.runtimeStoreKey || tabEntry.runtime.runtimeKey
+            );
         });
     }
 

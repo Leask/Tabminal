@@ -299,6 +299,97 @@
             <p id="add-server-error" class="error-message"></p>
         </div>
     </div>
+    <div id="agent-setup-modal" class="modal" style="display: none;">
+        <div class="modal-content agent-setup-content">
+            <h2 id="agent-setup-title">Agent setup</h2>
+            <p id="agent-setup-description"></p>
+            <form id="agent-setup-form" class="agent-setup-form">
+                <div id="agent-setup-gemini" class="agent-setup-section" hidden>
+                    <label for="agent-setup-gemini-key">GEMINI_API_KEY</label>
+                    <input
+                        id="agent-setup-gemini-key"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <label for="agent-setup-google-key">GOOGLE_API_KEY</label>
+                    <input
+                        id="agent-setup-google-key"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <p id="agent-setup-gemini-note" class="agent-setup-note"></p>
+                </div>
+                <div id="agent-setup-claude" class="agent-setup-section" hidden>
+                    <label for="agent-setup-claude-key">ANTHROPIC_API_KEY</label>
+                    <input
+                        id="agent-setup-claude-key"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <label class="agent-setup-checkbox">
+                        <input
+                            id="agent-setup-claude-use-vertex"
+                            type="checkbox"
+                        >
+                        <span>Use Vertex auth</span>
+                    </label>
+                    <label for="agent-setup-claude-project">
+                        ANTHROPIC_VERTEX_PROJECT_ID
+                    </label>
+                    <input
+                        id="agent-setup-claude-project"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <label for="agent-setup-claude-region">
+                        CLOUD_ML_REGION
+                    </label>
+                    <input
+                        id="agent-setup-claude-region"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="global"
+                    >
+                    <label for="agent-setup-claude-credentials">
+                        Google credentials file
+                    </label>
+                    <input
+                        id="agent-setup-claude-credentials"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <p id="agent-setup-claude-note" class="agent-setup-note"></p>
+                </div>
+                <div id="agent-setup-copilot" class="agent-setup-section" hidden>
+                    <p id="agent-setup-copilot-note" class="agent-setup-note"></p>
+                </div>
+                <p id="agent-setup-feedback" class="agent-setup-feedback" hidden></p>
+                <div class="agent-setup-actions">
+                    <button
+                        id="agent-setup-reset"
+                        type="button"
+                        class="secondary-button"
+                    >
+                        Reset saved setup
+                    </button>
+                    <button
+                        id="agent-setup-cancel"
+                        type="button"
+                        class="secondary-button"
+                    >
+                        Close
+                    </button>
+                    <button id="agent-setup-save" type="submit">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div id="shortcuts-modal" class="modal" style="display: none;">
         <div class="modal-content shortcuts-content">
             <h2>Keyboard Shortcuts</h2>

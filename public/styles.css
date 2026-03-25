@@ -1098,6 +1098,76 @@ body {
     background-color: #2aa198;
 }
 
+.modal-content button.secondary-button {
+    background-color: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border-color);
+}
+
+.modal-content button.secondary-button:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.agent-setup-content {
+    max-width: 520px;
+    text-align: left;
+}
+
+.agent-setup-form {
+    margin: 0;
+}
+
+.agent-setup-section {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.agent-setup-section label {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.agent-setup-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.25rem 0;
+}
+
+.agent-setup-checkbox input {
+    width: auto;
+    margin: 0;
+}
+
+.agent-setup-note,
+.agent-setup-feedback {
+    color: var(--text-dim);
+    margin: 0.5rem 0 0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+}
+
+.agent-setup-feedback.error {
+    color: #dc322f;
+}
+
+.agent-setup-feedback.success {
+    color: #2aa198;
+}
+
+.agent-setup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+}
+
+.agent-setup-actions button {
+    width: auto;
+    min-width: 120px;
+}
+
 #add-server-form {
     margin: 0;
 }

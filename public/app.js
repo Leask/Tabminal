@@ -54,6 +54,39 @@ const addServerCancel = document.getElementById('add-server-cancel');
 const addServerTitle = addServerModal?.querySelector('h2') || null;
 const addServerDescription = addServerModal?.querySelector('p') || null;
 const addServerSubmitButton = addServerForm?.querySelector('button[type="submit"]') || null;
+const agentSetupModal = document.getElementById('agent-setup-modal');
+const agentSetupForm = document.getElementById('agent-setup-form');
+const agentSetupTitle = document.getElementById('agent-setup-title');
+const agentSetupDescription = document.getElementById(
+    'agent-setup-description'
+);
+const agentSetupFeedback = document.getElementById('agent-setup-feedback');
+const agentSetupReset = document.getElementById('agent-setup-reset');
+const agentSetupCancel = document.getElementById('agent-setup-cancel');
+const agentSetupSave = document.getElementById('agent-setup-save');
+const agentSetupGemini = document.getElementById('agent-setup-gemini');
+const agentSetupGeminiKey = document.getElementById('agent-setup-gemini-key');
+const agentSetupGoogleKey = document.getElementById('agent-setup-google-key');
+const agentSetupGeminiNote = document.getElementById('agent-setup-gemini-note');
+const agentSetupClaude = document.getElementById('agent-setup-claude');
+const agentSetupClaudeKey = document.getElementById('agent-setup-claude-key');
+const agentSetupClaudeUseVertex = document.getElementById(
+    'agent-setup-claude-use-vertex'
+);
+const agentSetupClaudeProject = document.getElementById(
+    'agent-setup-claude-project'
+);
+const agentSetupClaudeRegion = document.getElementById(
+    'agent-setup-claude-region'
+);
+const agentSetupClaudeCredentials = document.getElementById(
+    'agent-setup-claude-credentials'
+);
+const agentSetupClaudeNote = document.getElementById('agent-setup-claude-note');
+const agentSetupCopilot = document.getElementById('agent-setup-copilot');
+const agentSetupCopilotNote = document.getElementById(
+    'agent-setup-copilot-note'
+);
 const terminalWrapper = document.getElementById('terminal-wrapper');
 const editorPane = document.getElementById('editor-pane');
 // #endregion
@@ -72,6 +105,14 @@ const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" s
 const serverModalState = {
     mode: 'add',
     targetServerId: null
+};
+const agentSetupState = {
+    serverId: '',
+    agentId: '',
+    retrySessionKey: '',
+    retryAgentTabKey: '',
+    retryPromptText: '',
+    retryAnchor: null
 };
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
@@ -623,6 +664,17 @@ class EditorManager {
             await this.createSiblingAgentTab(agentTab);
         });
 
+        this.agentSetupButton = document.createElement('button');
+        this.agentSetupButton.type = 'button';
+        this.agentSetupButton.className = 'agent-panel-button secondary';
+        this.agentSetupButton.textContent = 'Setup';
+        this.agentSetupButton.style.display = 'none';
+        this.agentSetupButton.addEventListener('click', () => {
+            const agentTab = getActiveAgentTab();
+            if (!agentTab) return;
+            this.openAgentSetupForTab(agentTab);
+        });
+
         headerTop.appendChild(headerMain);
         header.appendChild(headerTop);
 
@@ -767,6 +819,7 @@ class EditorManager {
         });
 
         this.agentFixedActions.appendChild(this.agentModeSelect);
+        this.agentFixedActions.appendChild(this.agentSetupButton);
         this.agentFixedActions.appendChild(this.agentNewChatButton);
         this.agentFixedActions.appendChild(this.agentSendButton);
 
@@ -1881,6 +1934,7 @@ class EditorManager {
         if (!text) return;
         this.agentPrompt.value = '';
         try {
+            agentTab.lastSubmittedPrompt = text;
             await agentTab.sendPrompt(text);
             agentTab.busy = true;
             agentTab.status = 'running';
@@ -1940,6 +1994,19 @@ class EditorManager {
         }
     }
 
+    openAgentSetupForTab(agentTab) {
+        const session = agentTab?.getLinkedSession?.() || null;
+        if (!session) return;
+        const definition = getAgentDefinition(session.serverId, agentTab.agentId);
+        if (!definition) return;
+        openAgentSetupModal(definition, session.serverId, {
+            sessionKey: session.key,
+            agentTabKey: agentTab.key,
+            promptText: agentTab.lastSubmittedPrompt || '',
+            message: agentTab.errorMessage || ''
+        });
+    }
+
     updateAgentComposerActions(agentTab = null) {
         const activeTabKey = this.getActiveWorkspaceTabKey();
         const activeAgentTab = agentTab || (
@@ -1948,8 +2015,19 @@ class EditorManager {
                 : null
         );
         const busy = !!activeAgentTab?.busy;
+        const definition = activeAgentTab
+            ? getAgentDefinition(activeAgentTab.serverId, activeAgentTab.agentId)
+            : null;
+        const needsSetup = shouldOpenAgentSetupForError(
+            definition,
+            activeAgentTab?.errorMessage || ''
+        );
         this.agentSendButton.textContent = busy ? 'Stop' : 'Send ⏎';
         this.agentSendButton.disabled = !busy && !this.agentPrompt.value.trim();
+        this.agentSetupButton.style.display = needsSetup ? '' : 'none';
+        if (!needsSetup && activeAgentTab) {
+            activeAgentTab.lastSetupPromptedErrorMessage = '';
+        }
         const feedback = getAgentComposerFeedback(activeAgentTab);
         if (feedback) {
             this.agentHint.style.display = '';
@@ -1964,6 +2042,20 @@ class EditorManager {
             this.agentHintHotkey.textContent = '';
         }
         this.renderAgentCommandMenu(activeAgentTab);
+        if (
+            activeAgentTab
+            && needsSetup
+            && activeAgentTab.errorMessage
+            && activeAgentTab.lastSetupPromptedErrorMessage
+                !== activeAgentTab.errorMessage
+            && agentSetupModal?.style.display !== 'flex'
+        ) {
+            activeAgentTab.lastSetupPromptedErrorMessage =
+                activeAgentTab.errorMessage;
+            queueMicrotask(() => {
+                this.openAgentSetupForTab(activeAgentTab);
+            });
+        }
     }
 
     renderAgentCommandMenu(agentTab = null) {
@@ -2072,6 +2164,295 @@ function closeAgentDropdown() {
     agentDropdownEl.innerHTML = '';
 }
 
+function updateAgentDefinitions(serverId, definitions) {
+    state.agentDefinitions.set(
+        serverId,
+        Array.isArray(definitions) ? definitions : []
+    );
+}
+
+function getAgentDefinition(serverId, agentId) {
+    return getAgentDefinitionsForServer(serverId).find(
+        (definition) => definition.id === agentId
+    ) || null;
+}
+
+function setAgentSetupFeedback(message = '', type = '') {
+    if (!agentSetupFeedback) return;
+    if (!message) {
+        agentSetupFeedback.hidden = true;
+        agentSetupFeedback.textContent = '';
+        agentSetupFeedback.className = 'agent-setup-feedback';
+        return;
+    }
+    agentSetupFeedback.hidden = false;
+    agentSetupFeedback.textContent = message;
+    agentSetupFeedback.className = `agent-setup-feedback ${type}`.trim();
+}
+
+function closeAgentSetupModal() {
+    if (!agentSetupModal) return;
+    agentSetupModal.style.display = 'none';
+    setAgentSetupFeedback('');
+    agentSetupState.serverId = '';
+    agentSetupState.agentId = '';
+    agentSetupState.retrySessionKey = '';
+    agentSetupState.retryAgentTabKey = '';
+    agentSetupState.retryPromptText = '';
+    agentSetupState.retryAnchor = null;
+}
+
+function updateClaudeSetupFields() {
+    const useVertex = !!agentSetupClaudeUseVertex?.checked;
+    for (const input of [
+        agentSetupClaudeProject,
+        agentSetupClaudeRegion,
+        agentSetupClaudeCredentials
+    ]) {
+        if (!input) continue;
+        input.disabled = !useVertex;
+    }
+}
+
+function describeConfiguredSecrets(prefix, checks) {
+    const enabled = checks.filter(Boolean);
+    if (enabled.length === 0) return '';
+    return `${prefix}: ${enabled.join(', ')}.`;
+}
+
+function openAgentSetupModal(definition, serverId, options = {}) {
+    if (!definition || !agentSetupModal) return;
+    agentSetupState.serverId = serverId;
+    agentSetupState.agentId = definition.id;
+    agentSetupState.retrySessionKey = options.sessionKey || '';
+    agentSetupState.retryAgentTabKey = options.agentTabKey || '';
+    agentSetupState.retryPromptText = options.promptText || '';
+    agentSetupState.retryAnchor = options.anchor || null;
+
+    agentSetupTitle.textContent = `${definition.label} setup`;
+    agentSetupDescription.textContent = buildAgentSetupMessage(definition);
+    setAgentSetupFeedback(options.message || '', options.message ? 'error' : '');
+
+    agentSetupGemini.hidden = true;
+    agentSetupClaude.hidden = true;
+    agentSetupCopilot.hidden = true;
+    agentSetupReset.hidden = false;
+    agentSetupSave.hidden = false;
+    agentSetupSave.disabled = false;
+    agentSetupReset.disabled = false;
+    agentSetupSave.textContent = 'Save';
+    agentSetupCancel.textContent = 'Close';
+
+    agentSetupGeminiKey.value = '';
+    agentSetupGoogleKey.value = '';
+    agentSetupClaudeKey.value = '';
+    agentSetupClaudeUseVertex.checked = false;
+    agentSetupClaudeProject.value = '';
+    agentSetupClaudeRegion.value = '';
+    agentSetupClaudeCredentials.value = '';
+
+    const config = definition.config || {};
+
+    if (definition.id === 'gemini') {
+        agentSetupGemini.hidden = false;
+        agentSetupGeminiNote.textContent = describeConfiguredSecrets(
+            'Saved keys',
+            [
+                config.hasGeminiApiKey ? 'GEMINI_API_KEY' : '',
+                config.hasGoogleApiKey ? 'GOOGLE_API_KEY' : ''
+            ]
+        ) || 'Paste one key to save it for this host.';
+    } else if (definition.id === 'claude') {
+        agentSetupClaude.hidden = false;
+        agentSetupClaudeUseVertex.checked = !!config.useVertex;
+        agentSetupClaudeProject.value = config.vertexProjectId
+            || config.gcloudProject
+            || '';
+        agentSetupClaudeRegion.value = config.cloudMlRegion || 'global';
+        agentSetupClaudeNote.textContent = [
+            describeConfiguredSecrets(
+                'Saved auth',
+                [config.hasAnthropicApiKey ? 'ANTHROPIC_API_KEY' : '']
+            ),
+            config.hasGoogleCredentials
+                ? 'Google credentials file already configured.'
+                : '',
+            'Existing Claude login on this host will also be used if available.',
+            'Vertex works best with region set to global.'
+        ].filter(Boolean).join(' ');
+        updateClaudeSetupFields();
+    } else if (definition.id === 'copilot') {
+        agentSetupCopilot.hidden = false;
+        agentSetupCopilotNote.textContent =
+            'Install GitHub Copilot CLI on this host. The fastest path here is '
+            + '`gh copilot`, then relaunch the dropdown after the CLI is ready.';
+        agentSetupSave.hidden = true;
+        agentSetupReset.hidden = true;
+    } else {
+        agentSetupCopilot.hidden = false;
+        agentSetupCopilotNote.textContent =
+            'This agent does not expose additional setup in Tabminal yet.';
+        agentSetupSave.hidden = true;
+        agentSetupReset.hidden = true;
+    }
+
+    agentSetupModal.style.display = 'flex';
+}
+
+async function saveAgentSetupConfig() {
+    const { serverId, agentId } = agentSetupState;
+    const server = state.servers.get(serverId);
+    if (!server || !agentId) {
+        throw new Error('Agent setup context is unavailable');
+    }
+
+    const env = {};
+    const clearEnvKeys = [];
+
+    if (agentId === 'gemini') {
+        if (agentSetupGeminiKey.value.trim()) {
+            env.GEMINI_API_KEY = agentSetupGeminiKey.value.trim();
+        }
+        if (agentSetupGoogleKey.value.trim()) {
+            env.GOOGLE_API_KEY = agentSetupGoogleKey.value.trim();
+        }
+    } else if (agentId === 'claude') {
+        if (agentSetupClaudeKey.value.trim()) {
+            env.ANTHROPIC_API_KEY = agentSetupClaudeKey.value.trim();
+        }
+        if (agentSetupClaudeUseVertex.checked) {
+            env.CLAUDE_CODE_USE_VERTEX = '1';
+            if (agentSetupClaudeProject.value.trim()) {
+                const vertexProjectId = agentSetupClaudeProject.value.trim();
+                env.ANTHROPIC_VERTEX_PROJECT_ID = vertexProjectId;
+                env.GCLOUD_PROJECT = vertexProjectId;
+                env.GOOGLE_CLOUD_PROJECT = vertexProjectId;
+            }
+            if (agentSetupClaudeRegion.value.trim()) {
+                env.CLOUD_ML_REGION = agentSetupClaudeRegion.value.trim();
+            }
+            if (agentSetupClaudeCredentials.value.trim()) {
+                env.GOOGLE_APPLICATION_CREDENTIALS =
+                    agentSetupClaudeCredentials.value.trim();
+            }
+        } else {
+            clearEnvKeys.push(
+                'CLAUDE_CODE_USE_VERTEX',
+                'ANTHROPIC_VERTEX_PROJECT_ID',
+                'GCLOUD_PROJECT',
+                'GOOGLE_CLOUD_PROJECT',
+                'CLOUD_ML_REGION',
+                'GOOGLE_APPLICATION_CREDENTIALS'
+            );
+        }
+    }
+
+    const response = await server.fetch(`/api/agents/config/${agentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env, clearEnvKeys })
+    });
+    if (!response.ok) {
+        await throwResponseError(response, 'Failed to save agent setup');
+    }
+    const data = await response.json();
+    updateAgentDefinitions(serverId, data?.definitions);
+    server.agentStateLoaded = false;
+    await syncAgentsForServer(server, { force: true });
+    const retrySession = agentSetupState.retrySessionKey
+        ? state.sessions.get(agentSetupState.retrySessionKey) || null
+        : null;
+    const retryAgentTab = agentSetupState.retryAgentTabKey
+        ? state.agentTabs.get(agentSetupState.retryAgentTabKey) || null
+        : null;
+    const retryPromptText = agentSetupState.retryPromptText || '';
+    if (retrySession) {
+        try {
+            const nextAgentTab = await createAgentTab(retrySession, agentId, {
+                cwd: retryAgentTab?.cwd
+                    || retrySession.cwd
+                    || retrySession.initialCwd
+                    || '/',
+                modeId: retryAgentTab?.currentModeId || ''
+            });
+            closeAgentSetupModal();
+            if (nextAgentTab && retryPromptText) {
+                await nextAgentTab.sendPrompt(retryPromptText);
+                nextAgentTab.busy = true;
+                nextAgentTab.status = 'running';
+                nextAgentTab.notifyUi();
+            }
+            return;
+        } catch (error) {
+            const nextDefinition = getAgentDefinition(serverId, agentId);
+            if (nextDefinition) {
+                openAgentSetupModal(nextDefinition, serverId, {
+                    sessionKey: agentSetupState.retrySessionKey,
+                    agentTabKey: agentSetupState.retryAgentTabKey,
+                    promptText: retryPromptText,
+                    anchor: agentSetupState.retryAnchor,
+                    message: error.message || 'Saved, but failed to start agent.'
+                });
+                return;
+            }
+        }
+    }
+    const nextDefinition = getAgentDefinition(serverId, agentId);
+    if (nextDefinition) {
+        openAgentSetupModal(nextDefinition, serverId, {
+            sessionKey: agentSetupState.retrySessionKey,
+            agentTabKey: agentSetupState.retryAgentTabKey,
+            promptText: retryPromptText,
+            anchor: agentSetupState.retryAnchor,
+            message: 'Saved. You can start the agent now.'
+        });
+    } else {
+        closeAgentSetupModal();
+    }
+}
+
+async function resetAgentSetupConfig() {
+    const { serverId, agentId } = agentSetupState;
+    const server = state.servers.get(serverId);
+    if (!server || !agentId) {
+        throw new Error('Agent setup context is unavailable');
+    }
+    const response = await server.fetch(`/api/agents/config/${agentId}`, {
+        method: 'DELETE'
+    });
+    if (!response.ok) {
+        await throwResponseError(response, 'Failed to reset agent setup');
+    }
+    const data = await response.json();
+    updateAgentDefinitions(serverId, data?.definitions);
+    server.agentStateLoaded = false;
+    await syncAgentsForServer(server, { force: true });
+    const nextDefinition = getAgentDefinition(serverId, agentId);
+    if (nextDefinition) {
+        openAgentSetupModal(nextDefinition, serverId, {
+            message: 'Saved setup removed.'
+        });
+    } else {
+        closeAgentSetupModal();
+    }
+}
+
+function shouldOpenAgentSetupForError(definition, message = '') {
+    if (!definition || !message) return false;
+    if (definition.id === 'gemini') {
+        return /api key|google_api_key|gemini_api_key/i.test(message);
+    }
+    if (definition.id === 'claude') {
+        return /claude|anthropic|vertex|auth|login|credential|api key/i.test(
+            message
+        );
+    }
+    if (definition.id === 'copilot') {
+        return /copilot|not installed/i.test(message);
+    }
+    return false;
+}
+
 function openAgentDropdown(session, anchor) {
     if (!session || !anchor) return;
     const definitions = getAgentDefinitionsForServer(session.serverId);
@@ -2098,9 +2479,10 @@ function openAgentDropdown(session, anchor) {
         button.onclick = async (event) => {
             event.stopPropagation();
             if (definition.available === false) {
-                alert(buildAgentSetupMessage(definition), {
-                    type: 'warning',
-                    title: 'Agent setup'
+                closeAgentDropdown();
+                openAgentSetupModal(definition, session.serverId, {
+                    sessionKey: session.key,
+                    anchor
                 });
                 return;
             }
@@ -2114,10 +2496,19 @@ function openAgentDropdown(session, anchor) {
                     refreshWorkspaceIfSessionActive(session);
                 }
             } catch (error) {
-                alert(error.message, {
-                    type: 'error',
-                    title: 'Agent'
-                });
+                if (shouldOpenAgentSetupForError(definition, error.message)) {
+                    closeAgentDropdown();
+                    openAgentSetupModal(definition, session.serverId, {
+                        sessionKey: session.key,
+                        anchor,
+                        message: error.message
+                    });
+                } else {
+                    alert(error.message, {
+                        type: 'error',
+                        title: 'Agent'
+                    });
+                }
             } finally {
                 button.disabled = definition.available === false;
             }
@@ -2737,6 +3128,11 @@ class AgentTab {
     }
 
     async sendPrompt(text) {
+        const baseline = {
+            messageCount: this.messages.length,
+            toolCount: this.toolCalls.size,
+            permissionCount: this.permissions.size
+        };
         const response = await this.server.fetch(
             `/api/agents/tabs/${this.id}/prompt`,
             {
@@ -2749,6 +3145,31 @@ class AgentTab {
             await throwResponseError(response, 'Failed to send prompt');
         }
         await syncAgentsForServer(this.server, { force: true });
+        void this.#reconcilePromptStart(baseline);
+    }
+
+    async #reconcilePromptStart(baseline, timeoutMs = 4000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            await new Promise((resolve) => {
+                setTimeout(resolve, 200);
+            });
+            await syncAgentsForServer(this.server, { force: true });
+            const current = state.agentTabs.get(this.key);
+            if (!current) {
+                return;
+            }
+            if (current.errorMessage || !current.busy) {
+                return;
+            }
+            if (
+                current.messages.length > baseline.messageCount
+                || current.toolCalls.size > baseline.toolCount
+                || current.permissions.size > baseline.permissionCount
+            ) {
+                return;
+            }
+        }
     }
 
     async #waitForSettled(timeoutMs = 5000) {
@@ -3913,8 +4334,20 @@ function buildAgentDefinitionMeta(definition) {
             && definition.reason === 'API key missing') {
             return 'Set GEMINI_API_KEY or GOOGLE_API_KEY on this host';
         }
+        if (
+            definition.id === 'copilot'
+            && /gh copilot/i.test(definition.reason || '')
+        ) {
+            return 'Run gh copilot once on this host to install Copilot CLI';
+        }
+        if (
+            definition.id === 'copilot'
+            && /gh-copilot/i.test(definition.reason || '')
+        ) {
+            return 'Install the gh-copilot extension, then run gh copilot';
+        }
         if (definition.reason === 'not installed') {
-            return `Install or expose: ${definition.commandLabel}`;
+            return `Install or expose: ${definition.setupCommandLabel || definition.commandLabel}`;
         }
         return definition.reason || 'Unavailable';
     }
@@ -3941,16 +4374,23 @@ function buildAgentSetupMessage(definition) {
             + 'of those variables in the service environment, then restart '
             + 'this host.';
     }
+    if (definition.id === 'copilot') {
+        return 'GitHub Copilot CLI needs local setup before ACP can run. '
+            + 'If you use GitHub CLI, install the gh-copilot extension and '
+            + 'run `gh copilot` once to download/setup the CLI. Otherwise, '
+            + 'expose a standalone `copilot` binary in PATH, then reopen '
+            + 'this dropdown.';
+    }
     if (definition.reason === 'not installed') {
-        return `Install or expose ${definition.commandLabel} on the current `
+        return `Install or expose ${definition.setupCommandLabel || definition.commandLabel} on the current `
             + 'host, then restart Tabminal.';
     }
     if (definition.id === 'claude') {
         return 'Claude Code can run here with an existing Claude login, '
             + 'ANTHROPIC_API_KEY, or Vertex auth. For Vertex, start '
             + 'Tabminal with CLAUDE_CODE_USE_VERTEX=1, '
-            + 'ANTHROPIC_VERTEX_PROJECT_ID, CLOUD_ML_REGION, and Google '
-            + 'Cloud credentials in the host environment.';
+            + 'ANTHROPIC_VERTEX_PROJECT_ID, CLOUD_ML_REGION=global, and '
+            + 'Google Cloud credentials in the host environment.';
     }
     return definition.reason || 'This agent is not ready on the current host.';
 }
@@ -5839,6 +6279,70 @@ if (loginForm && passwordInput) {
             await initApp();
         } catch (err) {
             console.error(err);
+        }
+    });
+}
+
+if (
+    agentSetupModal
+    && agentSetupForm
+    && agentSetupCancel
+    && agentSetupReset
+    && agentSetupClaudeUseVertex
+) {
+    agentSetupCancel.addEventListener('click', () => {
+        closeAgentSetupModal();
+    });
+
+    agentSetupModal.addEventListener('click', (event) => {
+        if (event.target === agentSetupModal) {
+            closeAgentSetupModal();
+        }
+    });
+
+    agentSetupModal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeAgentSetupModal();
+        }
+    });
+
+    agentSetupClaudeUseVertex.addEventListener('change', () => {
+        updateClaudeSetupFields();
+    });
+
+    agentSetupReset.addEventListener('click', async () => {
+        agentSetupReset.disabled = true;
+        agentSetupSave.disabled = true;
+        setAgentSetupFeedback('');
+        try {
+            await resetAgentSetupConfig();
+        } catch (error) {
+            setAgentSetupFeedback(
+                error.message || 'Failed to reset setup.',
+                'error'
+            );
+        } finally {
+            agentSetupReset.disabled = false;
+            agentSetupSave.disabled = false;
+        }
+    });
+
+    agentSetupForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        agentSetupReset.disabled = true;
+        agentSetupSave.disabled = true;
+        setAgentSetupFeedback('');
+        try {
+            await saveAgentSetupConfig();
+        } catch (error) {
+            setAgentSetupFeedback(
+                error.message || 'Failed to save setup.',
+                'error'
+            );
+        } finally {
+            agentSetupReset.disabled = false;
+            agentSetupSave.disabled = false;
         }
     });
 }

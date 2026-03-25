@@ -8,6 +8,7 @@ const SESSIONS_DIR = path.join(BASE_DIR, 'sessions');
 const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
 const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');
 const AGENT_TABS_FILE = path.join(BASE_DIR, 'agent-tabs.json');
+const AGENT_CONFIG_FILE = path.join(BASE_DIR, 'agent-config.json');
 const getSessionSnapshotPath = (id) => path.join(SESSIONS_DIR, `${id}.snapshot`);
 
 // Ensure directories exist
@@ -250,6 +251,53 @@ export const saveAgentTabs = async (tabs) => {
         await fs.writeFile(AGENT_TABS_FILE, JSON.stringify(payload, null, 2));
     } catch (e) {
         console.error('[Persistence] Failed to save agent tabs:', e);
+        throw e;
+    }
+};
+
+// --- ACP Agent Config Persistence ---
+
+function normalizeAgentEnv(env) {
+    if (!env || typeof env !== 'object') return {};
+    const normalized = {};
+    for (const [key, value] of Object.entries(env)) {
+        if (typeof key !== 'string' || !key.trim()) continue;
+        normalized[key.trim()] = typeof value === 'string' ? value : '';
+    }
+    return normalized;
+}
+
+function normalizeAgentConfigs(configs) {
+    if (!configs || typeof configs !== 'object') return {};
+    const normalized = {};
+    for (const [agentId, entry] of Object.entries(configs)) {
+        if (typeof agentId !== 'string' || !agentId.trim()) continue;
+        normalized[agentId.trim()] = {
+            env: normalizeAgentEnv(entry?.env)
+        };
+    }
+    return normalized;
+}
+
+export const loadAgentConfigs = async () => {
+    await init();
+    try {
+        const content = await fs.readFile(AGENT_CONFIG_FILE, 'utf-8');
+        const parsed = JSON.parse(content);
+        return normalizeAgentConfigs(parsed?.agents || parsed);
+    } catch {
+        return {};
+    }
+};
+
+export const saveAgentConfigs = async (configs) => {
+    await init();
+    const normalized = normalizeAgentConfigs(configs);
+    const payload = { agents: normalized };
+    try {
+        await fs.writeFile(AGENT_CONFIG_FILE, JSON.stringify(payload, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save agent configs:', e);
         throw e;
     }
 };
