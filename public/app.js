@@ -8380,12 +8380,18 @@ async function syncAgentsForServer(server, { force = false } = {}) {
         }
     }
 
-    if (activeSession && activeSession.serverId === server.id) {
-        const activeKey = editorManager.getActiveWorkspaceTabKey(activeSession);
-        if (activeKey) {
-            restoreWorkspaceForSession(activeSession);
-            return;
+    if (activeSession) {
+        if (activeSession.serverId === server.id) {
+            const activeKey = editorManager.getActiveWorkspaceTabKey(
+                activeSession
+            );
+            if (activeKey) {
+                restoreWorkspaceForSession(activeSession);
+            } else if (state.activeSessionKey === activeSession.key) {
+                editorManager.updateEditorPaneVisibility();
+            }
         }
+        return;
     }
 
     const preferredSession = sessions.find((session) => {
