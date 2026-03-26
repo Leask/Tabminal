@@ -106,6 +106,7 @@ const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
+const MANAGED_TERMINAL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 12h.01"></path><path d="M12 9v6"></path><path d="M9 12h6"></path><path d="M18 8v2"></path><path d="M19 9h-2"></path></svg>';
 const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5a2 2 0 1 1 4 0"></path><path d="M5 16a7 7 0 1 0 14 0"></path><path d="M4 16h16"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg>';
 const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
 const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.49"></path></svg>';
@@ -113,6 +114,16 @@ const CHEVRON_DOWN_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" s
 const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="m9 15 3-3 3 3"></path></svg>';
 const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
+const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
+    + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
+    + 'monospace';
+const MAIN_TERMINAL_THEME = {
+    background: '#002b36',
+    foreground: '#839496',
+    cursor: '#93a1a1',
+    cursorAccent: '#002b36',
+    selectionBackground: '#073642'
+};
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -153,6 +164,16 @@ function isFileWorkspaceTabKey(key) {
 
 function isCompactWorkspaceMode() {
     return !!window.__tabminalCompactWorkspaceMode;
+}
+
+function getTerminalFontSize() {
+    return IS_MOBILE ? 14 : 12;
+}
+
+function buildMainTerminalTheme() {
+    return {
+        ...MAIN_TERMINAL_THEME
+    };
 }
 
 function workspaceKeyToFilePath(key) {
@@ -2552,11 +2573,36 @@ class EditorManager {
             terminal.terminalId || section?.terminalId || ''
         );
 
+        const header = document.createElement('div');
+        header.className = 'agent-tool-call-terminal-header';
+
         const meta = document.createElement('div');
         meta.className = 'agent-tool-call-terminal-meta';
         meta.textContent = buildAgentTerminalMetaText(terminal);
         if (meta.textContent) {
-            host.appendChild(meta);
+            header.appendChild(meta);
+        }
+
+        if (terminal.terminalSessionId) {
+            const openButton = document.createElement('button');
+            openButton.type = 'button';
+            openButton.className = 'agent-tool-call-terminal-open';
+            openButton.textContent = 'Open in Terminal';
+            openButton.addEventListener('click', async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const agentTab = getActiveAgentTab();
+                if (!agentTab) return;
+                await jumpToTerminalSession(
+                    agentTab.server,
+                    terminal.terminalSessionId
+                );
+            });
+            header.appendChild(openButton);
+        }
+
+        if (header.childElementCount > 0) {
+            host.appendChild(header);
         }
 
         const terminalNode = document.createElement('div');
@@ -2573,17 +2619,10 @@ class EditorManager {
             convertEol: true,
             cursorBlink: false,
             cursorStyle: 'bar',
-            theme: {
-                background: 'rgba(0, 43, 54, 0.32)',
-                foreground: '#93a1a1',
-                cursor: '#93a1a1',
-                selectionBackground: 'rgba(38, 139, 210, 0.24)'
-            },
+            theme: buildMainTerminalTheme(),
             scrollback: 2000,
-            fontSize: IS_MOBILE ? 14 : 12,
-            fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", "
-                + '"SFMono-Regular", "SF Mono", '
-                + '"JetBrains Mono", Menlo, Consolas, monospace'
+            fontSize: getTerminalFontSize(),
+            fontFamily: TERMINAL_FONT_FAMILY
         });
         const fitAddon = new FitAddon();
         embeddedTerm.loadAddon(fitAddon);
@@ -3841,6 +3880,9 @@ class Session {
         this.env = data.env || '';
         this.cols = data.cols || 80;
         this.rows = data.rows || 24;
+        this.managed = normalizeManagedSessionMeta(data.managed);
+        this.closed = !!data.closed;
+        this.exitStatus = data.exitStatus || null;
         
         this.saveStateTimer = null;
         this.runningCommand = '';
@@ -3913,17 +3955,11 @@ class Session {
             allowTransparency: true,
             convertEol: true,
             cursorBlink: true,
-            fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", \"SFMono-Regular\", \"SF Mono\", \"JetBrains Mono\", Menlo, Consolas, monospace",
-            fontSize: IS_MOBILE ? 14 : 12,
+            fontFamily: TERMINAL_FONT_FAMILY,
+            fontSize: getTerminalFontSize(),
             rows: this.rows,
             cols: this.cols,
-            theme: {
-                background: '#002b36',
-                foreground: '#839496',
-                cursor: '#93a1a1',
-                cursorAccent: '#002b36',
-                selectionBackground: '#073642'
-            }
+            theme: buildMainTerminalTheme()
         });
         this.mainFitAddon = new FitAddon();
         this.mainLinksAddon = new WebLinksAddon();
@@ -3985,6 +4021,24 @@ class Session {
 
     update(data) {
         let changed = false;
+        const nextManaged = normalizeManagedSessionMeta(data.managed);
+        if (
+            JSON.stringify(nextManaged) !== JSON.stringify(this.managed || null)
+        ) {
+            this.managed = nextManaged;
+            changed = true;
+        }
+        if (!!data.closed !== this.closed) {
+            this.closed = !!data.closed;
+            changed = true;
+        }
+        if (
+            JSON.stringify(data.exitStatus || null)
+            !== JSON.stringify(this.exitStatus || null)
+        ) {
+            this.exitStatus = data.exitStatus || null;
+            changed = true;
+        }
         if (data.title && data.title !== this.title) {
             this.title = data.title;
             changed = true;
@@ -4059,6 +4113,8 @@ class Session {
         const tab = tabListEl.querySelector(`[data-session-key="${this.key}"]`);
         if (!tab) return;
 
+        tab.classList.toggle('agent-managed-session', isAgentManagedSession(this));
+
         if (this.env) {
             tab.title = this.env;
         }
@@ -4074,7 +4130,9 @@ class Session {
         const titleIconEl = tab.querySelector('.tab-status-icon');
         applyStatusIconState(
             titleIconEl,
-            TERMINAL_TAB_ICON_SVG,
+            isAgentManagedSession(this)
+                ? MANAGED_TERMINAL_ICON_SVG
+                : TERMINAL_TAB_ICON_SVG,
             getSessionTerminalIndicatorState(this)
         );
 
@@ -4095,6 +4153,26 @@ class Session {
         const serverEl = tab.querySelector('.meta-server');
         if (serverEl) {
             renderSessionHostMeta(serverEl, this);
+        }
+
+        const metaTimeEl = tab.querySelector('.meta-time');
+        if (metaTimeEl) {
+            if (isAgentManagedSession(this)) {
+                metaTimeEl.textContent = `MANAGED: ${getManagedSessionLabel(this)}`;
+                metaTimeEl.classList.add('meta-managed');
+            } else {
+                const d = new Date(this.createdAt);
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                let hh = d.getHours();
+                const min = String(d.getMinutes()).padStart(2, '0');
+                const ampm = hh >= 12 ? 'PM' : 'AM';
+                hh = hh % 12;
+                hh = hh ? hh : 12;
+                const hhStr = String(hh).padStart(2, '0');
+                metaTimeEl.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
+                metaTimeEl.classList.remove('meta-managed');
+            }
         }
     }
 
@@ -4182,7 +4260,29 @@ class Session {
                 this.update(message);
                 break;
             case 'status':
-                if (state.activeSessionKey === this.key) setStatus(this.server, message.status);
+                if (message.status === 'terminated') {
+                    this.closed = true;
+                    if (isAgentManagedSession(this) && !isTerminalViewVisible(this)) {
+                        this.needsAttention = true;
+                        alert(
+                            `${this.title} finished under ${getManagedSessionLabel(this)}.`,
+                            {
+                                type: 'success',
+                                title: 'Managed Terminal'
+                            }
+                        );
+                    }
+                }
+                if (
+                    !isAgentManagedSession(this)
+                    && state.activeSessionKey === this.key
+                ) {
+                    setStatus(this.server, message.status);
+                }
+                if (isTerminalViewVisible(this)) {
+                    this.needsAttention = false;
+                }
+                this.updateTabUI();
                 break;
             case 'execution':
                 this.handleExecutionMessage(message);
@@ -4727,6 +4827,7 @@ class AgentTab {
     #normalizeTerminalSummary(summary) {
         return {
             terminalId: String(summary?.terminalId || ''),
+            terminalSessionId: String(summary?.terminalSessionId || ''),
             command: typeof summary?.command === 'string'
                 ? summary.command
                 : '',
@@ -5184,6 +5285,11 @@ function applyStatusIconState(element, baseIconSvg, state = 'idle') {
 
 function getSessionTerminalIndicatorState(session) {
     if (!session) return 'idle';
+    if (isAgentManagedSession(session)) {
+        if (!session.closed) return 'running';
+        if (session.needsAttention) return 'attention';
+        return 'idle';
+    }
     if (session.runningCommand) return 'running';
     if (session.needsAttention) return 'attention';
     return 'idle';
@@ -5538,6 +5644,42 @@ function getAgentBaseName(agentTab) {
         ''
     ).trim();
     return cleaned || rawLabel || 'Agent';
+}
+
+function normalizeAgentDisplayName(label = 'Agent') {
+    const rawLabel = String(label || 'Agent').trim();
+    const cleaned = rawLabel.replace(
+        /\s+(CLI|Agent|Adapter)$/i,
+        ''
+    ).trim();
+    return cleaned || rawLabel || 'Agent';
+}
+
+function normalizeManagedSessionMeta(managed) {
+    if (!managed || typeof managed !== 'object') {
+        return null;
+    }
+    if (managed.kind !== 'agent-terminal') {
+        return null;
+    }
+    const agentLabel = normalizeAgentDisplayName(managed.agentLabel || 'Agent');
+    const terminalId = String(managed.terminalId || '').trim();
+    return {
+        kind: 'agent-terminal',
+        agentId: String(managed.agentId || '').trim(),
+        agentLabel,
+        acpSessionId: String(managed.acpSessionId || '').trim(),
+        terminalId
+    };
+}
+
+function isAgentManagedSession(session) {
+    return session?.managed?.kind === 'agent-terminal';
+}
+
+function getManagedSessionLabel(session) {
+    if (!isAgentManagedSession(session)) return '';
+    return normalizeAgentDisplayName(session.managed.agentLabel || 'Agent');
 }
 
 function buildAgentPromptPlaceholder(agentTab) {
@@ -7460,6 +7602,24 @@ function restoreWorkspaceForSession(session) {
     editorManager.updateEditorPaneVisibility();
 }
 
+async function jumpToTerminalSession(server, sessionId) {
+    const targetId = String(sessionId || '').trim();
+    if (!server || !targetId) return false;
+    const key = makeSessionKey(server.id, targetId);
+    if (!state.sessions.has(key)) {
+        await syncServer(server);
+    }
+    if (!state.sessions.has(key)) {
+        alert('Managed terminal session is no longer available.', {
+            type: 'warning',
+            title: 'Terminal'
+        });
+        return false;
+    }
+    await switchToSession(key, { scrollTabIntoView: true });
+    return true;
+}
+
 function upsertAgentTab(server, data) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
@@ -8624,6 +8784,9 @@ function createTabElement(session) {
     if (session.editorState && session.editorState.isVisible) {
         tab.classList.add('editor-open');
     }
+    if (isAgentManagedSession(session)) {
+        tab.classList.add('agent-managed-session');
+    }
     tab.dataset.sessionKey = session.key;
     
     const closeBtn = document.createElement('button');
@@ -8711,7 +8874,7 @@ function createTabElement(session) {
     renderSessionHostMeta(metaServer, session);
 
     const metaTime = document.createElement('div');
-    metaTime.className = 'meta';
+    metaTime.className = 'meta meta-time';
     
     const d = new Date(session.createdAt);
     const mm = String(d.getMonth() + 1).padStart(2, '0');

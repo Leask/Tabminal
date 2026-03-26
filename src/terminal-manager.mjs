@@ -95,49 +95,49 @@ export class TerminalManager {
         return next;
     }
 
-    createSession(restoredData = null) {
-        // Use ID from options if present, otherwise generate new
-        const id = (restoredData && restoredData.id) ? restoredData.id : crypto.randomUUID();
-        const shell = resolveShell();
-
-        // Use CWD from options if present, otherwise default
-        const initialCwd = (restoredData && restoredData.cwd)
-            ? restoredData.cwd
-            : (process.env.TABMINAL_CWD || os.homedir());
-
-        const env = { ...process.env };
-
-        // Inject shell tools
-        const shellToolsPath = path.join(process.cwd(), 'shell');
-        const pathDelimiter = path.delimiter;
-        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
-        const existingPath = env[pathKey];
-        env[pathKey] = existingPath
-            ? `${shellToolsPath}${pathDelimiter}${existingPath}`
-            : shellToolsPath;
-
-        let spawnShell = shell;
-        let args = [];
+    _createPtySession(options = {}) {
+        const id = options.id || crypto.randomUUID();
+        const shell = options.shell || resolveShell();
+        const initialCwd = options.cwd
+            || process.env.TABMINAL_CWD
+            || os.homedir();
+        const env = {
+            ...process.env,
+            ...(options.env || {})
+        };
+        let spawnShell = options.spawnCommand || shell;
+        let args = Array.isArray(options.spawnArgs) ? options.spawnArgs : [];
         let initDirPath = null;
 
-        try {
-            const shellName = path.basename(shell);
-            if (shellName === 'bash') {
-                clearBashPromptEnv(env);
-                const bootstrap = buildBashBootstrap({
-                    env,
-                    shell,
-                    shellToolsPath,
-                    sessionId: id
-                });
-                spawnShell = bootstrap.shell;
-                args = bootstrap.args;
-            } else if (shellName === 'zsh') {
-                initDirPath = path.join(os.tmpdir(), `tabminal-zsh-${id}`);
-                fs.mkdirSync(initDirPath, { recursive: true });
-                const initFilePath = path.join(initDirPath, '.zshrc');
+        if (!options.directSpawn) {
+            const shellToolsPath = path.join(process.cwd(), 'shell');
+            const pathDelimiter = path.delimiter;
+            const pathKey = Object.keys(env).find(
+                (key) => key.toLowerCase() === 'path'
+            ) || 'PATH';
+            const existingPath = env[pathKey];
+            env[pathKey] = existingPath
+                ? `${shellToolsPath}${pathDelimiter}${existingPath}`
+                : shellToolsPath;
 
-                const zshScript = `
+            try {
+                const shellName = path.basename(shell);
+                if (shellName === 'bash') {
+                    clearBashPromptEnv(env);
+                    const bootstrap = buildBashBootstrap({
+                        env,
+                        shell,
+                        shellToolsPath,
+                        sessionId: id
+                    });
+                    spawnShell = bootstrap.shell;
+                    args = bootstrap.args;
+                } else if (shellName === 'zsh') {
+                    initDirPath = path.join(os.tmpdir(), `tabminal-zsh-${id}`);
+                    fs.mkdirSync(initDirPath, { recursive: true });
+                    const initFilePath = path.join(initDirPath, '.zshrc');
+
+                    const zshScript = `
 unset ZDOTDIR
 [ -f ~/.zshrc ] && source ~/.zshrc
 export PATH="${shellToolsPath}:$PATH"
@@ -163,25 +163,26 @@ preexec_functions+=(_tabminal_zsh_preexec)
 precmd_functions+=(_tabminal_zsh_postexec)
 precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
 `;
-                fs.writeFileSync(initFilePath, zshScript);
-                env.ZDOTDIR = initDirPath;
-                args = ['-i'];
+                    fs.writeFileSync(initFilePath, zshScript);
+                    env.ZDOTDIR = initDirPath;
+                    args = ['-i'];
+                }
+            } catch (err) {
+                console.error('[Manager] Failed to create init script:', err);
             }
-        } catch (err) {
-            console.error('[Manager] Failed to create init script:', err);
         }
 
-        const cols = restoredData ? restoredData.cols : this.lastCols;
-        const rows = restoredData ? restoredData.rows : this.lastRows;
+        const cols = Number.isFinite(options.cols) ? options.cols : this.lastCols;
+        const rows = Number.isFinite(options.rows) ? options.rows : this.lastRows;
 
         let ptyProcess;
         try {
             const ptyOptions = {
                 name: 'xterm-256color',
-                cols: cols,
-                rows: rows,
+                cols,
+                rows,
                 cwd: initialCwd,
-                env: env
+                env
             };
             if (process.platform !== 'win32') {
                 ptyOptions.encoding = 'utf8';
@@ -213,17 +214,25 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
 
         const session = new TerminalSession(ptyProcess, {
             id,
-            historyLimit,
-            createdAt: restoredData ? new Date(restoredData.createdAt) : new Date(),
+            historyLimit: options.historyLimit ?? historyLimit,
+            createdAt: options.createdAt
+                ? new Date(options.createdAt)
+                : new Date(),
             manager: this,
             shell,
             initialCwd,
-            env: env,
-            editorState: restoredData ? restoredData.editorState : undefined,
-            executions: restoredData ? restoredData.executions : undefined
+            env,
+            title: options.title || '',
+            managed: options.managed || null,
+            persistent: options.persistent !== false,
+            removeOnExit: options.removeOnExit !== false,
+            enableAiHijack: options.enableAiHijack !== false,
+            enableTitlePolling: options.enableTitlePolling !== false,
+            editorState: options.editorState,
+            executions: options.executions
         });
 
-        if (restoredData) {
+        if (options.restoreSnapshot) {
             persistence.loadSessionSnapshot(id).then(async (snapshot) => {
                 if (!snapshot) return;
                 await session.restoreSnapshot(snapshot);
@@ -233,21 +242,70 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
 
         this.sessions.set(id, session);
 
-        // Initial save
-        void this.saveSessionState(session);
+        if (session.persistent) {
+            void this.saveSessionState(session);
+        }
 
         ptyProcess.onExit(() => {
-            void this.removeSession(id);
-            // Cleanup temp files
+            if (session.removeOnExit) {
+                void this.removeSession(id);
+            }
             try {
-                if (initDirPath && fs.existsSync(initDirPath)) fs.rmSync(initDirPath, { recursive: true, force: true });
-            } catch { /* ignore cleanup errors */ }
+                if (initDirPath && fs.existsSync(initDirPath)) {
+                    fs.rmSync(initDirPath, { recursive: true, force: true });
+                }
+            } catch {
+                // ignore cleanup errors
+            }
         });
         debugLog(`[Manager] Created session ${id}`);
         return session;
     }
 
+    createSession(restoredData = null) {
+        return this._createPtySession({
+            id: restoredData?.id,
+            shell: resolveShell(),
+            cwd: restoredData?.cwd,
+            cols: restoredData?.cols,
+            rows: restoredData?.rows,
+            createdAt: restoredData?.createdAt,
+            title: restoredData?.title,
+            editorState: restoredData?.editorState,
+            executions: restoredData?.executions,
+            restoreSnapshot: Boolean(restoredData),
+            persistent: true,
+            removeOnExit: true,
+            enableAiHijack: true,
+            enableTitlePolling: true
+        });
+    }
+
+    createManagedSession(options = {}) {
+        const spawnRequest = options.spawnRequest || {};
+        const shell = spawnRequest.command || resolveShell();
+        return this._createPtySession({
+            shell,
+            cwd: options.cwd,
+            env: options.env,
+            cols: options.cols,
+            rows: options.rows,
+            title: options.title || path.basename(shell) || 'Terminal',
+            directSpawn: true,
+            spawnCommand: spawnRequest.command,
+            spawnArgs: spawnRequest.args,
+            persistent: false,
+            removeOnExit: false,
+            enableAiHijack: false,
+            enableTitlePolling: false,
+            managed: options.managed || null
+        });
+    }
+
     saveSessionState(session) {
+        if (!session?.persistent) {
+            return Promise.resolve();
+        }
         if (this.sessions.get(session.id) !== session) {
             return Promise.resolve();
         }
@@ -272,13 +330,15 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             if (data.editorState) {
                 session.editorState = { ...session.editorState, ...data.editorState };
             }
-            this.saveSessionState(session);
+            if (session.persistent) {
+                this.saveSessionState(session);
+            }
         }
     }
 
     scheduleSnapshotPersist(id) {
         const session = this.sessions.get(id);
-        if (!session) return;
+        if (!session || !session.persistent) return;
 
         const existing = this.snapshotPersistTimers.get(id);
         if (existing) {
@@ -354,6 +414,9 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             env: s.env,
             cols: s.pty.cols,
             rows: s.pty.rows,
+            closed: !!s.closed,
+            exitStatus: s.exitStatus || null,
+            managed: s.managed || null,
             editorState: s.editorState,
             executions: s.executions
         }));

@@ -96,10 +96,17 @@ export class TerminalSession {
         this.id = options.id;
         this.manager = options.manager;
         this.createdAt = options.createdAt ?? new Date();
+        this.updatedAt = this.createdAt;
         this.shell = options.shell;
         this.initialCwd = options.initialCwd;
+        this.managed = options.managed || null;
+        this.persistent = options.persistent !== false;
+        this.removeOnExit = options.removeOnExit !== false;
+        this.enableAiHijack = options.enableAiHijack !== false;
+        this.enableTitlePolling = options.enableTitlePolling !== false;
 
-        this.title = this.shell ? this.shell.split('/').pop() : 'Terminal';
+        this.title = options.title
+            || (this.shell ? this.shell.split('/').pop() : 'Terminal');
         this.cwd = this.initialCwd;
         this.inputBuffer = '';
 
@@ -116,6 +123,9 @@ export class TerminalSession {
         this.clients = new Set();
         this.pendingClients = new Map();
         this.closed = false;
+        this.exitStatus = null;
+        this.exitWaiters = [];
+        this.stateListeners = new Set();
         this.pollingInterval = null;
         this.captureBuffer = '';
         this.captureStartedAt = null;
@@ -154,7 +164,9 @@ export class TerminalSession {
                     const newTitle = s.substring(2);
                     if (newTitle && newTitle !== this.title) {
                         this.title = newTitle;
+                        this.updatedAt = new Date();
                         this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
+                        this._emitStateChange();
                     }
                 } else if (s.startsWith('7;')) {
                     try {
@@ -163,7 +175,9 @@ export class TerminalSession {
                             const newCwd = decodeURIComponent(url.pathname);
                             if (newCwd !== this.cwd) {
                                 this.cwd = newCwd;
+                                this.updatedAt = new Date();
                                 this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
+                                this._emitStateChange();
                             }
                         }
                     } catch { /* ignore */ }
@@ -219,27 +233,43 @@ export class TerminalSession {
 
             this._appendSnapshotData(cleaned);
             this._appendHistory(cleaned);
+            this.updatedAt = new Date();
             this.ansiParser.parse(cleaned);
             if (this.manager?.scheduleSnapshotPersist) {
                 this.manager.scheduleSnapshotPersist(this.id);
             }
             this._broadcast({ type: 'output', data: cleaned });
+            this._emitStateChange();
         };
 
         this._handleExit = (details) => {
             this.closed = true;
+            this.exitStatus = {
+                exitCode: Number.isFinite(details?.exitCode)
+                    ? details.exitCode
+                    : null,
+                signal: details?.signal ?? null
+            };
+            this.updatedAt = new Date();
             this.stopTitlePolling();
             this._broadcast({
                 type: 'status',
                 status: 'terminated',
-                code: details?.exitCode ?? 0,
-                signal: details?.signal ?? null
+                code: this.exitStatus.exitCode ?? 0,
+                signal: this.exitStatus.signal
             });
+            this._emitStateChange();
+            for (const waiter of this.exitWaiters) {
+                waiter(this.exitStatus);
+            }
+            this.exitWaiters.length = 0;
         };
 
         this.dataSubscription = this.pty.onData(this._handleData);
         this.exitSubscription = this.pty.onExit(this._handleExit);
-        this.startTitlePolling();
+        if (this.enableTitlePolling) {
+            this.startTitlePolling();
+        }
     }
 
     startTitlePolling() {
@@ -327,7 +357,9 @@ export class TerminalSession {
                     if (titleChanged) this.title = newTitle;
                     if (envChanged) this.env = newEnv;
                     if (cwdChanged) this.cwd = newCwd;
+                    this.updatedAt = new Date();
                     this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols: this.pty.cols, rows: this.pty.rows });
+                    this._emitStateChange();
                 }
             } catch { /* ignore */ }
         };
@@ -376,8 +408,37 @@ export class TerminalSession {
             this.manager.scheduleSnapshotPersist(this.id);
         }
         this._broadcast({ type: 'meta', title: this.title, cwd: this.cwd, env: this.env, cols, rows });
+        this.updatedAt = new Date();
+        this._emitStateChange();
         if (this.manager && this.manager.saveSessionState) {
             this.manager.saveSessionState(this);
+        }
+    }
+
+    waitForExit() {
+        if (this.exitStatus) {
+            return Promise.resolve(this.exitStatus);
+        }
+        return new Promise((resolve) => {
+            this.exitWaiters.push(resolve);
+        });
+    }
+
+    onStateChange(listener) {
+        if (typeof listener !== 'function') return () => {};
+        this.stateListeners.add(listener);
+        return () => {
+            this.stateListeners.delete(listener);
+        };
+    }
+
+    _emitStateChange() {
+        for (const listener of this.stateListeners) {
+            try {
+                listener(this);
+            } catch {
+                // Ignore state listener failures.
+            }
         }
     }
 
@@ -440,7 +501,7 @@ export class TerminalSession {
         }
 
         let startIndex = 0;
-        const aiEnabled = this._isAiEnabled();
+        const aiEnabled = this.enableAiHijack && this._isAiEnabled();
         for (let i = 0; i < data.length; i++) {
             const char = data[i];
 
@@ -1132,6 +1193,8 @@ export class TerminalSession {
         if (this.manager) {
             this.manager.saveSessionState(this);
         }
+        this.updatedAt = new Date();
+        this._emitStateChange();
     }
 
     _broadcast(message) {
@@ -1153,10 +1216,12 @@ export class TerminalSession {
         if (!text) return;
         this._appendSnapshotData(text);
         this._appendHistory(text);
+        this.updatedAt = new Date();
         if (this.manager?.scheduleSnapshotPersist) {
             this.manager.scheduleSnapshotPersist(this.id);
         }
         this._broadcast({ type: 'output', data: text });
+        this._emitStateChange();
     }
 
     _queueSnapshotMutation(mutate) {

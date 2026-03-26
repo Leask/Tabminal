@@ -202,3 +202,54 @@ test("temporary HOME does not inherit host prompt command", async () => {
         }
     }
 });
+
+test("managed sessions stay attachable until explicitly removed", async () => {
+    const manager = new TerminalManager();
+    const cwd = "/Users/leask/Documents/Tabminal";
+    let session = null;
+    try {
+        session = manager.createManagedSession({
+            cwd,
+            spawnRequest: {
+                command: "/bin/bash",
+                args: ["-lc", 'printf "managed\\n"']
+            },
+            managed: {
+                kind: "agent-terminal",
+                agentId: "test-agent",
+                agentLabel: "ACP Test Agent",
+                acpSessionId: "acp-session-1",
+                terminalId: "acp-terminal-1"
+            }
+        });
+
+        const exitStatus = await session.waitForExit();
+        assert.strictEqual(exitStatus.exitCode, 0);
+        await delay(150);
+
+        const listed = manager.listSessions().find(
+            (item) => item.id === session.id
+        );
+        assert.ok(listed, "managed session should remain listed after exit");
+        assert.strictEqual(listed.cwd, cwd);
+        assert.strictEqual(listed.closed, true);
+        assert.strictEqual(listed.exitStatus?.exitCode, 0);
+        assert.strictEqual(listed.managed?.kind, "agent-terminal");
+        assert.strictEqual(listed.managed?.agentLabel, "ACP Test Agent");
+
+        const sessionsDir = path.join(os.homedir(), ".tabminal", "sessions");
+        const jsonPath = path.join(sessionsDir, `${session.id}.json`);
+        await assert.rejects(fs.stat(jsonPath), { code: "ENOENT" });
+
+        await manager.removeSession(session.id);
+        session = null;
+
+        const removed = manager.listSessions().find((item) => item.id === listed.id);
+        assert.strictEqual(removed, undefined);
+    } finally {
+        if (session) {
+            await manager.removeSession(session.id);
+        }
+        manager.dispose();
+    }
+});

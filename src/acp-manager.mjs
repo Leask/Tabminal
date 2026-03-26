@@ -945,6 +945,98 @@ class LocalExecTerminal extends EventEmitter {
     }
 }
 
+class ManagedTerminalSession extends EventEmitter {
+    constructor(request, terminalManager, agentMeta = {}) {
+        super();
+        this.id = crypto.randomUUID();
+        this.sessionId = String(request.sessionId || '');
+        this.cwd = request.cwd || process.cwd();
+        this.outputByteLimit = Math.max(
+            1024,
+            request.outputByteLimit || DEFAULT_TERMINAL_OUTPUT_LIMIT
+        );
+        const env = normalizeEnvList(request.env);
+        this.spawnRequest = buildTerminalSpawnRequest(request);
+        this.command = formatTerminalDisplayCommand(request, this.spawnRequest);
+        this.released = false;
+        this.managedBy = {
+            kind: 'agent-terminal',
+            agentId: String(agentMeta.agentId || '').trim(),
+            agentLabel: String(agentMeta.agentLabel || 'Agent').trim(),
+            acpSessionId: this.sessionId,
+            terminalId: this.id
+        };
+        this.terminalSession = terminalManager.createManagedSession({
+            cwd: this.cwd,
+            env,
+            spawnRequest: this.spawnRequest,
+            title: path.basename(this.spawnRequest.command || '') || 'Terminal',
+            managed: this.managedBy
+        });
+        this.terminalSessionId = this.terminalSession.id;
+        this.unsubscribe = this.terminalSession.onStateChange(() => {
+            this.emit('update', this.currentSummary());
+        });
+    }
+
+    currentOutput() {
+        return {
+            output: truncateUtf8(
+                this.terminalSession.history || '',
+                this.outputByteLimit
+            ),
+            exitStatus: this.terminalSession.exitStatus
+        };
+    }
+
+    currentSummary() {
+        return {
+            terminalId: this.id,
+            sessionId: this.sessionId,
+            terminalSessionId: this.terminalSessionId,
+            command: this.command,
+            cwd: this.terminalSession.cwd || this.cwd,
+            output: truncateUtf8(
+                this.terminalSession.history || '',
+                this.outputByteLimit
+            ),
+            exitStatus: this.terminalSession.exitStatus,
+            createdAt: this.terminalSession.createdAt instanceof Date
+                ? this.terminalSession.createdAt.toISOString()
+                : new Date(this.terminalSession.createdAt || Date.now())
+                    .toISOString(),
+            updatedAt: this.terminalSession.updatedAt instanceof Date
+                ? this.terminalSession.updatedAt.toISOString()
+                : new Date(this.terminalSession.updatedAt || Date.now())
+                    .toISOString(),
+            running: !this.terminalSession.exitStatus,
+            released: this.released
+        };
+    }
+
+    waitForExit() {
+        return this.terminalSession.waitForExit();
+    }
+
+    kill() {
+        if (!this.terminalSession.closed) {
+            this.terminalSession.pty.kill('SIGTERM');
+        }
+        return {};
+    }
+
+    async release({ destroy = false } = {}) {
+        this.released = true;
+        this.unsubscribe?.();
+        this.unsubscribe = null;
+        if (destroy) {
+            await this.terminalSession.manager?.removeSession?.(
+                this.terminalSession.id
+            );
+        }
+    }
+}
+
 class AcpRuntime extends EventEmitter {
     constructor(definition, options = {}) {
         super();
@@ -954,6 +1046,7 @@ class AcpRuntime extends EventEmitter {
         this.runtimeKey = makeRuntimeKey(definition.id, this.cwd);
         this.runtimeStoreKey = options.runtimeStoreKey || this.runtimeKey;
         this.env = options.env || process.env;
+        this.terminalManager = options.terminalManager || null;
         this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
         this.connection = null;
         this.process = null;
@@ -1739,7 +1832,7 @@ class AcpRuntime extends EventEmitter {
         clearTimeout(this.idleTimer);
         this.idleTimer = null;
         for (const terminal of this.terminals.values()) {
-            await terminal.release().catch(() => {});
+            await terminal.release({ destroy: true }).catch(() => {});
         }
         this.terminals.clear();
         for (const tabId of Array.from(this.tabs.keys())) {
@@ -2106,9 +2199,14 @@ class AcpRuntime extends EventEmitter {
     }
 
     async #createTerminal(params) {
-        const terminal = new LocalExecTerminal(params);
-        this.terminals.set(terminal.id, terminal);
         const tab = this.#getTabBySession(params.sessionId);
+        const terminal = this.terminalManager
+            ? new ManagedTerminalSession(params, this.terminalManager, {
+                agentId: tab?.agentId || this.definition.id,
+                agentLabel: tab?.agentLabel || this.definition.label
+            })
+            : new LocalExecTerminal(params);
+        this.terminals.set(terminal.id, terminal);
         if (tab) {
             const syncSummary = (summary) => {
                 tab.terminals.set(terminal.id, {
@@ -2124,6 +2222,26 @@ class AcpRuntime extends EventEmitter {
             terminal.on('update', syncSummary);
         }
         return { terminalId: terminal.id };
+    }
+
+    async releaseManagedTerminalSession(
+        terminalSessionId,
+        options = {}
+    ) {
+        const targetSessionId = String(terminalSessionId || '').trim();
+        if (!targetSessionId) return false;
+        for (const [terminalId, terminal] of this.terminals.entries()) {
+            if (terminal?.terminalSessionId !== targetSessionId) continue;
+            await terminal.release({ destroy: options.destroy !== false });
+            if (options.destroy !== false) {
+                this.terminals.delete(terminalId);
+            }
+            this.#syncTerminalSummary(terminal.sessionId, terminal, {
+                released: true
+            });
+            return true;
+        }
+        return false;
     }
 
     async #terminalOutput(params) {
@@ -2163,7 +2281,6 @@ class AcpRuntime extends EventEmitter {
         }
         await terminal.release();
         this.#syncTerminalSummary(params.sessionId, terminal, { released: true });
-        this.terminals.delete(params.terminalId);
         return {};
     }
 
@@ -2229,6 +2346,7 @@ class AcpRuntime extends EventEmitter {
 export class AcpManager {
     constructor(options = {}) {
         this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
+        this.terminalManager = options.terminalManager || null;
         this.runtimeFactory = options.runtimeFactory || (
             (definition, runtimeOptions) =>
                 new AcpRuntime(definition, runtimeOptions)
@@ -2538,6 +2656,7 @@ export class AcpManager {
                 cwd,
                 idleTimeoutMs: this.idleTimeoutMs,
                 runtimeStoreKey,
+                terminalManager: this.terminalManager,
                 env: mergeDefinitionEnv(
                     definition,
                     this.getAgentConfig(definition.id)
@@ -2645,6 +2764,7 @@ export class AcpManager {
                     cwd,
                     idleTimeoutMs: this.idleTimeoutMs,
                     runtimeStoreKey,
+                    terminalManager: this.terminalManager,
                     env: mergeDefinitionEnv(definition, agentConfig)
                 });
                 runtimeEntry = {
@@ -2785,6 +2905,28 @@ export class AcpManager {
         for (const id of ids) {
             await this.closeTab(id);
         }
+    }
+
+    async releaseManagedTerminalSession(
+        terminalSessionId,
+        options = {}
+    ) {
+        const targetSessionId = String(terminalSessionId || '').trim();
+        if (!targetSessionId) return false;
+        for (const runtimeEntry of this.runtimes.values()) {
+            if (
+                typeof runtimeEntry.runtime.releaseManagedTerminalSession
+                !== 'function'
+            ) {
+                continue;
+            }
+            const released = await runtimeEntry.runtime
+                .releaseManagedTerminalSession(targetSessionId, options);
+            if (released) {
+                return true;
+            }
+        }
+        return false;
     }
 
     async dispose({ preserveTabs = true } = {}) {

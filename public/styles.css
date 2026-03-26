@@ -636,6 +636,16 @@ body {
     background-color: rgba(38, 139, 210, 0.15);
 }
 
+.tab-item.agent-managed-session {
+    border-color: rgba(42, 161, 152, 0.55);
+    background-color: rgba(42, 161, 152, 0.08);
+}
+
+.tab-item.agent-managed-session.active {
+    border-color: rgba(42, 161, 152, 0.9);
+    background-color: rgba(42, 161, 152, 0.16);
+}
+
 .close-tab-button {
     position: absolute;
     top: 4px;
@@ -734,6 +744,11 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.2;
+}
+
+.tab-info-overlay .meta.meta-managed {
+    color: #6ed36e;
+    font-weight: 600;
 }
 
 .tab-info-overlay .title {
@@ -2097,11 +2112,34 @@ kbd {
     padding: 8px 9px;
 }
 
+.agent-tool-call-terminal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 .agent-tool-call-terminal-meta {
     color: var(--text-muted);
     font-size: 10px;
     line-height: 1.4;
     word-break: break-word;
+}
+
+.agent-tool-call-terminal-open {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: rgba(42, 161, 152, 0.18);
+    color: var(--text-highlight);
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.4;
+    flex: 0 0 auto;
+}
+
+.agent-tool-call-terminal-open:hover {
+    background-color: rgba(42, 161, 152, 0.28);
 }
 
 .agent-tool-call-terminal-output {

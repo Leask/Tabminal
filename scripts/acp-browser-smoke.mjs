@@ -30,6 +30,8 @@ const expectUsageHud = process.env.TABMINAL_EXPECT_USAGE_HUD === '1';
 const expectTerminalSection = process.env.TABMINAL_EXPECT_TERMINAL_SECTION
     === '1';
 const expectTerminalLive = process.env.TABMINAL_EXPECT_TERMINAL_LIVE === '1';
+const expectManagedTerminalUi =
+    process.env.TABMINAL_EXPECT_MANAGED_TERMINAL_UI === '1';
 const expectTitlePattern = process.env.TABMINAL_EXPECT_TITLE_PATTERN || '';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
@@ -1495,34 +1497,38 @@ async function main() {
         promptOutcome = await waitForPromptOutcome('permission-final-after-setup');
     }
     if (promptOutcome === 'backend-ready') {
-        log('backend-ready-fallback');
-        await page.send('Page.reload', { ignoreCache: true });
-        await waitForDocumentReady('document-ready-after-backend-ready');
-        await ensureAuthedSession({
-            authLabel: 'auth-after-backend-ready',
-            sessionLabel: 'session-after-backend-ready'
-        });
-        await waitFor('agent-panel-after-backend-ready', async () => {
-            return await evaluate(
-                toExpression(`
-                    () => {
-                        const tabs = Array.from(document.querySelectorAll(
-                            '.agent-editor-tab'
-                        ));
-                        const active = tabs.find((tab) =>
-                            tab.classList.contains('active')
-                        );
-                        const panel = document.querySelector('.agent-panel');
-                        return Boolean(active)
-                            && (active.textContent || '').includes(
-                                ${JSON.stringify(targetAgentDisplayLabel)}
-                            )
-                            && Boolean(panel)
-                            && getComputedStyle(panel).display !== 'none';
-                    }
-                `)
-            );
-        }, 20000, 250);
+        if (skipRestoreTail) {
+            log('backend-ready-skip-restore-tail');
+        } else {
+            log('backend-ready-fallback');
+            await page.send('Page.reload', { ignoreCache: true });
+            await waitForDocumentReady('document-ready-after-backend-ready');
+            await ensureAuthedSession({
+                authLabel: 'auth-after-backend-ready',
+                sessionLabel: 'session-after-backend-ready'
+            });
+            await waitFor('agent-panel-after-backend-ready', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const tabs = Array.from(document.querySelectorAll(
+                                '.agent-editor-tab'
+                            ));
+                            const active = tabs.find((tab) =>
+                                tab.classList.contains('active')
+                            );
+                            const panel = document.querySelector('.agent-panel');
+                            return Boolean(active)
+                                && (active.textContent || '').includes(
+                                    ${JSON.stringify(targetAgentDisplayLabel)}
+                                )
+                                && Boolean(panel)
+                                && getComputedStyle(panel).display !== 'none';
+                        }
+                    `)
+                );
+            }, 20000, 250);
+        }
     }
 
     if (attachmentFiles.length > 0) {
@@ -1794,6 +1800,32 @@ async function main() {
         }, 20000, 250);
     }
 
+    if (expectManagedTerminalUi) {
+        await waitFor('managed-terminal-session', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const tab = document.querySelector(
+                            '.tab-item.agent-managed-session'
+                        );
+                        const managedMeta = tab?.querySelector(
+                            '.meta-time.meta-managed'
+                        );
+                        const openButton = document.querySelector(
+                            '.agent-tool-call-terminal-open'
+                        );
+                        return Boolean(tab)
+                            && Boolean(managedMeta)
+                            && /managed:/i.test(
+                                managedMeta.textContent || ''
+                            )
+                            && Boolean(openButton);
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
     if (expectDiffEditor) {
         await waitFor('diff-editor', async () => {
             return await evaluate(
@@ -1987,6 +2019,37 @@ async function main() {
             250
         );
     });
+
+    if (expectManagedTerminalUi) {
+        await evaluate(
+            toExpression(`
+                () => {
+                    const button = document.querySelector(
+                        '.agent-tool-call-terminal-open'
+                    );
+                    button?.click();
+                    return Boolean(button);
+                }
+            `)
+        );
+        log('clicked-open-in-terminal');
+
+        await waitFor('managed-terminal-activated', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const active = document.querySelector(
+                            '.tab-item.active.agent-managed-session'
+                        );
+                        const meta = active?.querySelector('.meta-time');
+                        return Boolean(active)
+                            && Boolean(meta)
+                            && /managed:/i.test(meta.textContent || '');
+                    }
+                `)
+            );
+        }, 15000, 250);
+    }
 
     if (!skipRestoreTail) {
         await page.send('Page.reload', { ignoreCache: true });

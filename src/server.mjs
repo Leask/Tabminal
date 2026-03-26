@@ -182,7 +182,7 @@ app.use(authMiddleware);
 
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
-const acpManager = new AcpManager();
+const acpManager = new AcpManager({ terminalManager });
 
 // Restore sessions
 (async () => {
@@ -260,6 +260,12 @@ router.post('/api/sessions', (ctx) => {
 
 router.delete('/api/sessions/:id', async (ctx) => {
     const { id } = ctx.params;
+    const session = terminalManager.getSession(id);
+    if (session?.managed?.kind === 'agent-terminal') {
+        await acpManager.releaseManagedTerminalSession(id, { destroy: true });
+        ctx.status = 204;
+        return;
+    }
     await acpManager.closeTabsForTerminalSession(id);
     await terminalManager.removeSession(id);
     ctx.status = 204;
