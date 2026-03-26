@@ -718,8 +718,14 @@ function normalizeUsageWindow(item = {}) {
         item.resetTime,
         item.resetDate
     ].find((value) => typeof value === 'string' && value.trim()) || '';
+    const resetDisplay = String(
+        item.resetDisplay
+        || item.resetLabel
+        || item.resetText
+        || ''
+    ).trim();
     const subtitle = String(item.subtitle || item.description || '').trim();
-    if (!label && !resetAt && !subtitle) {
+    if (!label && !resetAt && !resetDisplay && !subtitle) {
         return null;
     }
     return {
@@ -728,6 +734,7 @@ function normalizeUsageWindow(item = {}) {
         size,
         remaining,
         resetAt,
+        resetDisplay,
         subtitle
     };
 }

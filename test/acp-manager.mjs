@@ -1100,7 +1100,7 @@ describe('AcpManager', () => {
             const { events, socket } = createSocketRecorder();
             manager.attachSocket(tab.id, socket);
 
-            await manager.sendPrompt(tab.id, 'please request permission now');
+            await manager.sendPrompt(tab.id, '/permission');
 
             const permissionEvent = await waitForValue(
                 () => events.find((event) => event.type === 'permission_request')
@@ -1115,7 +1115,7 @@ describe('AcpManager', () => {
             assert.equal(runningTab.busy, true);
             assert.match(
                 runningTab.messages.at(-1)?.text || '',
-                /Prompt: please request permission now/
+                /Prompt: \/permission/
             );
             assert.match(
                 runningTab.messages.at(-1)?.createdAt || '',
@@ -1149,6 +1149,65 @@ describe('AcpManager', () => {
         }
     });
 
+    it('advertises and executes real ACP test-agent slash commands', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const createdTab = (await manager.listState()).tabs.find(
+                (entry) => entry.id === tab.id
+            );
+            const commandNames = new Set(
+                (createdTab?.availableCommands || []).map((command) => (
+                    String(command.name || '')
+                ))
+            );
+            assert.equal(commandNames.has('plan'), true);
+            assert.equal(commandNames.has('diff'), true);
+            assert.equal(commandNames.has('permission'), true);
+            assert.equal(commandNames.has('cancel'), true);
+
+            await manager.sendPrompt(tab.id, '/plan');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            }, 12000);
+
+            assert.equal(settledTab.title, 'plan');
+            assert.equal(settledTab.plan.length, 3);
+            assert.equal(settledTab.plan.every((entry) => (
+                entry.status === 'completed'
+            )), true);
+            assert.ok(
+                settledTab.messages.some((message) => (
+                    /Plan-only demo complete/.test(message.text || '')
+                ))
+            );
+        } finally {
+            await manager.dispose();
+        }
+    });
+
     it('cancels real ACP test-agent prompt turns cleanly', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
@@ -1175,7 +1234,7 @@ describe('AcpManager', () => {
             const { events, socket } = createSocketRecorder();
             manager.attachSocket(tab.id, socket);
 
-            await manager.sendPrompt(tab.id, 'cancel-smoke');
+            await manager.sendPrompt(tab.id, '/cancel');
             await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
@@ -1281,7 +1340,7 @@ describe('AcpManager', () => {
             const { events, socket } = createSocketRecorder();
             manager.attachSocket(tab.id, socket);
 
-            await manager.sendPrompt(tab.id, 'diff-smoke');
+            await manager.sendPrompt(tab.id, '/diff');
 
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
@@ -1289,7 +1348,7 @@ describe('AcpManager', () => {
                 return current && !current.busy ? current : null;
             }, 12000);
 
-            assert.equal(settledTab.title, 'diff-smoke');
+            assert.equal(settledTab.title, 'diff');
             assert.equal(settledTab.plan.length, 3);
             assert.equal(settledTab.plan.every((entry) => (
                 entry.status === 'completed'
@@ -1305,6 +1364,14 @@ describe('AcpManager', () => {
                 settledTab.usage.windows[0].subtitle,
                 'short-term window'
             );
+            assert.equal(
+                settledTab.usage.windows[0].resetDisplay,
+                'resets in 11h 33 mins'
+            );
+            assert.equal(
+                settledTab.usage.windows[1].resetDisplay,
+                'resets Sep 30'
+            );
             assert.equal(settledTab.terminals.length, 1);
             assert.equal(settledTab.terminals[0].released, true);
             assert.equal(settledTab.terminals[0].terminalSessionId, '');
@@ -1315,7 +1382,7 @@ describe('AcpManager', () => {
             assert.ok(events.some((event) => (
                 event.type === 'session_update'
                 && event.update?.sessionUpdate === 'session_info_update'
-                && event.update?.title === 'diff-smoke'
+                && event.update?.title === 'diff'
             )));
         } finally {
             await manager.dispose();

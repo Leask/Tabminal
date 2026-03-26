@@ -22,8 +22,25 @@ function extractPromptText(prompt = []) {
         .trim();
 }
 
+function parsePromptCommand(promptText = '') {
+    const trimmed = String(promptText || '').trim();
+    const match = trimmed.match(
+        /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i
+    );
+    if (!match) {
+        return null;
+    }
+    return {
+        name: String(match[1] || '').toLowerCase(),
+        input: String(match[2] || '').trim()
+    };
+}
+
 function buildSessionTitle(promptText = '') {
-    const source = String(promptText || '').replace(/\s+/g, ' ').trim();
+    const source = String(promptText || '')
+        .replace(/^\s*\/(?=\S)/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
     if (!source) {
         return 'ACP Smoke Session';
     }
@@ -84,14 +101,36 @@ class TabminalTestAgent {
             },
             availableCommands: [
                 {
-                    name: 'review',
-                    description: 'Review the current project',
-                    input: { hint: 'What should be reviewed?' }
+                    name: 'demo',
+                    description: 'Run the richest ACP demo flow'
                 },
                 {
-                    name: 'explain',
-                    description: 'Explain a file or concept',
-                    input: { hint: 'What should be explained?' }
+                    name: 'plan',
+                    description: 'Render plan and usage without tool calls'
+                },
+                {
+                    name: 'diff',
+                    description: 'Render terminal, diff, and code/resource payloads'
+                },
+                {
+                    name: 'permission',
+                    description: 'Trigger a permission request flow'
+                },
+                {
+                    name: 'cancel',
+                    description: 'Stream chunks so Stop and Esc can cancel'
+                },
+                {
+                    name: 'stale',
+                    description: 'Leave a tool stale to test completion settlement'
+                },
+                {
+                    name: 'order',
+                    description: 'Show assistant text around a tool call'
+                },
+                {
+                    name: 'fail',
+                    description: 'Throw a prompt error to test error handling'
                 }
             ],
             configOptions: [
@@ -218,6 +257,7 @@ class TabminalTestAgent {
                             used: 32,
                             size: 100,
                             subtitle: 'short-term window',
+                            resetDisplay: 'resets in 11h 33 mins',
                             resetAt: new Date(
                                 now + 95 * 60 * 1000
                             ).toISOString()
@@ -227,6 +267,7 @@ class TabminalTestAgent {
                             used: 210,
                             size: 1000,
                             subtitle: 'weekly budget',
+                            resetDisplay: 'resets Sep 30',
                             resetAt: new Date(
                                 now + 5 * 24 * 60 * 60 * 1000
                             ).toISOString()
@@ -258,6 +299,8 @@ class TabminalTestAgent {
         session.controller = new AbortController();
         const signal = session.controller.signal;
         const promptText = extractPromptText(params.prompt);
+        const promptCommand = parsePromptCommand(promptText);
+        const commandName = promptCommand?.name || '';
         const modePrefix = session.modeId === 'review'
             ? '[review] '
             : '';
@@ -313,7 +356,7 @@ class TabminalTestAgent {
             });
             await sleep(30, signal);
 
-            if (/cancel-smoke/i.test(promptText)) {
+            if (commandName === 'cancel' || /cancel-smoke/i.test(promptText)) {
                 for (let index = 0; index < 8; index += 1) {
                     await this.connection.sessionUpdate({
                         sessionId: params.sessionId,
@@ -331,11 +374,44 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
-            if (/fail-prompt/i.test(promptText)) {
+            if (commandName === 'fail' || /fail-prompt/i.test(promptText)) {
                 throw new Error('prompt dispatch failed');
             }
 
-            if (/synthetic-order/i.test(promptText)) {
+            if (commandName === 'plan') {
+                await sleep(60, signal);
+                await this.sendPlan(params.sessionId, [
+                    {
+                        content: 'Inspect the request and summarize the task',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Run the necessary tool calls',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Write the final response',
+                        priority: 'medium',
+                        status: 'completed'
+                    }
+                ]);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'plan-result',
+                        content: {
+                            type: 'text',
+                            text: 'Plan-only demo complete.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
+            if (commandName === 'order' || /synthetic-order/i.test(promptText)) {
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
                     update: {
@@ -377,7 +453,11 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
-            if (/diff-smoke/i.test(promptText)) {
+            if (
+                commandName === 'demo'
+                || commandName === 'diff'
+                || /diff-smoke/i.test(promptText)
+            ) {
                 const terminal = await this.createTerminalDemo(params.sessionId);
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
@@ -473,7 +553,7 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
-            if (/stale-tool/i.test(promptText)) {
+            if (commandName === 'stale' || /stale-tool/i.test(promptText)) {
                 const terminal = await this.createTerminalDemo(params.sessionId);
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
@@ -516,7 +596,10 @@ class TabminalTestAgent {
                 return { stopReason: 'end_turn' };
             }
 
-            if (/permission/i.test(promptText)) {
+            if (
+                commandName === 'permission'
+                || /permission/i.test(promptText)
+            ) {
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
                     update: {

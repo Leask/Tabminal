@@ -1313,7 +1313,7 @@ kbd {
     width: 34px;
     height: 34px;
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
+    border-radius: 999px;
     background-color: rgba(7, 54, 66, 0.72);
     color: var(--text-main);
     display: inline-flex;
@@ -1324,8 +1324,12 @@ kbd {
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    transition: border-color 0.16s ease, background-color 0.16s ease,
-        color 0.16s ease, transform 0.16s ease;
+    transition:
+        border-color 0.16s ease,
+        background-color 0.16s ease,
+        color 0.16s ease,
+        transform 0.16s ease,
+        box-shadow 0.16s ease;
 }
 
 .terminal-layout-button:hover {
@@ -1643,30 +1647,43 @@ kbd {
 }
 
 .agent-usage-hud {
+    --agent-usage-details-width: 712px;
+    --agent-usage-label-width: 108px;
+    --agent-usage-progress-width: 328px;
+    --agent-usage-value-width: 96px;
+    --agent-usage-meta-width: 144px;
+    --agent-usage-column-gap: 12px;
     position: absolute;
     top: 8px;
     right: 56px;
     z-index: 94;
     display: flex;
     align-items: stretch;
-    gap: 10px;
+    gap: 0;
     min-height: 34px;
+    box-sizing: border-box;
+    width: auto;
     padding: 0 8px;
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 999px;
+    border-radius: 17px;
+    overflow: hidden;
     background-color: rgba(7, 54, 66, 0.54);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition:
-        border-radius 0.24s ease,
-        padding 0.24s ease,
-        background-color 0.24s ease,
-        box-shadow 0.24s ease;
+        border-radius 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        padding 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        gap 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        background-color 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.agent-usage-hud:hover,
+.agent-usage-hud:focus-within,
 .agent-usage-hud.is-expanded {
-    border-radius: 12px;
+    gap: 8px;
+    border-radius: 9px;
     padding: 10px 12px;
     min-height: 0;
     background-color: rgba(7, 54, 66, 0.72);
@@ -1682,11 +1699,13 @@ kbd {
     opacity: 1;
     overflow: hidden;
     transition:
-        max-width 0.24s ease,
-        opacity 0.18s ease,
-        margin-right 0.24s ease;
+        max-width 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 0.14s ease,
+        margin-right 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.agent-usage-hud:hover .agent-usage-compact,
+.agent-usage-hud:focus-within .agent-usage-compact,
 .agent-usage-hud.is-expanded .agent-usage-compact {
     max-width: 0;
     opacity: 0;
@@ -1708,6 +1727,10 @@ kbd {
     overflow: hidden;
     background-color: rgba(255, 255, 255, 0.06);
     color: var(--text-highlight);
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease,
+        background-color 0.2s ease;
 }
 
 .agent-usage-pill::before {
@@ -1737,6 +1760,20 @@ kbd {
         );
 }
 
+.agent-usage-pill.is-highlighted {
+    transform: translateY(-1px);
+    box-shadow:
+        0 0 0 1px rgba(38, 139, 210, 0.46),
+        0 0 14px rgba(38, 139, 210, 0.2);
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.agent-usage-pill[data-tone="critical"].is-highlighted {
+    box-shadow:
+        0 0 0 1px rgba(220, 50, 47, 0.5),
+        0 0 14px rgba(220, 50, 47, 0.18);
+}
+
 .agent-usage-pill-value,
 .agent-usage-pill-label {
     position: relative;
@@ -1755,6 +1792,8 @@ kbd {
 }
 
 .agent-usage-details {
+    flex: 0 0 auto;
+    width: var(--agent-usage-details-width);
     min-width: 0;
     max-width: 0;
     max-height: 0;
@@ -1762,14 +1801,16 @@ kbd {
     opacity: 0;
     transform: translateX(-4px);
     transition:
-        max-width 0.24s ease,
-        max-height 0.24s ease,
-        opacity 0.18s ease,
-        transform 0.24s ease;
+        max-width 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        max-height 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 0.14s ease,
+        transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.agent-usage-hud:hover .agent-usage-details,
+.agent-usage-hud:focus-within .agent-usage-details,
 .agent-usage-hud.is-expanded .agent-usage-details {
-    max-width: 460px;
+    max-width: var(--agent-usage-details-width);
     max-height: 320px;
     opacity: 1;
     transform: translateX(0);
@@ -1777,10 +1818,13 @@ kbd {
 
 .agent-usage-session-row + .agent-usage-detail-row,
 .agent-usage-detail-row + .agent-usage-detail-row,
+.agent-usage-detail-row + .agent-usage-session-row,
+.agent-usage-session-row + .agent-usage-session-row,
 .agent-usage-detail-row + .agent-usage-details-meta,
 .agent-usage-details-meta + .agent-usage-detail-row,
+.agent-usage-details-meta + .agent-usage-session-row,
 .agent-usage-details-meta + .agent-usage-details-meta {
-    margin-top: 5px;
+    margin-top: 9px;
 }
 
 .agent-usage-details-meta,
@@ -1798,8 +1842,12 @@ kbd {
 .agent-usage-session-row,
 .agent-usage-detail-row {
     display: grid;
-    grid-template-columns: 92px minmax(180px, 1fr) 112px;
-    gap: 10px 14px;
+    grid-template-columns:
+        var(--agent-usage-label-width)
+        var(--agent-usage-progress-width)
+        var(--agent-usage-value-width)
+        var(--agent-usage-meta-width);
+    gap: 10px var(--agent-usage-column-gap);
     align-items: start;
 }
 
@@ -1812,7 +1860,7 @@ kbd {
 }
 
 .agent-usage-session-value {
-    grid-column: 2 / 4;
+    grid-column: 2 / 5;
     font-size: 11px;
     line-height: 1.35;
     color: var(--text-highlight);
@@ -1821,6 +1869,9 @@ kbd {
 
 .agent-usage-detail-body {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .agent-usage-progress {
@@ -1859,6 +1910,13 @@ kbd {
     color: var(--text-highlight);
     white-space: nowrap;
     text-align: right;
+    justify-self: end;
+}
+
+.agent-usage-details-reset {
+    white-space: nowrap;
+    text-align: right;
+    justify-self: end;
 }
 
 @media (max-width: 767px) {
@@ -1952,6 +2010,16 @@ kbd {
     padding: 8px 12px 0;
 }
 
+.agent-plan-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid rgba(131, 148, 150, 0.18);
+    border-radius: 10px;
+    background-color: rgba(7, 54, 66, 0.24);
+}
+
 .agent-plan-header,
 .agent-plan-terminal-row {
     color: var(--text-highlight);
@@ -1963,10 +2031,6 @@ kbd {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 10px 12px;
-    border: 1px solid rgba(131, 148, 150, 0.18);
-    border-radius: 10px;
-    background-color: rgba(7, 54, 66, 0.24);
 }
 
 .agent-plan-entry {

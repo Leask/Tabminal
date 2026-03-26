@@ -570,9 +570,10 @@ class EditorManager {
         this.agentNewChatButton = null;
         this.agentUsageHud = null;
         this.agentUsageHudHovered = false;
-        this.agentUsageHudAutoExpanded = false;
-        this.agentUsageHudAutoExpandTimer = null;
-        this.agentUsageHudLastSignature = '';
+        this.agentUsageHudHighlightTimer = null;
+        this.agentUsageHudHighlightedMetricKeys = new Set();
+        this.agentUsageHudMetricSignatures = new Map();
+        this.agentUsageHudLastTabId = '';
         this.agentPlan = null;
         this.agentTopActions = null;
         this.agentCommands = null;
@@ -869,11 +870,10 @@ class EditorManager {
         this.agentUsageHud.style.display = 'none';
         this.agentUsageHud.addEventListener('mouseenter', () => {
             this.agentUsageHudHovered = true;
-            this.syncAgentUsageHudExpandedState();
+            this.clearAgentUsageHudHighlights();
         });
         this.agentUsageHud.addEventListener('mouseleave', () => {
             this.agentUsageHudHovered = false;
-            this.syncAgentUsageHudExpandedState();
         });
 
         this.agentSetupButton = document.createElement('button');
@@ -1177,9 +1177,9 @@ class EditorManager {
         this.agentContainer.appendChild(this.agentNewChatButton);
         this.agentContainer.appendChild(this.agentTools);
         this.agentContainer.appendChild(this.agentPermissions);
-        this.agentContainer.appendChild(this.agentPlan);
         this.agentContainer.appendChild(this.agentTranscript);
         this.agentContainer.appendChild(this.agentActivity);
+        this.agentContainer.appendChild(this.agentPlan);
         this.agentContainer.appendChild(this.agentQueue);
         this.agentContainer.appendChild(composer);
         this.contentContainer.appendChild(this.agentContainer);
@@ -2069,29 +2069,37 @@ class EditorManager {
         this.renderAgentUsageHud(activeTab);
     }
 
-    clearAgentUsageHudAutoExpand() {
-        if (this.agentUsageHudAutoExpandTimer) {
-            clearTimeout(this.agentUsageHudAutoExpandTimer);
-            this.agentUsageHudAutoExpandTimer = null;
+    clearAgentUsageHudHighlights() {
+        if (this.agentUsageHudHighlightTimer) {
+            clearTimeout(this.agentUsageHudHighlightTimer);
+            this.agentUsageHudHighlightTimer = null;
         }
+        this.agentUsageHudHighlightedMetricKeys.clear();
+        this.syncAgentUsageHudMetricHighlights();
     }
 
-    openAgentUsageHudTemporarily(durationMs = 5000) {
-        this.clearAgentUsageHudAutoExpand();
-        this.agentUsageHudAutoExpanded = true;
-        this.syncAgentUsageHudExpandedState();
-        this.agentUsageHudAutoExpandTimer = window.setTimeout(() => {
-            this.agentUsageHudAutoExpandTimer = null;
-            this.agentUsageHudAutoExpanded = false;
-            this.syncAgentUsageHudExpandedState();
+    highlightAgentUsageMetricsTemporarily(metricKeys, durationMs = 3000) {
+        if (!(metricKeys instanceof Set) || metricKeys.size === 0) {
+            return;
+        }
+        this.clearAgentUsageHudHighlights();
+        this.agentUsageHudHighlightedMetricKeys = new Set(metricKeys);
+        this.syncAgentUsageHudMetricHighlights();
+        this.agentUsageHudHighlightTimer = window.setTimeout(() => {
+            this.agentUsageHudHighlightTimer = null;
+            this.agentUsageHudHighlightedMetricKeys.clear();
+            this.syncAgentUsageHudMetricHighlights();
         }, durationMs);
     }
 
-    syncAgentUsageHudExpandedState() {
+    syncAgentUsageHudMetricHighlights() {
         if (!this.agentUsageHud) return;
-        const expanded = this.agentUsageHudHovered
-            || this.agentUsageHudAutoExpanded;
-        this.agentUsageHud.classList.toggle('is-expanded', expanded);
+        const pills = this.agentUsageHud.querySelectorAll('.agent-usage-pill');
+        for (const pill of pills) {
+            const key = pill.dataset.metricKey || '';
+            const highlighted = this.agentUsageHudHighlightedMetricKeys.has(key);
+            pill.classList.toggle('is-highlighted', highlighted);
+        }
     }
 
     renderAgentUsageHud(agentTab) {
@@ -2100,37 +2108,52 @@ class EditorManager {
         const usage = normalizeAgentUsageForDisplay(agentTab?.usage || null);
         if (!usage || isCompactWorkspaceMode()) {
             this.agentUsageHud.style.display = 'none';
-            this.agentUsageHudLastSignature = '';
             this.agentUsageHudHovered = false;
-            this.agentUsageHudAutoExpanded = false;
-            this.clearAgentUsageHudAutoExpand();
+            this.agentUsageHudLastTabId = '';
+            this.agentUsageHudMetricSignatures = new Map();
+            this.clearAgentUsageHudHighlights();
             return;
         }
         const metrics = buildAgentUsageMetrics(usage);
         if (metrics.length === 0) {
             this.agentUsageHud.style.display = 'none';
-            this.agentUsageHudLastSignature = '';
             this.agentUsageHudHovered = false;
-            this.agentUsageHudAutoExpanded = false;
-            this.clearAgentUsageHudAutoExpand();
+            this.agentUsageHudLastTabId = '';
+            this.agentUsageHudMetricSignatures = new Map();
+            this.clearAgentUsageHudHighlights();
             return;
         }
 
-        const usageSignature = JSON.stringify({
-            used: usage.used,
-            size: usage.size,
-            resetAt: usage.resetAt,
-            totals: usage.totals,
-            cost: usage.cost,
-            windows: usage.windows,
-            vendorLabel: usage.vendorLabel,
-            sessionId: usage.sessionId,
-            summary: usage.summary
-        });
-        if (usageSignature !== this.agentUsageHudLastSignature) {
-            this.agentUsageHudLastSignature = usageSignature;
-            this.openAgentUsageHudTemporarily(5000);
+        const nextMetricSignatures = new Map();
+        for (const metric of metrics) {
+            nextMetricSignatures.set(metric.key, JSON.stringify({
+                percentLeft: metric.percentLeft,
+                percentUsed: metric.percentUsed,
+                used: metric.used,
+                size: metric.size,
+                resetAt: metric.resetAt
+            }));
         }
+
+        const tabId = typeof agentTab?.id === 'string'
+            ? agentTab.id
+            : '';
+        const shouldCheckChanges = this.agentUsageHudLastTabId === tabId;
+        if (shouldCheckChanges && !this.agentUsageHudHovered) {
+            const changedMetricKeys = new Set();
+            for (const [metricKey, signature] of nextMetricSignatures.entries()) {
+                if (this.agentUsageHudMetricSignatures.get(metricKey) !== signature) {
+                    changedMetricKeys.add(metricKey);
+                }
+            }
+            if (changedMetricKeys.size > 0) {
+                this.highlightAgentUsageMetricsTemporarily(changedMetricKeys, 3000);
+            }
+        } else if (!this.agentUsageHudHovered) {
+            this.clearAgentUsageHudHighlights();
+        }
+        this.agentUsageHudLastTabId = tabId;
+        this.agentUsageHudMetricSignatures = nextMetricSignatures;
 
         const compact = document.createElement('div');
         compact.className = 'agent-usage-compact';
@@ -2151,6 +2174,11 @@ class EditorManager {
             details.appendChild(buildAgentUsageDetailRow(metric));
         }
 
+        const costRow = buildAgentUsageCostRow(usage);
+        if (costRow) {
+            details.appendChild(costRow);
+        }
+
         const totals = buildAgentUsageTotalsMeta(usage);
         if (totals) {
             const totalsRow = document.createElement('div');
@@ -2162,7 +2190,9 @@ class EditorManager {
         this.agentUsageHud.appendChild(details);
 
         this.agentUsageHud.style.display = '';
-        this.syncAgentUsageHudExpandedState();
+        this.agentUsageHud.style.width = '';
+        this.agentUsageHud.classList.remove('is-expanded');
+        this.syncAgentUsageHudMetricHighlights();
     }
 
     renderAgentPlan(agentTab) {
@@ -2176,10 +2206,12 @@ class EditorManager {
         }
 
         if (plan.length > 0) {
+            const card = document.createElement('div');
+            card.className = 'agent-plan-card';
             const header = document.createElement('div');
             header.className = 'agent-plan-header';
             header.textContent = buildAgentPlanSummary(plan);
-            this.agentPlan.appendChild(header);
+            card.appendChild(header);
 
             const list = document.createElement('div');
             list.className = 'agent-plan-list';
@@ -2209,7 +2241,8 @@ class EditorManager {
                 row.appendChild(body);
                 list.appendChild(row);
             }
-            this.agentPlan.appendChild(list);
+            card.appendChild(list);
+            this.agentPlan.appendChild(card);
         }
 
         if (runningTerminals.length > 0) {
@@ -4891,6 +4924,9 @@ class AgentTab {
                     resetAt: typeof item?.resetAt === 'string'
                         ? item.resetAt
                         : '',
+                    resetDisplay: typeof item?.resetDisplay === 'string'
+                        ? item.resetDisplay
+                        : '',
                     subtitle: typeof item?.subtitle === 'string'
                         ? item.subtitle
                         : ''
@@ -6271,6 +6307,35 @@ function formatTokenCompact(value) {
     return String(value);
 }
 
+function formatTokenForUsagePair(value, unit = '') {
+    if (!Number.isFinite(value)) return '';
+    if (unit === 'M') {
+        return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}m`;
+    }
+    if (unit === 'K') {
+        return `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}k`;
+    }
+    return Number(value).toLocaleString([], {
+        maximumFractionDigits: Number.isInteger(value) ? 0 : 1
+    });
+}
+
+function formatAgentUsagePair(used, size) {
+    if (!Number.isFinite(used) || !Number.isFinite(size)) {
+        return '';
+    }
+    const maxValue = Math.max(Math.abs(used), Math.abs(size));
+    let unit = '';
+    if (maxValue >= 1000000) {
+        unit = 'M';
+    } else if (maxValue >= 10000) {
+        unit = 'K';
+    }
+    return `${formatTokenForUsagePair(used, unit)} / ${
+        formatTokenForUsagePair(size, unit)
+    }`;
+}
+
 function getAgentUsageRemainingPercent(used, size) {
     if (!Number.isFinite(used) || !Number.isFinite(size) || size <= 0) {
         return null;
@@ -6287,9 +6352,7 @@ function buildAgentUsageMetrics(usage) {
             shortLabel: 'Ctx',
             used: usage.used,
             size: usage.size,
-            usageText: `${formatTokenCompact(usage.used)} / ${formatTokenCompact(
-                usage.size
-            )}`,
+            usageText: formatAgentUsagePair(usage.used, usage.size),
             subtitle: '',
             resetAt: typeof usage?.resetAt === 'string' ? usage.resetAt : '',
             percentLeft: getAgentUsageRemainingPercent(usage.used, usage.size),
@@ -6309,12 +6372,13 @@ function buildAgentUsageMetrics(usage) {
             shortLabel: String(windowUsage.label || `W${index + 1}`),
             used: windowUsage.used,
             size: windowUsage.size,
-            usageText: `${formatTokenCompact(windowUsage.used)} / ${formatTokenCompact(
-                windowUsage.size
-            )}`,
+            usageText: '',
             subtitle: windowUsage.subtitle || '',
             resetAt: typeof windowUsage.resetAt === 'string'
                 ? windowUsage.resetAt
+                : '',
+            resetDisplay: typeof windowUsage.resetDisplay === 'string'
+                ? windowUsage.resetDisplay
                 : '',
             percentLeft: getAgentUsageRemainingPercent(
                 windowUsage.used,
@@ -6350,6 +6414,7 @@ function getAgentUsageMetricDetailLabel(metric) {
 function buildAgentUsageCompactMetric(metric) {
     const pill = document.createElement('div');
     pill.className = 'agent-usage-pill';
+    pill.dataset.metricKey = metric.key;
     pill.dataset.tone = getAgentUsageMetricTone(metric);
     pill.title = `${metric.label}: ${metric.percentLeft}% left`;
     pill.style.setProperty(
@@ -6384,8 +6449,10 @@ function buildAgentUsageProgress(metric) {
 }
 
 function buildAgentUsageSessionRow(usage) {
-    const identityMeta = buildAgentUsageIdentityMeta(usage);
-    if (!identityMeta) {
+    const sessionId = typeof usage?.sessionId === 'string'
+        ? usage.sessionId.trim()
+        : '';
+    if (!sessionId) {
         return null;
     }
     const row = document.createElement('div');
@@ -6397,7 +6464,7 @@ function buildAgentUsageSessionRow(usage) {
 
     const value = document.createElement('div');
     value.className = 'agent-usage-session-value';
-    value.textContent = identityMeta;
+    value.textContent = sessionId;
 
     row.appendChild(label);
     row.appendChild(value);
@@ -6420,31 +6487,33 @@ function buildAgentUsageDetailRow(metric) {
     value.textContent = `${metric.percentLeft}% left`;
     body.appendChild(buildAgentUsageProgress(metric));
 
-    if (metric.usageText) {
+    if (metric.usageText && metric.key !== 'context') {
         const usage = document.createElement('div');
         usage.className = 'agent-usage-details-meta';
         usage.textContent = metric.usageText;
         body.appendChild(usage);
     }
 
-    if (metric.subtitle) {
-        const subtitle = document.createElement('div');
-        subtitle.className = 'agent-usage-details-meta';
-        subtitle.textContent = metric.subtitle;
-        body.appendChild(subtitle);
-    }
+    const reset = document.createElement('div');
+    reset.className = 'agent-usage-details-reset';
+    const resetText = metric.key === 'context'
+        ? (metric.usageText || '')
+        : (
+            typeof metric.resetDisplay === 'string'
+                && metric.resetDisplay.trim()
+                ? metric.resetDisplay.trim()
+                : formatAgentUsageReset(metric.resetAt)
+        );
+    reset.textContent = resetText;
 
-    if (metric.resetAt) {
-        const reset = document.createElement('div');
-        reset.className = 'agent-usage-details-reset';
+    if (resetText) {
         reset.dataset.resetAt = metric.resetAt;
-        reset.textContent = formatAgentUsageReset(metric.resetAt);
-        body.appendChild(reset);
     }
 
     row.appendChild(label);
     row.appendChild(body);
     row.appendChild(value);
+    row.appendChild(reset);
 
     return row;
 }
@@ -6458,15 +6527,14 @@ function formatAgentUsageReset(resetAt = '') {
     const deltaMs = timestamp.getTime() - Date.now();
     const oneDayMs = 24 * 60 * 60 * 1000;
     const countdown = formatAgentUsageCountdown(deltaMs);
-    const localLabel = deltaMs < oneDayMs && deltaMs > -oneDayMs
-        ? timestamp.toLocaleTimeString([], {
-            hour: 'numeric',
-            minute: '2-digit'
-        })
-        : timestamp.toLocaleString();
-    return countdown
-        ? `resets ${countdown} · ${localLabel}`
-        : `resets ${localLabel}`;
+    if (deltaMs > 0 && deltaMs < oneDayMs) {
+        return `resets ${countdown}`;
+    }
+    const localLabel = timestamp.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric'
+    });
+    return `resets ${localLabel}`;
 }
 
 function formatAgentUsageCountdown(deltaMs) {
@@ -6488,36 +6556,42 @@ function formatAgentUsageCountdown(deltaMs) {
     return `in ${mins}m`;
 }
 
-function buildAgentUsageIdentityMeta(usage) {
-    const parts = [];
-    if (usage.vendorLabel) {
-        parts.push(usage.vendorLabel);
-    }
-    if (usage.sessionId) {
-        parts.push(`session ${usage.sessionId.slice(0, 8)}`);
-    }
-    if (usage.summary) {
-        parts.push(usage.summary);
-    }
-    return parts.join(' · ');
-}
-
 function buildAgentUsageTotalsMeta(usage) {
     const parts = [];
     if (
-        Number.isFinite(usage.cost?.amount)
-        && usage.cost?.currency
+        !Number.isFinite(usage.used)
+        && Number.isFinite(usage.totals?.totalTokens)
     ) {
-        parts.push(
-            `${usage.cost.currency} ${Number(usage.cost.amount).toFixed(2)}`
-        );
-    }
-    if (Number.isFinite(usage.totals?.totalTokens)) {
         parts.push(
             `${formatTokenCompact(usage.totals.totalTokens)} tokens`
         );
     }
     return parts.join(' · ');
+}
+
+function buildAgentUsageCostRow(usage) {
+    if (
+        !Number.isFinite(usage?.cost?.amount)
+        || !usage.cost?.currency
+    ) {
+        return null;
+    }
+    const row = document.createElement('div');
+    row.className = 'agent-usage-session-row';
+
+    const label = document.createElement('div');
+    label.className = 'agent-usage-session-label';
+    label.textContent = 'Cost:';
+
+    const value = document.createElement('div');
+    value.className = 'agent-usage-session-value';
+    value.textContent = `${usage.cost.currency} ${
+        Number(usage.cost.amount).toFixed(2)
+    }`;
+
+    row.appendChild(label);
+    row.appendChild(value);
+    return row;
 }
 
 function getAgentRunningTerminalSummaries(agentTab) {

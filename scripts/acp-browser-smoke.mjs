@@ -65,7 +65,7 @@ const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
     || (
         /test agent/i.test(targetAgentLabel)
         && (expectDiffEditor || expectCodeEditor)
-            ? 'diff-smoke'
+            ? '/diff'
             : `Read ${process.cwd()}/package.json `
                 + `and ${process.cwd()}/README.md, `
                 + 'then summarize this project briefly.'
@@ -2277,7 +2277,7 @@ async function main() {
         toExpression(`
             () => {
                 const input = document.querySelector('.agent-panel-input');
-                input.value = 'cancel-smoke';
+                input.value = '/cancel';
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 const sendButton = Array.from(
                     document.querySelectorAll('.agent-panel-button')
@@ -2287,7 +2287,7 @@ async function main() {
             }
         `)
     );
-    log('submitted-cancel-smoke');
+    log('submitted-cancel');
 
     await waitFor('stop-enabled', async () => {
         return await evaluate(
