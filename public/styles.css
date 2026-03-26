@@ -2024,11 +2024,25 @@ kbd {
     background-color: rgba(7, 54, 66, 0.24);
 }
 
+.agent-plan-history-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .agent-plan-header,
 .agent-plan-terminal-row {
     color: var(--text-highlight);
     font-size: 12px;
     font-weight: 600;
+}
+
+.agent-plan-terminal-row.agent-panel-activity {
+    gap: 8px;
+    padding: 0;
+    min-height: 0;
+    font-size: 10px;
+    font-weight: 400;
 }
 
 .agent-plan-list {
@@ -2121,10 +2135,27 @@ kbd {
 }
 
 .agent-plan-terminal-entry {
+    display: block;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
     color: var(--text-muted);
+    cursor: pointer;
+    font: inherit;
     font-size: 10px;
     line-height: 1.4;
+    text-align: left;
     word-break: break-word;
+}
+
+.agent-plan-terminal-entry:hover,
+.agent-plan-terminal-entry:focus-visible {
+    color: var(--text-base);
+    border-color: rgba(38, 139, 210, 0.32);
+    background-color: rgba(38, 139, 210, 0.08);
+    outline: none;
 }
 
 .agent-panel-commands {

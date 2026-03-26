@@ -2024,6 +2024,11 @@ class EditorManager {
                         agentTab,
                         entry.value
                     );
+                } else if (entry.type === 'plan') {
+                    node = this.buildAgentPlanHistoryNode(
+                        agentTab,
+                        entry.value
+                    );
                 }
                 if (node) {
                     if (
@@ -2211,75 +2216,122 @@ class EditorManager {
         if (!this.agentPlan) return;
         this.agentPlan.innerHTML = '';
         const plan = Array.isArray(agentTab?.plan) ? agentTab.plan : [];
+        const activePlan = isAgentPlanComplete(plan) ? [] : plan;
         const runningTerminals = getAgentRunningTerminalSummaries(agentTab);
-        if (plan.length === 0 && runningTerminals.length === 0) {
+        if (activePlan.length === 0 && runningTerminals.length === 0) {
             this.agentPlan.style.display = 'none';
             return;
         }
 
-        if (plan.length > 0) {
-            const card = document.createElement('div');
-            card.className = 'agent-plan-card';
-            const header = document.createElement('div');
-            header.className = 'agent-plan-header';
-            header.textContent = buildAgentPlanSummary(plan);
-            card.appendChild(header);
-
-            const list = document.createElement('div');
-            list.className = 'agent-plan-list';
-            for (const entry of plan) {
-                const row = document.createElement('div');
-                row.className = `agent-plan-entry ${normalizePlanStatusClass(
-                    entry.status
-                )}`;
-                const marker = document.createElement('span');
-                marker.className = 'agent-plan-entry-marker';
-                marker.textContent = getAgentPlanStatusMarker(entry.status);
-                const body = document.createElement('div');
-                body.className = 'agent-plan-entry-body';
-                const text = document.createElement('span');
-                text.className = 'agent-plan-entry-text';
-                text.textContent = entry.content;
-                const priority = document.createElement('span');
-                priority.className = `agent-plan-entry-priority ${
-                    normalizePlanPriorityClass(entry.priority)
-                }`;
-                priority.textContent = getAgentPlanPriorityLabel(
-                    entry.priority
-                );
-                row.appendChild(marker);
-                body.appendChild(text);
-                body.appendChild(priority);
-                row.appendChild(body);
-                list.appendChild(row);
-            }
-            card.appendChild(list);
+        if (activePlan.length > 0) {
+            const card = this.buildAgentPlanCard(activePlan);
             this.agentPlan.appendChild(card);
         }
 
         if (runningTerminals.length > 0) {
             const terminalSummary = document.createElement('div');
-            terminalSummary.className = 'agent-plan-terminal-row';
-            terminalSummary.textContent = runningTerminals.length === 1
+            terminalSummary.className =
+                'agent-plan-terminal-row agent-panel-activity tool';
+            const icon = document.createElement('span');
+            icon.className = 'agent-panel-activity-icon is-spinning';
+            icon.innerHTML = SPINNER_ICON_SVG;
+            const label = document.createElement('span');
+            label.className = 'agent-panel-activity-label';
+            label.textContent = runningTerminals.length === 1
                 ? 'Running 1 terminal'
                 : `Running ${runningTerminals.length} terminals`;
+            terminalSummary.appendChild(icon);
+            terminalSummary.appendChild(label);
             this.agentPlan.appendChild(terminalSummary);
             const terminalList = document.createElement('div');
             terminalList.className = 'agent-plan-terminal-list';
             for (const terminal of runningTerminals.slice(0, 3)) {
-                const row = document.createElement('div');
+                const row = document.createElement('button');
+                row.type = 'button';
                 row.className = 'agent-plan-terminal-entry';
                 row.textContent = [
                     terminal.command || 'Terminal',
                     terminal.cwd || '',
                     getAgentTerminalStatusLabel(terminal)
                 ].filter(Boolean).join(' · ');
+                row.setAttribute('aria-label', 'Jump in to terminal');
+                row.onclick = async (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await jumpToTerminalSession(
+                        agentTab.server,
+                        terminal.terminalSessionId
+                    );
+                };
                 terminalList.appendChild(row);
             }
             this.agentPlan.appendChild(terminalList);
         }
 
         this.agentPlan.style.display = '';
+    }
+
+    buildAgentPlanCard(entries, summary = '') {
+        const card = document.createElement('div');
+        card.className = 'agent-plan-card';
+        const header = document.createElement('div');
+        header.className = 'agent-plan-header';
+        header.textContent = summary || buildAgentPlanSummary(entries);
+        card.appendChild(header);
+        card.appendChild(this.buildAgentPlanList(entries));
+        return card;
+    }
+
+    buildAgentPlanList(entries) {
+        const list = document.createElement('div');
+        list.className = 'agent-plan-list';
+        for (const entry of entries) {
+            const row = document.createElement('div');
+            row.className = `agent-plan-entry ${normalizePlanStatusClass(
+                entry.status
+            )}`;
+            const marker = document.createElement('span');
+            marker.className = 'agent-plan-entry-marker';
+            marker.textContent = getAgentPlanStatusMarker(entry.status);
+            const body = document.createElement('div');
+            body.className = 'agent-plan-entry-body';
+            const text = document.createElement('span');
+            text.className = 'agent-plan-entry-text';
+            text.textContent = entry.content;
+            const priority = document.createElement('span');
+            priority.className = `agent-plan-entry-priority ${
+                normalizePlanPriorityClass(entry.priority)
+            }`;
+            priority.textContent = getAgentPlanPriorityLabel(
+                entry.priority
+            );
+            row.appendChild(marker);
+            body.appendChild(text);
+            body.appendChild(priority);
+            row.appendChild(body);
+            list.appendChild(row);
+        }
+        return list;
+    }
+
+    buildAgentPlanHistoryNode(agentTab, planEntry) {
+        const item = document.createElement('div');
+        item.className = 'agent-message agent-plan-history';
+        item.appendChild(buildAgentTimelineHeader(
+            buildAgentTimelineRoleLabel(agentTab, 'plan'),
+            getAgentMessageTimeLabel(planEntry),
+            planEntry.createdAt || ''
+        ));
+        const body = document.createElement('div');
+        body.className = 'agent-plan-history-body';
+        const header = document.createElement('div');
+        header.className = 'agent-plan-header';
+        header.textContent = planEntry.summary
+            || buildAgentPlanSummary(planEntry.entries || []);
+        body.appendChild(header);
+        body.appendChild(this.buildAgentPlanList(planEntry.entries || []));
+        item.appendChild(body);
+        return item;
     }
 
     buildAgentEmptyState(agentTab) {
@@ -2754,6 +2806,7 @@ class EditorManager {
         if (updates.length === 0) {
             return false;
         }
+        const shouldPinToBottom = this.isAgentTranscriptNearBottom(48);
         let refreshed = false;
         for (const [id, entries] of updates) {
             if (!Array.isArray(entries) || entries.length === 0) {
@@ -2786,6 +2839,7 @@ class EditorManager {
         }
         if (refreshed) {
             this.renderAgentPlan(agentTab);
+            this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
         }
         return refreshed;
     }
@@ -3166,6 +3220,20 @@ class EditorManager {
         if (!this.agentTranscript) return;
         this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
         this.updateAgentScrollBottomButton();
+    }
+
+    scheduleAgentTranscriptViewportUpdate(pinToBottom = false) {
+        if (!this.agentTranscript) return;
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                if (!this.agentTranscript) return;
+                if (pinToBottom) {
+                    this.scrollAgentTranscriptToBottom();
+                    return;
+                }
+                this.updateAgentScrollBottomButton();
+            });
+        });
     }
 
     updateAgentScrollBottomButton() {
@@ -4518,6 +4586,7 @@ class AgentTab {
         this.isDrainingQueuedPrompt = false;
         this.scrollToBottomOnNextRender = true;
         this.busySyncTimer = null;
+        this.planHistory = [];
         this.update(data);
         this.connect();
     }
@@ -4560,7 +4629,7 @@ class AgentTab {
         this.configOptions = Array.isArray(data.configOptions)
             ? data.configOptions
             : [];
-        this.plan = Array.isArray(data.plan)
+        const nextPlan = Array.isArray(data.plan)
             ? data.plan.map((entry) => this.#normalizePlanEntry(entry))
             : [];
         this.usage = this.#normalizeUsageState(data.usage);
@@ -4623,6 +4692,7 @@ class AgentTab {
                 );
             }
         }
+        this.#applyPlanState(nextPlan);
         this.#syncBusyWatchdog();
     }
 
@@ -4902,6 +4972,37 @@ class AgentTab {
         };
     }
 
+    #applyPlanState(nextPlan) {
+        const previousPlan = Array.isArray(this.plan) ? this.plan : [];
+        const previousWasComplete = isAgentPlanComplete(previousPlan);
+        const nextIsComplete = isAgentPlanComplete(nextPlan);
+        this.plan = nextPlan;
+        if (nextIsComplete && !previousWasComplete) {
+            this.#archiveCompletedPlan(nextPlan);
+        }
+    }
+
+    #archiveCompletedPlan(entries) {
+        const normalizedEntries = Array.isArray(entries)
+            ? entries.map((entry) => this.#normalizePlanEntry(entry))
+            : [];
+        if (normalizedEntries.length === 0) {
+            return;
+        }
+        const order = Number.isFinite(this.timelineCounter)
+            ? this.timelineCounter + 0.5
+            : 0.5;
+        this.timelineCounter = Math.max(this.timelineCounter || 0, order);
+        this.planHistory.push({
+            id: `plan-${crypto.randomUUID()}`,
+            createdAt: new Date().toISOString(),
+            order,
+            summary: buildAgentPlanSummary(normalizedEntries),
+            entries: normalizedEntries
+        });
+        this.scrollToBottomOnNextRender = true;
+    }
+
     #normalizeUsageState(usage) {
         if (!usage || typeof usage !== 'object') return null;
         return {
@@ -5077,11 +5178,13 @@ class AgentTab {
                     : [];
                 break;
             case 'plan':
-                this.plan = Array.isArray(update.entries)
-                    ? update.entries.map((entry) =>
-                        this.#normalizePlanEntry(entry)
-                    )
-                    : [];
+                this.#applyPlanState(
+                    Array.isArray(update.entries)
+                        ? update.entries.map((entry) =>
+                            this.#normalizePlanEntry(entry)
+                        )
+                        : []
+                );
                 break;
             case 'usage_update':
                 this.usage = this.#normalizeUsageState({
@@ -6207,6 +6310,14 @@ function getAgentTimelineItems(agentTab) {
         });
     }
 
+    for (const planEntry of agentTab.planHistory || []) {
+        items.push({
+            type: 'plan',
+            order: Number.isFinite(planEntry?.order) ? planEntry.order : 0,
+            value: planEntry
+        });
+    }
+
     items.sort((left, right) => {
         if (left.order !== right.order) {
             return left.order - right.order;
@@ -6214,7 +6325,8 @@ function getAgentTimelineItems(agentTab) {
         const typeOrder = {
             message: 0,
             tool: 1,
-            permission: 2
+            permission: 2,
+            plan: 3
         };
         return (typeOrder[left.type] || 0) - (typeOrder[right.type] || 0);
     });
@@ -6248,6 +6360,14 @@ function getAgentPlanStatusMarker(status = '') {
     if (value === 'completed') return '✓';
     if (value === 'in_progress') return '•';
     return '○';
+}
+
+function isAgentPlanComplete(entries = []) {
+    return Array.isArray(entries)
+        && entries.length > 0
+        && entries.every(
+            (entry) => String(entry?.status || '').toLowerCase() === 'completed'
+        );
 }
 
 function buildAgentPlanSummary(entries = []) {
