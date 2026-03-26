@@ -175,6 +175,67 @@ class TabminalTestAgent {
         return { configOptions };
     }
 
+    async sendPlan(sessionId, entries) {
+        await this.connection.sessionUpdate({
+            sessionId,
+            update: {
+                sessionUpdate: 'plan',
+                entries
+            }
+        });
+    }
+
+    async sendUsage(sessionId) {
+        const now = Date.now();
+        await this.connection.sessionUpdate({
+            sessionId,
+            update: {
+                sessionUpdate: 'usage_update',
+                used: 48200,
+                size: 262144,
+                cost: {
+                    amount: 0.12,
+                    currency: 'USD'
+                },
+                _meta: {
+                    resetAt: new Date(now + 95 * 60 * 1000).toISOString(),
+                    windows: [
+                        {
+                            label: '5h',
+                            used: 32,
+                            size: 100,
+                            resetAt: new Date(
+                                now + 95 * 60 * 1000
+                            ).toISOString()
+                        },
+                        {
+                            label: '7d',
+                            used: 210,
+                            size: 1000,
+                            resetAt: new Date(
+                                now + 5 * 24 * 60 * 60 * 1000
+                            ).toISOString()
+                        }
+                    ]
+                }
+            }
+        });
+    }
+
+    async createTerminalDemo(sessionId) {
+        const terminal = await this.connection.createTerminal({
+            sessionId,
+            command: 'printf "alpha\\nbeta\\n"; sleep 0.05',
+            cwd: process.cwd(),
+            outputByteLimit: 4096
+        });
+        await sleep(80);
+        await terminal.currentOutput();
+        await terminal.waitForExit();
+        await terminal.release();
+        return terminal;
+    }
+
     async prompt(params) {
         const session = this.sessions.get(params.sessionId);
         if (!session) {
@@ -190,6 +251,24 @@ class TabminalTestAgent {
             : '';
 
         try {
+            await this.sendPlan(params.sessionId, [
+                {
+                    content: 'Inspect the request and summarize the task',
+                    priority: 'high',
+                    status: 'completed'
+                },
+                {
+                    content: 'Run the necessary tool calls',
+                    priority: 'high',
+                    status: 'in_progress'
+                },
+                {
+                    content: 'Write the final response',
+                    priority: 'medium',
+                    status: 'pending'
+                }
+            ]);
+            await this.sendUsage(params.sessionId);
             await this.connection.sessionUpdate({
                 sessionId: params.sessionId,
                 update: {
@@ -276,6 +355,7 @@ class TabminalTestAgent {
             }
 
             if (/diff-smoke/i.test(promptText)) {
+                const terminal = await this.createTerminalDemo(params.sessionId);
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
                     update: {
@@ -297,6 +377,10 @@ class TabminalTestAgent {
                         status: 'completed',
                         content: [
                             {
+                                type: 'terminal',
+                                terminalId: terminal.id
+                            },
+                            {
                                 type: 'diff',
                                 path: '/tmp/sample.js',
                                 oldText: 'const answer = 1;\\n',
@@ -316,6 +400,23 @@ class TabminalTestAgent {
                         ]
                     }
                 });
+                await this.sendPlan(params.sessionId, [
+                    {
+                        content: 'Inspect the request and summarize the task',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Run the necessary tool calls',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Write the final response',
+                        priority: 'medium',
+                        status: 'completed'
+                    }
+                ]);
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
                     update: {

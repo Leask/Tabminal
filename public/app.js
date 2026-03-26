@@ -544,6 +544,8 @@ class EditorManager {
         this.agentModelSelect = null;
         this.agentThoughtSelect = null;
         this.agentNewChatButton = null;
+        this.agentUsageHud = null;
+        this.agentPlan = null;
         this.agentTopActions = null;
         this.agentCommands = null;
         this.agentTranscript = null;
@@ -571,6 +573,7 @@ class EditorManager {
         this.loadIconMap();
         this.agentTimestampTimer = window.setInterval(() => {
             this.refreshAgentTimelineTimestamps();
+            this.refreshAgentUsageHud();
         }, 1000);
     }
 
@@ -832,6 +835,10 @@ class EditorManager {
             await this.createSiblingAgentTab(agentTab);
         });
 
+        this.agentUsageHud = document.createElement('div');
+        this.agentUsageHud.className = 'agent-usage-hud';
+        this.agentUsageHud.style.display = 'none';
+
         this.agentSetupButton = document.createElement('button');
         this.agentSetupButton.type = 'button';
         this.agentSetupButton.className = 'agent-panel-button secondary';
@@ -851,6 +858,10 @@ class EditorManager {
 
         this.agentPermissions = document.createElement('div');
         this.agentPermissions.className = 'agent-panel-permissions';
+
+        this.agentPlan = document.createElement('div');
+        this.agentPlan.className = 'agent-plan-panel';
+        this.agentPlan.style.display = 'none';
 
         this.agentTranscript = document.createElement('div');
         this.agentTranscript.className = 'agent-panel-transcript';
@@ -1125,9 +1136,11 @@ class EditorManager {
         this.agentQueue.style.display = 'none';
 
         this.agentContainer.appendChild(header);
+        this.agentContainer.appendChild(this.agentUsageHud);
         this.agentContainer.appendChild(this.agentNewChatButton);
         this.agentContainer.appendChild(this.agentTools);
         this.agentContainer.appendChild(this.agentPermissions);
+        this.agentContainer.appendChild(this.agentPlan);
         this.agentContainer.appendChild(this.agentTranscript);
         this.agentContainer.appendChild(this.agentActivity);
         this.agentContainer.appendChild(this.agentQueue);
@@ -1882,6 +1895,8 @@ class EditorManager {
         this.disposeAgentEmbeddedEditors();
         this.agentHeader.textContent = '';
         this.agentMeta.textContent = '';
+        this.renderAgentUsageHud(agentTab);
+        this.renderAgentPlan(agentTab);
 
         const modelConfig = getAgentConfigOptionByCategory(agentTab, 'model');
         const thoughtConfig = getAgentConfigOptionByCategory(
@@ -1993,6 +2008,7 @@ class EditorManager {
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
         this.updateAgentComposerActions(agentTab);
         this.refreshAgentTimelineTimestamps();
+        this.refreshAgentUsageHud();
     }
 
     refreshAgentTimelineTimestamps() {
@@ -2007,6 +2023,122 @@ class EditorManager {
             if (!createdAt) continue;
             node.textContent = getAgentMessageTimeLabel({ createdAt });
         }
+    }
+
+    refreshAgentUsageHud() {
+        const activeTab = getActiveAgentTab();
+        if (!activeTab || !this.agentUsageHud) return;
+        if (this.agentContainer.style.display === 'none') return;
+        const resetNodes = this.agentUsageHud.querySelectorAll(
+            '.agent-usage-reset[data-reset-at]'
+        );
+        for (const node of resetNodes) {
+            const resetAt = String(node.dataset.resetAt || '').trim();
+            node.textContent = formatAgentUsageReset(resetAt);
+        }
+    }
+
+    renderAgentUsageHud(agentTab) {
+        if (!this.agentUsageHud) return;
+        this.agentUsageHud.innerHTML = '';
+        const usage = normalizeAgentUsageForDisplay(agentTab?.usage || null);
+        if (!usage || isCompactWorkspaceMode()) {
+            this.agentUsageHud.style.display = 'none';
+            return;
+        }
+
+        const contextRow = document.createElement('div');
+        contextRow.className = 'agent-usage-row primary';
+        contextRow.appendChild(buildAgentUsageMetricLabel('Context'));
+        contextRow.appendChild(buildAgentUsageBar(usage.used, usage.size));
+        contextRow.appendChild(buildAgentUsageValue(usage.used, usage.size));
+        this.agentUsageHud.appendChild(contextRow);
+
+        const totals = buildAgentUsageTotalsMeta(usage);
+        if (totals) {
+            const totalsRow = document.createElement('div');
+            totalsRow.className = 'agent-usage-meta';
+            totalsRow.textContent = totals;
+            this.agentUsageHud.appendChild(totalsRow);
+        }
+
+        for (const windowUsage of usage.windows) {
+            const row = document.createElement('div');
+            row.className = 'agent-usage-row secondary';
+            row.appendChild(buildAgentUsageMetricLabel(windowUsage.label));
+            row.appendChild(
+                buildAgentUsageBar(windowUsage.used, windowUsage.size)
+            );
+            row.appendChild(
+                buildAgentUsageValue(windowUsage.used, windowUsage.size)
+            );
+            this.agentUsageHud.appendChild(row);
+            if (windowUsage.resetAt) {
+                const reset = document.createElement('div');
+                reset.className = 'agent-usage-reset';
+                reset.dataset.resetAt = windowUsage.resetAt;
+                reset.textContent = formatAgentUsageReset(windowUsage.resetAt);
+                this.agentUsageHud.appendChild(reset);
+            }
+        }
+
+        if (usage.resetAt && usage.windows.length === 0) {
+            const reset = document.createElement('div');
+            reset.className = 'agent-usage-reset';
+            reset.dataset.resetAt = usage.resetAt;
+            reset.textContent = formatAgentUsageReset(usage.resetAt);
+            this.agentUsageHud.appendChild(reset);
+        }
+
+        this.agentUsageHud.style.display = '';
+    }
+
+    renderAgentPlan(agentTab) {
+        if (!this.agentPlan) return;
+        this.agentPlan.innerHTML = '';
+        const plan = Array.isArray(agentTab?.plan) ? agentTab.plan : [];
+        const runningTerminals = getAgentRunningTerminalSummaries(agentTab);
+        if (plan.length === 0 && runningTerminals.length === 0) {
+            this.agentPlan.style.display = 'none';
+            return;
+        }
+
+        if (plan.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'agent-plan-header';
+            header.textContent = buildAgentPlanSummary(plan);
+            this.agentPlan.appendChild(header);
+
+            const list = document.createElement('div');
+            list.className = 'agent-plan-list';
+            for (const entry of plan) {
+                const row = document.createElement('div');
+                row.className = `agent-plan-entry ${normalizePlanStatusClass(
+                    entry.status
+                )}`;
+                const marker = document.createElement('span');
+                marker.className = 'agent-plan-entry-marker';
+                marker.textContent = getAgentPlanStatusMarker(entry.status);
+                const text = document.createElement('span');
+                text.className = 'agent-plan-entry-text';
+                text.textContent = entry.content;
+                row.appendChild(marker);
+                row.appendChild(text);
+                list.appendChild(row);
+            }
+            this.agentPlan.appendChild(list);
+        }
+
+        if (runningTerminals.length > 0) {
+            const terminalSummary = document.createElement('div');
+            terminalSummary.className = 'agent-plan-terminal-row';
+            terminalSummary.textContent = runningTerminals.length === 1
+                ? 'Running 1 terminal'
+                : `Running ${runningTerminals.length} terminals`;
+            this.agentPlan.appendChild(terminalSummary);
+        }
+
+        this.agentPlan.style.display = '';
     }
 
     buildAgentEmptyState(agentTab) {
@@ -2090,7 +2222,7 @@ class EditorManager {
             node.appendChild(pathLinks);
         }
 
-        const summaryText = buildAgentToolSummary(toolCall);
+        const summaryText = buildAgentToolSummary(toolCall, agentTab.terminals);
         if (summaryText) {
             const summary = document.createElement('div');
             summary.className = 'agent-tool-call-summary';
@@ -2098,7 +2230,11 @@ class EditorManager {
             node.appendChild(summary);
         }
 
-        const sections = buildAgentToolSections(toolCall, summaryText);
+        const sections = buildAgentToolSections(
+            toolCall,
+            summaryText,
+            agentTab.terminals
+        );
         if (sections.length > 0) {
             const sectionContainer = document.createElement('div');
             sectionContainer.className = 'agent-tool-call-sections';
@@ -2177,7 +2313,10 @@ class EditorManager {
             card.appendChild(pathLinks);
         }
 
-        const summaryText = buildAgentPermissionSummary(permission);
+        const summaryText = buildAgentPermissionSummary(
+            permission,
+            agentTab.terminals
+        );
         if (summaryText) {
             const summary = document.createElement('div');
             summary.className = 'agent-tool-call-summary';
@@ -2185,7 +2324,11 @@ class EditorManager {
             card.appendChild(summary);
         }
 
-        const sections = buildAgentPermissionSections(permission, summaryText);
+        const sections = buildAgentPermissionSections(
+            permission,
+            summaryText,
+            agentTab.terminals
+        );
         if (sections.length > 0) {
             const sectionContainer = document.createElement('div');
             sectionContainer.className = 'agent-tool-call-sections';
@@ -2297,6 +2440,9 @@ class EditorManager {
         ) {
             return this.buildAgentCodeSectionBody(details, section);
         }
+        if (section?.kind === 'terminal') {
+            return this.buildAgentTerminalSectionBody(section);
+        }
         const body = document.createElement('pre');
         body.className = 'agent-tool-call-body';
         body.textContent = section?.text || '';
@@ -2350,6 +2496,32 @@ class EditorManager {
                 });
             }
         });
+        return host;
+    }
+
+    buildAgentTerminalSectionBody(section) {
+        const host = document.createElement('div');
+        host.className = 'agent-tool-call-terminal-host';
+
+        const terminal = section?.terminal || {};
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-tool-call-terminal-meta';
+        const metaParts = [];
+        if (terminal.command) metaParts.push(terminal.command);
+        if (terminal.cwd) metaParts.push(terminal.cwd);
+        const terminalStatus = getAgentTerminalStatusLabel(terminal);
+        if (terminalStatus) metaParts.push(terminalStatus);
+        meta.textContent = metaParts.join(' · ');
+        if (meta.textContent) {
+            host.appendChild(meta);
+        }
+
+        const output = document.createElement('pre');
+        output.className = 'agent-tool-call-terminal-output';
+        output.textContent = terminal.output || '(no output yet)';
+        host.appendChild(output);
+
         return host;
     }
 
@@ -4044,6 +4216,10 @@ class AgentTab {
         this.configOptions = Array.isArray(data.configOptions)
             ? data.configOptions
             : [];
+        this.plan = Array.isArray(data.plan)
+            ? data.plan.map((entry) => this.#normalizePlanEntry(entry))
+            : [];
+        this.usage = this.#normalizeUsageState(data.usage);
         this.needsAttention = Boolean(this.needsAttention);
         this.runCounter = Number.isFinite(this.runCounter)
             ? this.runCounter
@@ -4083,6 +4259,15 @@ class AgentTab {
                 this.permissions.set(
                     permission.id,
                     this.#normalizeTimelineEntry(permission)
+                );
+            }
+        }
+        this.terminals = new Map();
+        for (const terminal of data.terminals || []) {
+            if (terminal?.terminalId) {
+                this.terminals.set(
+                    terminal.terminalId,
+                    this.#normalizeTerminalSummary(terminal)
                 );
             }
         }
@@ -4177,6 +4362,23 @@ class AgentTab {
                 }
                 break;
             }
+            case 'terminal_update':
+                if (message.terminal?.terminalId) {
+                    const previous = this.terminals.get(
+                        message.terminal.terminalId
+                    ) || {};
+                    this.terminals.set(
+                        message.terminal.terminalId,
+                        this.#normalizeTerminalSummary({
+                            ...previous,
+                            ...message.terminal
+                        })
+                    );
+                }
+                break;
+            case 'usage_state':
+                this.usage = this.#normalizeUsageState(message.usage);
+                break;
             case 'status':
                 this.status = message.status || this.status;
                 this.busy = !!message.busy;
@@ -4312,6 +4514,75 @@ class AgentTab {
         return nextMessage;
     }
 
+    #normalizePlanEntry(entry) {
+        return {
+            content: typeof entry?.content === 'string' ? entry.content : '',
+            priority: typeof entry?.priority === 'string'
+                ? entry.priority
+                : 'medium',
+            status: typeof entry?.status === 'string'
+                ? entry.status
+                : 'pending'
+        };
+    }
+
+    #normalizeUsageState(usage) {
+        if (!usage || typeof usage !== 'object') return null;
+        return {
+            used: Number.isFinite(usage.used) ? usage.used : null,
+            size: Number.isFinite(usage.size) ? usage.size : null,
+            cost: usage.cost || null,
+            totals: usage.totals || null,
+            updatedAt: typeof usage.updatedAt === 'string'
+                ? usage.updatedAt
+                : '',
+            resetAt: typeof usage.resetAt === 'string'
+                ? usage.resetAt
+                : '',
+            windows: Array.isArray(usage.windows)
+                ? usage.windows.map((item) => ({
+                    label: typeof item?.label === 'string'
+                        ? item.label
+                        : '',
+                    used: Number.isFinite(item?.used) ? item.used : null,
+                    size: Number.isFinite(item?.size) ? item.size : null,
+                    resetAt: typeof item?.resetAt === 'string'
+                        ? item.resetAt
+                        : ''
+                }))
+                : []
+        };
+    }
+
+    #normalizeTerminalSummary(summary) {
+        return {
+            terminalId: String(summary?.terminalId || ''),
+            command: typeof summary?.command === 'string'
+                ? summary.command
+                : '',
+            cwd: typeof summary?.cwd === 'string' ? summary.cwd : '',
+            output: typeof summary?.output === 'string' ? summary.output : '',
+            createdAt: typeof summary?.createdAt === 'string'
+                ? summary.createdAt
+                : '',
+            updatedAt: typeof summary?.updatedAt === 'string'
+                ? summary.updatedAt
+                : '',
+            released: !!summary?.released,
+            running: !!summary?.running,
+            exitStatus: summary?.exitStatus && typeof summary.exitStatus === 'object'
+                ? {
+                    exitCode: Number.isFinite(summary.exitStatus.exitCode)
+                        ? summary.exitStatus.exitCode
+                        : null,
+                    signal: typeof summary.exitStatus.signal === 'string'
+                        ? summary.exitStatus.signal
+                        : null
+                }
+                : null
+        };
+    }
+
     #nextTimelineOrder() {
         this.timelineCounter = Math.max(this.timelineCounter || 0, 0) + 1;
         return this.timelineCounter;
@@ -4409,6 +4680,19 @@ class AgentTab {
                 this.configOptions = Array.isArray(update.configOptions)
                     ? update.configOptions
                     : [];
+                break;
+            case 'plan':
+                this.plan = Array.isArray(update.entries)
+                    ? update.entries.map((entry) =>
+                        this.#normalizePlanEntry(entry)
+                    )
+                    : [];
+                break;
+            case 'usage_update':
+                this.usage = this.#normalizeUsageState({
+                    ...(this.usage || {}),
+                    ...update
+                });
                 break;
             case 'session_info_update':
                 if (typeof update.title === 'string') {
@@ -4675,6 +4959,14 @@ function getAgentTabsForServer(serverId) {
     return Array.from(state.agentTabs.values()).filter(
         (tab) => tab.serverId === serverId
     );
+}
+
+function hasActiveAgentSyncNeed(serverId) {
+    return getAgentTabsForServer(serverId).some((tab) => (
+        !!tab.busy
+        || tab.status === 'restoring'
+        || tab.isDrainingQueuedPrompt
+    ));
 }
 
 function getAgentTabsForSession(session) {
@@ -5238,6 +5530,151 @@ function getAgentTimelineItems(agentTab) {
     });
 
     return items;
+}
+
+function normalizePlanStatusClass(status = '') {
+    const value = String(status || '').toLowerCase();
+    if (value === 'completed') return 'completed';
+    if (value === 'in_progress') return 'in-progress';
+    return 'pending';
+}
+
+function getAgentPlanStatusMarker(status = '') {
+    const value = String(status || '').toLowerCase();
+    if (value === 'completed') return '✓';
+    if (value === 'in_progress') return '•';
+    return '○';
+}
+
+function buildAgentPlanSummary(entries = []) {
+    const total = entries.length;
+    const completed = entries.filter(
+        (entry) => String(entry?.status || '') === 'completed'
+    ).length;
+    return `${completed} of ${total} tasks completed`;
+}
+
+function normalizeAgentUsageForDisplay(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    const hasContext = Number.isFinite(usage.used) && Number.isFinite(usage.size);
+    const windows = Array.isArray(usage.windows)
+        ? usage.windows.filter((item) =>
+            Number.isFinite(item?.used) && Number.isFinite(item?.size)
+        )
+        : [];
+    if (!hasContext && windows.length === 0 && !usage.cost && !usage.totals) {
+        return null;
+    }
+    return {
+        used: hasContext ? usage.used : null,
+        size: hasContext ? usage.size : null,
+        cost: usage.cost || null,
+        totals: usage.totals || null,
+        resetAt: typeof usage.resetAt === 'string' ? usage.resetAt : '',
+        windows
+    };
+}
+
+function formatTokenCompact(value) {
+    if (!Number.isFinite(value)) return '';
+    if (value >= 1000000) {
+        return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
+    }
+    if (value >= 1000) {
+        return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K`;
+    }
+    return String(value);
+}
+
+function buildAgentUsageValue(used, size) {
+    const node = document.createElement('span');
+    node.className = 'agent-usage-value';
+    node.textContent = Number.isFinite(used) && Number.isFinite(size)
+        ? `${Math.round((used / Math.max(size, 1)) * 100)}%`
+        : '—';
+    return node;
+}
+
+function buildAgentUsageMetricLabel(label) {
+    const node = document.createElement('span');
+    node.className = 'agent-usage-label';
+    node.textContent = label;
+    return node;
+}
+
+function buildAgentUsageBar(used, size) {
+    const outer = document.createElement('span');
+    outer.className = 'agent-usage-bar';
+    const fill = document.createElement('span');
+    fill.className = 'agent-usage-bar-fill';
+    const percent = Number.isFinite(used) && Number.isFinite(size) && size > 0
+        ? Math.max(0, Math.min(100, (used / size) * 100))
+        : 0;
+    fill.style.width = `${percent}%`;
+    outer.appendChild(fill);
+    return outer;
+}
+
+function formatAgentUsageReset(resetAt = '') {
+    if (!resetAt) return '';
+    const timestamp = new Date(resetAt);
+    if (Number.isNaN(timestamp.getTime())) {
+        return '';
+    }
+    const deltaMs = timestamp.getTime() - Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const localLabel = deltaMs < oneDayMs && deltaMs > -oneDayMs
+        ? timestamp.toLocaleTimeString([], {
+            hour: 'numeric',
+            minute: '2-digit'
+        })
+        : timestamp.toLocaleString();
+    return `resets ${localLabel}`;
+}
+
+function buildAgentUsageTotalsMeta(usage) {
+    const parts = [];
+    if (
+        Number.isFinite(usage.cost?.amount)
+        && usage.cost?.currency
+    ) {
+        parts.push(
+            `${usage.cost.currency} ${Number(usage.cost.amount).toFixed(2)}`
+        );
+    }
+    if (Number.isFinite(usage.totals?.totalTokens)) {
+        parts.push(
+            `${formatTokenCompact(usage.totals.totalTokens)} tokens`
+        );
+    }
+    if (Number.isFinite(usage.used) && Number.isFinite(usage.size)) {
+        parts.push(
+            `${formatTokenCompact(usage.used)} / ${formatTokenCompact(
+                usage.size
+            )}`
+        );
+    }
+    return parts.join(' · ');
+}
+
+function getAgentRunningTerminalSummaries(agentTab) {
+    return Array.from(agentTab?.terminals?.values?.() || []).filter(
+        (terminal) => terminal?.running
+    );
+}
+
+function getAgentTerminalStatusLabel(terminal = {}) {
+    if (terminal.running) return 'Running';
+    if (terminal.released) return 'Released';
+    if (terminal.exitStatus?.signal) {
+        return `Exited (${terminal.exitStatus.signal})`;
+    }
+    if (Number.isFinite(terminal.exitStatus?.exitCode)) {
+        return terminal.exitStatus.exitCode === 0
+            ? 'Completed'
+            : `Exit ${terminal.exitStatus.exitCode}`;
+    }
+    return '';
 }
 
 function getAgentDisplayLabel(agentTab) {
@@ -5864,7 +6301,7 @@ function buildAgentPathLinks(agentTab, toolLike) {
     return container;
 }
 
-function buildAgentToolSummary(toolCall) {
+function buildAgentToolSummary(toolCall, terminals = null) {
     const stdout = compactAgentSummaryText(toolCall?.rawOutput?.stdout || '');
     if (stdout) return stdout;
 
@@ -5877,7 +6314,7 @@ function buildAgentToolSummary(toolCall) {
     if (formatted) return formatted;
 
     const contentSummary = compactAgentSummaryText(
-        summarizeToolCallContent(toolCall)
+        summarizeToolCallContent(toolCall, terminals)
     );
     if (contentSummary) return contentSummary;
 
@@ -5970,7 +6407,20 @@ function summarizeAgentRawOutput(rawOutput) {
     return '';
 }
 
-function summarizeToolCallContent(toolCall) {
+function resolveAgentTerminalSummary(terminals, terminalId) {
+    if (!terminalId) return null;
+    if (terminals instanceof Map) {
+        return terminals.get(terminalId) || null;
+    }
+    if (Array.isArray(terminals)) {
+        return terminals.find(
+            (terminal) => terminal?.terminalId === terminalId
+        ) || null;
+    }
+    return null;
+}
+
+function summarizeToolCallContent(toolCall, terminals = null) {
     if (!Array.isArray(toolCall?.content)) return '';
     const lines = [];
     for (const item of toolCall.content) {
@@ -5981,7 +6431,19 @@ function summarizeToolCallContent(toolCall) {
             continue;
         }
         if (item?.type === 'terminal' && item.terminalId) {
-            lines.push(`Terminal: ${item.terminalId}`);
+            const terminal = resolveAgentTerminalSummary(
+                terminals,
+                item.terminalId
+            );
+            if (terminal) {
+                const output = compactAgentSummaryText(terminal.output || '');
+                const label = terminal.command || `Terminal ${item.terminalId}`;
+                lines.push(
+                    output ? `${label}\n${output}` : label
+                );
+            } else {
+                lines.push(`Terminal: ${item.terminalId}`);
+            }
             continue;
         }
         if (item?.type === 'diff' && item.path) {
@@ -6070,8 +6532,30 @@ function estimateAgentDiffEditorHeight(oldText, newText) {
     return Math.min(Math.max(lines * 18 + 46, 180), 520);
 }
 
-function buildAgentStructuredContentSections(toolCall, summaryText = '') {
+function buildAgentStructuredContentSections(
+    toolCall,
+    summaryText = '',
+    terminals = null
+) {
     const sections = [];
+
+    if (Array.isArray(toolCall?.content)) {
+        for (const item of toolCall.content) {
+            if (item?.type === 'terminal' && item.terminalId) {
+                const terminal = resolveAgentTerminalSummary(
+                    terminals,
+                    item.terminalId
+                );
+                sections.push({
+                    label: 'Terminal',
+                    preview: terminal?.command || item.terminalId,
+                    text: terminal?.output || '',
+                    kind: 'terminal',
+                    terminal
+                });
+            }
+        }
+    }
 
     for (const item of getToolCallDiffItems(toolCall)) {
         sections.push({
@@ -6183,7 +6667,7 @@ function buildAgentToolMeta(toolCall) {
     return parts.join(' · ');
 }
 
-function buildAgentToolSections(toolCall, summaryText = '') {
+function buildAgentToolSections(toolCall, summaryText = '', terminals = null) {
     const sections = [];
     const title = getAgentToolTitle(toolCall);
     const rawInput = summarizeAgentRawInput(toolCall?.rawInput);
@@ -6200,11 +6684,19 @@ function buildAgentToolSections(toolCall, summaryText = '') {
             kind: 'text'
         });
     }
-    sections.push(...buildAgentStructuredContentSections(toolCall, summaryText));
-    const hasStructuredContent = sections.some((section) =>
-        section.label === 'Content' || section.label === 'Diff'
+    sections.push(
+        ...buildAgentStructuredContentSections(
+            toolCall,
+            summaryText,
+            terminals
+        )
     );
-    const content = summarizeToolCallContent(toolCall);
+    const hasStructuredContent = sections.some((section) =>
+        section.label === 'Content'
+        || section.label === 'Diff'
+        || section.label === 'Terminal'
+    );
+    const content = summarizeToolCallContent(toolCall, terminals);
     if (
         !hasStructuredContent
         && content
@@ -6243,7 +6735,7 @@ function hasResolvablePermissionOptions(permission) {
     return Array.isArray(permission?.options) && permission.options.length > 0;
 }
 
-function buildAgentPermissionSummary(permission) {
+function buildAgentPermissionSummary(permission, terminals = null) {
     const leading = [];
     const statusLabel = getAgentPermissionStatusLabel(permission);
     if (permission?.status === 'pending') {
@@ -6260,7 +6752,10 @@ function buildAgentPermissionSummary(permission) {
         );
     }
 
-    const content = summarizeToolCallContent(permission?.toolCall || {});
+    const content = summarizeToolCallContent(
+        permission?.toolCall || {},
+        terminals
+    );
     const paths = extractToolPaths(permission?.toolCall || {});
     const lines = String(content || '')
         .split('\n')
@@ -6285,10 +6780,15 @@ function buildAgentPermissionSummary(permission) {
     return leading.join('\n\n').trim();
 }
 
-function buildAgentPermissionSections(permission, summaryText = '') {
+function buildAgentPermissionSections(
+    permission,
+    summaryText = '',
+    terminals = null
+) {
     const sections = buildAgentToolSections(
         permission?.toolCall || {},
-        summaryText
+        summaryText,
+        terminals
     );
     const selectedOption = getPermissionOptionById(
         permission,
@@ -6649,6 +7149,22 @@ function refreshWorkspaceIfSessionActive(session) {
     editorManager.updateEditorPaneVisibility();
 }
 
+function restoreWorkspaceForSession(session) {
+    if (!session) return;
+    if (editorManager.currentSession?.key !== session.key) {
+        editorManager.switchTo(session);
+    } else {
+        editorManager.renderEditorTabs();
+    }
+    const activeKey = editorManager.getActiveWorkspaceTabKey(session);
+    if (activeKey) {
+        editorManager.activateWorkspaceTab(activeKey, true);
+    } else {
+        editorManager.showEmptyState();
+    }
+    editorManager.updateEditorPaneVisibility();
+}
+
 function upsertAgentTab(server, data) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
@@ -6795,7 +7311,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
     if (activeSession && activeSession.serverId === server.id) {
         const activeKey = editorManager.getActiveWorkspaceTabKey(activeSession);
         if (activeKey) {
-            editorManager.switchTo(activeSession);
+            restoreWorkspaceForSession(activeSession);
             return;
         }
     }
@@ -6818,7 +7334,11 @@ async function syncAgentsForServer(server, { force = false } = {}) {
         }
         preferredSession.editorState.isVisible = true;
         preferredSession.saveState();
-        switchToSession(preferredSession.key);
+        if (state.activeSessionKey === preferredSession.key) {
+            restoreWorkspaceForSession(preferredSession);
+        } else {
+            switchToSession(preferredSession.key);
+        }
     }
 }
 
@@ -7069,7 +7589,9 @@ async function syncServer(server) {
     if (!server || !server.isAuthenticated) return;
     const now = Date.now();
     const wasReconnecting = server.connectionStatus === 'reconnecting';
-    const shouldRefreshAgents = !server.agentStateLoaded || wasReconnecting;
+    const shouldRefreshAgents = !server.agentStateLoaded
+        || wasReconnecting
+        || hasActiveAgentSyncNeed(server.id);
     if (
         wasReconnecting
         && server.nextSyncAt

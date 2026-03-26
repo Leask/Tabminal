@@ -478,9 +478,107 @@ export function mergeAgentMessageText(previousText, chunkText) {
     return `${previous}${chunk}`;
 }
 
-class LocalExecTerminal {
+function formatTerminalDisplayCommand(request = {}, spawnRequest = {}) {
+    const explicitArgs = Array.isArray(request.args)
+        ? request.args.filter((value) => typeof value === 'string')
+        : [];
+    if (explicitArgs.length > 0) {
+        return [request.command, ...explicitArgs].join(' ').trim();
+    }
+    if (typeof request.command === 'string' && request.command.trim()) {
+        return request.command.trim();
+    }
+    return [spawnRequest.command, ...(spawnRequest.args || [])]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+}
+
+function normalizePlanEntries(entries = []) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({
+            content: typeof entry.content === 'string' ? entry.content : '',
+            priority: typeof entry.priority === 'string'
+                ? entry.priority
+                : 'medium',
+            status: typeof entry.status === 'string'
+                ? entry.status
+                : 'pending'
+        }))
+        .filter((entry) => entry.content);
+}
+
+function extractUsageResetHints(meta = {}) {
+    if (!meta || typeof meta !== 'object') {
+        return { resetAt: '', windows: [] };
+    }
+    const windows = Array.isArray(meta.windows)
+        ? meta.windows
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => ({
+                label: typeof item.label === 'string' ? item.label : '',
+                used: Number.isFinite(item.used) ? item.used : null,
+                size: Number.isFinite(item.size) ? item.size : null,
+                resetAt: typeof item.resetAt === 'string' ? item.resetAt : ''
+            }))
+            .filter((item) => item.label || item.resetAt)
+        : [];
+    const resetCandidates = [
+        meta.resetAt,
+        meta.resetsAt,
+        meta.nextResetAt,
+        meta.resetTime,
+        meta.resetDate
+    ];
+    const resetAt = resetCandidates.find(
+        (value) => typeof value === 'string' && value.trim()
+    ) || '';
+    return { resetAt, windows };
+}
+
+function mergeUsageState(previous = {}, update = {}) {
+    const meta = extractUsageResetHints(update?._meta);
+    const next = {
+        used: Number.isFinite(update?.used)
+            ? update.used
+            : Number.isFinite(previous?.used)
+                ? previous.used
+                : null,
+        size: Number.isFinite(update?.size)
+            ? update.size
+            : Number.isFinite(previous?.size)
+                ? previous.size
+                : null,
+        cost: update?.cost || previous?.cost || null,
+        totals: update?.totals || previous?.totals || null,
+        updatedAt: new Date().toISOString(),
+        resetAt: meta.resetAt || previous?.resetAt || '',
+        windows: meta.windows.length > 0 ? meta.windows : previous?.windows || []
+    };
+    return next;
+}
+
+function serializeUsageState(usage) {
+    if (!usage) return null;
+    return {
+        used: Number.isFinite(usage.used) ? usage.used : null,
+        size: Number.isFinite(usage.size) ? usage.size : null,
+        cost: usage.cost || null,
+        totals: usage.totals || null,
+        updatedAt: typeof usage.updatedAt === 'string' ? usage.updatedAt : '',
+        resetAt: typeof usage.resetAt === 'string' ? usage.resetAt : '',
+        windows: Array.isArray(usage.windows) ? usage.windows : []
+    };
+}
+
+class LocalExecTerminal extends EventEmitter {
     constructor(request) {
+        super();
         this.id = crypto.randomUUID();
+        this.sessionId = String(request.sessionId || '');
+        this.cwd = request.cwd || process.cwd();
         this.output = '';
         this.outputByteLimit = Math.max(
             1024,
@@ -489,6 +587,8 @@ class LocalExecTerminal {
         this.exitStatus = null;
         this.closed = false;
         this.waiters = [];
+        this.createdAt = new Date().toISOString();
+        this.updatedAt = this.createdAt;
 
         const env = {
             ...process.env,
@@ -496,6 +596,7 @@ class LocalExecTerminal {
         };
 
         const spawnRequest = buildTerminalSpawnRequest(request);
+        this.command = formatTerminalDisplayCommand(request, spawnRequest);
 
         this.child = spawn(spawnRequest.command, spawnRequest.args, {
             cwd: request.cwd || process.cwd(),
@@ -511,6 +612,8 @@ class LocalExecTerminal {
                 `${this.output}${text}`,
                 this.outputByteLimit
             );
+            this.updatedAt = new Date().toISOString();
+            this.emit('update', this.currentSummary());
         };
 
         this.child.stdout?.on('data', append);
@@ -523,6 +626,8 @@ class LocalExecTerminal {
                 exitCode: null,
                 signal: null
             };
+            this.updatedAt = new Date().toISOString();
+            this.emit('update', this.currentSummary());
             for (const waiter of this.waiters) {
                 waiter(this.exitStatus);
             }
@@ -534,6 +639,8 @@ class LocalExecTerminal {
                 exitCode: typeof code === 'number' ? code : null,
                 signal: signal || null
             };
+            this.updatedAt = new Date().toISOString();
+            this.emit('update', this.currentSummary());
             for (const waiter of this.waiters) {
                 waiter(this.exitStatus);
             }
@@ -545,6 +652,20 @@ class LocalExecTerminal {
         return {
             output: this.output,
             exitStatus: this.exitStatus
+        };
+    }
+
+    currentSummary() {
+        return {
+            terminalId: this.id,
+            sessionId: this.sessionId,
+            command: this.command,
+            cwd: this.cwd,
+            output: this.output,
+            exitStatus: this.exitStatus,
+            createdAt: this.createdAt,
+            updatedAt: this.updatedAt,
+            running: !this.exitStatus
         };
     }
 
@@ -725,6 +846,9 @@ class AcpRuntime extends EventEmitter {
             availableModes,
             availableCommands,
             configOptions,
+            plan: [],
+            usage: null,
+            terminals: new Map(),
             clients: new Set(),
             messageCounter: 0,
             timelineCounter: 0
@@ -786,7 +910,12 @@ class AcpRuntime extends EventEmitter {
                 requestPermission: (params) => this.#requestPermission(params),
                 readTextFile: (params) => this.#readTextFile(params),
                 writeTextFile: (params) => this.#writeTextFile(params),
-                createTerminal: (params) => this.#createTerminal(params)
+                createTerminal: (params) => this.#createTerminal(params),
+                terminalOutput: (params) => this.#terminalOutput(params),
+                releaseTerminal: (params) => this.#releaseTerminal(params),
+                waitForTerminalExit: (params) =>
+                    this.#waitForTerminalExit(params),
+                killTerminal: (params) => this.#killTerminal(params)
             }),
             stream
         );
@@ -977,7 +1106,10 @@ class AcpRuntime extends EventEmitter {
                 createdAt: item.createdAt || '',
                 order: item.order,
                 selectedOptionId: item.selectedOptionId || ''
-            }))
+            })),
+            plan: Array.isArray(tab.plan) ? tab.plan : [],
+            usage: serializeUsageState(tab.usage),
+            terminals: Array.from(tab.terminals.values())
         };
     }
 
@@ -1125,6 +1257,15 @@ class AcpRuntime extends EventEmitter {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'ready';
+            if (response?.usage) {
+                tab.usage = mergeUsageState(tab.usage, {
+                    totals: response.usage
+                });
+                this.#broadcast(tab, {
+                    type: 'usage_state',
+                    usage: serializeUsageState(tab.usage)
+                });
+            }
             tab.syntheticStreams.clear();
             tab.pendingUserEcho = null;
             const previousCommandsLength = Array.isArray(tab.availableCommands)
@@ -1445,6 +1586,12 @@ class AcpRuntime extends EventEmitter {
                     tab.title = '';
                 }
                 break;
+            case 'plan':
+                tab.plan = normalizePlanEntries(update.entries);
+                break;
+            case 'usage_update':
+                tab.usage = mergeUsageState(tab.usage, update);
+                break;
             default:
                 break;
         }
@@ -1660,7 +1807,77 @@ class AcpRuntime extends EventEmitter {
     async #createTerminal(params) {
         const terminal = new LocalExecTerminal(params);
         this.terminals.set(terminal.id, terminal);
+        const tab = this.#getTabBySession(params.sessionId);
+        if (tab) {
+            const syncSummary = (summary) => {
+                tab.terminals.set(terminal.id, {
+                    ...summary,
+                    terminalId: terminal.id
+                });
+                this.#broadcast(tab, {
+                    type: 'terminal_update',
+                    terminal: tab.terminals.get(terminal.id)
+                });
+            };
+            syncSummary(terminal.currentSummary());
+            terminal.on('update', syncSummary);
+        }
         return { terminalId: terminal.id };
+    }
+
+    async #terminalOutput(params) {
+        const terminal = this.terminals.get(params.terminalId);
+        if (!terminal) {
+            throw new Error('Terminal not found');
+        }
+        const response = terminal.currentOutput();
+        this.#syncTerminalSummary(params.sessionId, terminal);
+        return response;
+    }
+
+    async #waitForTerminalExit(params) {
+        const terminal = this.terminals.get(params.terminalId);
+        if (!terminal) {
+            throw new Error('Terminal not found');
+        }
+        const response = await terminal.waitForExit();
+        this.#syncTerminalSummary(params.sessionId, terminal);
+        return response;
+    }
+
+    async #killTerminal(params) {
+        const terminal = this.terminals.get(params.terminalId);
+        if (!terminal) {
+            throw new Error('Terminal not found');
+        }
+        const response = await terminal.kill();
+        this.#syncTerminalSummary(params.sessionId, terminal);
+        return response;
+    }
+
+    async #releaseTerminal(params) {
+        const terminal = this.terminals.get(params.terminalId);
+        if (!terminal) {
+            return {};
+        }
+        await terminal.release();
+        this.#syncTerminalSummary(params.sessionId, terminal, { released: true });
+        this.terminals.delete(params.terminalId);
+        return {};
+    }
+
+    #syncTerminalSummary(sessionId, terminal, overrides = {}) {
+        const tab = this.#getTabBySession(sessionId || terminal.sessionId);
+        if (!tab) return;
+        tab.terminals.set(terminal.id, {
+            ...terminal.currentSummary(),
+            ...overrides,
+            terminalId: terminal.id
+        });
+        this.#broadcast(tab, {
+            type: 'terminal_update',
+            terminal: tab.terminals.get(terminal.id)
+        });
     }
 
     #getTabBySession(sessionId) {

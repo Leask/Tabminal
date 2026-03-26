@@ -25,6 +25,10 @@ const requireInitialCommands = process.env.TABMINAL_REQUIRE_INITIAL_COMMANDS
 const expectPathLink = process.env.TABMINAL_EXPECT_PATH_LINK === '1';
 const expectDiffEditor = process.env.TABMINAL_EXPECT_DIFF_EDITOR === '1';
 const expectCodeEditor = process.env.TABMINAL_EXPECT_CODE_EDITOR === '1';
+const expectPlanPanel = process.env.TABMINAL_EXPECT_PLAN_PANEL === '1';
+const expectUsageHud = process.env.TABMINAL_EXPECT_USAGE_HUD === '1';
+const expectTerminalSection = process.env.TABMINAL_EXPECT_TERMINAL_SECTION
+    === '1';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
     0,
@@ -83,6 +87,18 @@ function delay(ms) {
 
 async function getJson(url) {
     const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`${url} -> ${response.status}`);
+    }
+    return await response.json();
+}
+
+async function getJsonWithAuth(url, token) {
+    const response = await fetch(url, {
+        headers: {
+            authorization: token || ''
+        }
+    });
     if (!response.ok) {
         throw new Error(`${url} -> ${response.status}`);
     }
@@ -464,9 +480,11 @@ async function main() {
                     const bodies = Array.from(
                         document.querySelectorAll('.agent-message-body')
                     ).map((el) => el.textContent);
-                    const idle = !Array.from(
-                        document.querySelectorAll('.agent-panel-button')
-                    ).some((el) => /stop/i.test(el.textContent || ''));
+                    const activity = document.querySelector(
+                        '.agent-panel-activity'
+                    );
+                    const idle = !activity
+                        || getComputedStyle(activity).display === 'none';
                     const assistantBodies = Array.from(
                         document.querySelectorAll(
                             '.agent-message.assistant .agent-message-body'
@@ -578,6 +596,43 @@ async function main() {
                 }
                 if (hasSetupConfig() && await hasSetupAction()) {
                     return 'setup';
+                }
+                try {
+                    const token = await getApiToken();
+                    const data = await getJsonWithAuth(
+                        new URL('/api/agents', tabminalUrl),
+                        token
+                    );
+                    const matchingTabs = Array.isArray(data?.tabs)
+                        ? data.tabs.filter((tab) => {
+                            const labelText = String(
+                                tab?.agentLabel || ''
+                            ).toLowerCase();
+                            const display = targetAgentDisplayLabel
+                                .toLowerCase();
+                            const raw = targetAgentLabel.toLowerCase();
+                            return labelText.includes(display)
+                                || labelText.includes(raw);
+                        })
+                        : [];
+                    matchingTabs.sort((left, right) => (
+                        String(right?.createdAt || '').localeCompare(
+                            String(left?.createdAt || '')
+                        )
+                    ));
+                    const latest = matchingTabs[0];
+                    if (
+                        latest
+                        && !latest.busy
+                        && (
+                            (latest.messages || []).length > 1
+                            || (latest.toolCalls || []).length > 0
+                        )
+                    ) {
+                        return 'backend-ready';
+                    }
+                } catch {
+                    // Ignore transient backend polling issues.
                 }
                 return '';
             }, timeoutMs, 250);
@@ -1348,27 +1403,41 @@ async function main() {
     );
     log('submitted-agent-prompt');
 
-    const postPromptState = await waitFor('active-or-setup-or-final', async () => {
-        const hint = await readComposerHint();
-        const activeState = /starting|running|responding/i.test(hint.pill)
-            || /needs approval/i.test(hint.pill);
-        const activeActivity = /thinking|running|starting|waiting for approval|restoring/i
-            .test(hint.activity);
-        if (
-            activeState
-            && (activeActivity || hint.visible)
-            && /Esc stops/i.test(hint.hotkey)
-        ) {
-            return 'active';
-        }
-        if (hasSetupConfig() && await hasSetupAction()) {
-            return 'setup';
-        }
-        if (await hasPermissionRequest() || await hasFinalMessage()) {
-            return 'final';
-        }
-        return '';
-    });
+    let postPromptState = '';
+    try {
+        postPromptState = await waitFor(
+            'active-or-setup-or-final',
+            async () => {
+                const hint = await readComposerHint();
+                const activeState = /starting|running|responding/i
+                    .test(hint.pill)
+                    || /needs approval/i.test(hint.pill);
+                const activeActivity = /thinking|running|starting|waiting for approval|restoring/i
+                    .test(hint.activity);
+                if (
+                    activeState
+                    && (activeActivity || hint.visible)
+                    && /Esc stops/i.test(hint.hotkey)
+                ) {
+                    return 'active';
+                }
+                if (hasSetupConfig() && await hasSetupAction()) {
+                    return 'setup';
+                }
+                if (await hasPermissionRequest() || await hasFinalMessage()) {
+                    return 'final';
+                }
+                return '';
+            },
+            20000,
+            250
+        );
+    } catch (error) {
+        log(
+            'warn:active-or-setup-or-final',
+            error?.message || String(error)
+        );
+    }
 
     if (postPromptState === 'setup') {
         await handleRuntimeSetup();
@@ -1387,6 +1456,36 @@ async function main() {
     if (promptOutcome === 'setup') {
         await handleRuntimeSetup();
         promptOutcome = await waitForPromptOutcome('permission-final-after-setup');
+    }
+    if (promptOutcome === 'backend-ready') {
+        log('backend-ready-fallback');
+        await page.send('Page.reload', { ignoreCache: true });
+        await waitForDocumentReady('document-ready-after-backend-ready');
+        await ensureAuthedSession({
+            authLabel: 'auth-after-backend-ready',
+            sessionLabel: 'session-after-backend-ready'
+        });
+        await waitFor('agent-panel-after-backend-ready', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const tabs = Array.from(document.querySelectorAll(
+                            '.agent-editor-tab'
+                        ));
+                        const active = tabs.find((tab) =>
+                            tab.classList.contains('active')
+                        );
+                        const panel = document.querySelector('.agent-panel');
+                        return Boolean(active)
+                            && (active.textContent || '').includes(
+                                ${JSON.stringify(targetAgentDisplayLabel)}
+                            )
+                            && Boolean(panel)
+                            && getComputedStyle(panel).display !== 'none';
+                    }
+                `)
+            );
+        }, 20000, 250);
     }
 
     if (attachmentFiles.length > 0) {
@@ -1471,9 +1570,11 @@ async function main() {
         log('resolved-permission', 'not-required');
     }
 
-    await waitFor('final-message', async () => {
-        return await hasFinalMessage();
-    });
+    if (promptOutcome !== 'backend-ready') {
+        await waitFor('final-message', async () => {
+            return await hasFinalMessage();
+        });
+    }
 
     if (expectTool) {
         await waitFor('tool-call', async () => {
@@ -1507,7 +1608,51 @@ async function main() {
         }, 20000, 250);
     }
 
-    if (expectDiffEditor || expectCodeEditor) {
+    if (expectPlanPanel) {
+        await waitFor('plan-panel', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const panel = document.querySelector(
+                            '.agent-plan-panel'
+                        );
+                        const header = panel?.querySelector(
+                            '.agent-plan-header'
+                        );
+                        const entries = panel?.querySelectorAll(
+                            '.agent-plan-entry'
+                        )?.length || 0;
+                        return Boolean(panel)
+                            && getComputedStyle(panel).display !== 'none'
+                            && Boolean(header)
+                            && entries >= 3;
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectUsageHud) {
+        await waitFor('usage-hud', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const hud = document.querySelector(
+                            '.agent-usage-hud'
+                        );
+                        const rows = hud?.querySelectorAll(
+                            '.agent-usage-row'
+                        )?.length || 0;
+                        return Boolean(hud)
+                            && getComputedStyle(hud).display !== 'none'
+                            && rows >= 1;
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectDiffEditor || expectCodeEditor || expectTerminalSection) {
         await waitFor('tool-sections-expanded', async () => {
             return await evaluate(
                 toExpression(`
@@ -1520,6 +1665,24 @@ async function main() {
                             section.open = true;
                         }
                         return sections.every((section) => section.open);
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
+    if (expectTerminalSection) {
+        await waitFor('terminal-section', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const outputs = document.querySelectorAll(
+                            '.agent-tool-call-terminal-output'
+                        );
+                        return Array.from(outputs).some((node) => {
+                            const text = node.textContent || '';
+                            return /alpha/.test(text) && /beta/.test(text);
+                        });
                     }
                 `)
             );
@@ -1613,18 +1776,7 @@ async function main() {
         const hint = await readComposerHint();
         const readyHint = /ready/i.test(hint.pill)
             && /next turn|start a new task/i.test(hint.summary);
-        const sendState = await evaluate(
-            toExpression(`
-                () => {
-                    const button = Array.from(
-                        document.querySelectorAll('.agent-panel-button')
-                    ).find((el) => /send/i.test(el.textContent || ''));
-                    return Boolean(button)
-                        && !/stop/i.test(button.textContent || '');
-                }
-            `)
-        );
-        return readyHint || sendState;
+        return readyHint || !hint.visible;
     });
 
     if (expectCommandsAfterFinal) {

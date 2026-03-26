@@ -913,6 +913,55 @@ describe('AcpManager', () => {
         }
     });
 
+    it('captures plan usage and terminal summaries from real ACP updates', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+
+            await manager.sendPrompt(tab.id, 'diff-smoke');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            });
+
+            assert.equal(settledTab.plan.length, 3);
+            assert.equal(settledTab.plan.every((entry) => (
+                entry.status === 'completed'
+            )), true);
+            assert.equal(settledTab.usage.used, 48200);
+            assert.equal(settledTab.usage.size, 262144);
+            assert.equal(settledTab.usage.windows.length, 2);
+            assert.equal(settledTab.terminals.length, 1);
+            assert.match(
+                settledTab.terminals[0].output || '',
+                /alpha[\s\S]*beta/
+            );
+        } finally {
+            await manager.dispose();
+        }
+    });
+
     it('passes prompt attachments through to the runtime', async () => {
         const { manager } = createManager();
         const tab = await manager.createTab({
