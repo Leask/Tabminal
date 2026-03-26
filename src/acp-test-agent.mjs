@@ -22,6 +22,16 @@ function extractPromptText(prompt = []) {
         .trim();
 }
 
+function buildSessionTitle(promptText = '') {
+    const source = String(promptText || '').replace(/\s+/g, ' ').trim();
+    if (!source) {
+        return 'ACP Smoke Session';
+    }
+    return source.length > 42
+        ? `${source.slice(0, 39).trimEnd()}...`
+        : source;
+}
+
 class TabminalTestAgent {
     constructor(connection) {
         this.connection = connection;
@@ -198,12 +208,16 @@ class TabminalTestAgent {
                     currency: 'USD'
                 },
                 _meta: {
+                    vendorLabel: 'Tabminal Test Agent',
+                    sessionId,
+                    summary: 'Synthetic quota view',
                     resetAt: new Date(now + 95 * 60 * 1000).toISOString(),
                     windows: [
                         {
                             label: '5h',
                             used: 32,
                             size: 100,
+                            subtitle: 'short-term window',
                             resetAt: new Date(
                                 now + 95 * 60 * 1000
                             ).toISOString()
@@ -212,6 +226,7 @@ class TabminalTestAgent {
                             label: '7d',
                             used: 210,
                             size: 1000,
+                            subtitle: 'weekly budget',
                             resetAt: new Date(
                                 now + 5 * 24 * 60 * 60 * 1000
                             ).toISOString()
@@ -278,6 +293,13 @@ class TabminalTestAgent {
                         type: 'text',
                         text: `${modePrefix}Tabminal ACP smoke agent online. `
                     }
+                }
+            });
+            await this.connection.sessionUpdate({
+                sessionId: params.sessionId,
+                update: {
+                    sessionUpdate: 'session_info_update',
+                    title: buildSessionTitle(promptText)
                 }
             });
             await sleep(30, signal);

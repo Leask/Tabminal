@@ -1030,6 +1030,8 @@ describe('AcpManager', () => {
                 cwd: process.cwd(),
                 terminalSessionId: 'term-1'
             });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
 
             await manager.sendPrompt(tab.id, 'diff-smoke');
 
@@ -1039,18 +1041,32 @@ describe('AcpManager', () => {
                 return current && !current.busy ? current : null;
             });
 
+            assert.equal(settledTab.title, 'diff-smoke');
             assert.equal(settledTab.plan.length, 3);
             assert.equal(settledTab.plan.every((entry) => (
                 entry.status === 'completed'
             )), true);
+            assert.equal(settledTab.plan[0].priority, 'high');
             assert.equal(settledTab.usage.used, 48200);
             assert.equal(settledTab.usage.size, 262144);
+            assert.equal(settledTab.usage.vendorLabel, 'Tabminal Test Agent');
+            assert.equal(settledTab.usage.sessionId, tab.acpSessionId);
+            assert.equal(settledTab.usage.summary, 'Synthetic quota view');
             assert.equal(settledTab.usage.windows.length, 2);
+            assert.equal(
+                settledTab.usage.windows[0].subtitle,
+                'short-term window'
+            );
             assert.equal(settledTab.terminals.length, 1);
             assert.match(
                 settledTab.terminals[0].output || '',
                 /alpha[\s\S]*beta/
             );
+            assert.ok(events.some((event) => (
+                event.type === 'session_update'
+                && event.update?.sessionUpdate === 'session_info_update'
+                && event.update?.title === 'diff-smoke'
+            )));
         } finally {
             await manager.dispose();
         }

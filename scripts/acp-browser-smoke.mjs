@@ -29,6 +29,7 @@ const expectPlanPanel = process.env.TABMINAL_EXPECT_PLAN_PANEL === '1';
 const expectUsageHud = process.env.TABMINAL_EXPECT_USAGE_HUD === '1';
 const expectTerminalSection = process.env.TABMINAL_EXPECT_TERMINAL_SECTION
     === '1';
+const expectTitlePattern = process.env.TABMINAL_EXPECT_TITLE_PATTERN || '';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
     0,
@@ -53,6 +54,7 @@ const attachmentFiles = String(
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+const debugKeepTarget = process.env.TABMINAL_DEBUG_KEEP_TARGET === '1';
 const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
     || (
         /test agent/i.test(targetAgentLabel)
@@ -218,6 +220,43 @@ async function waitFor(label, fn, timeoutMs = 20000, stepMs = 200) {
 
 function toExpression(source) {
     return `(${source})()`;
+}
+
+async function dumpPageState(page) {
+    const result = await page.send('Runtime.evaluate', {
+        expression: toExpression(`
+            () => ({
+                activeAgentTab:
+                    document.querySelector('.agent-editor-tab.active')
+                        ?.textContent || '',
+                activeWorkspaceTab:
+                    document.querySelector('.editor-tab.active')
+                        ?.textContent || '',
+                toolCount: document.querySelectorAll('.agent-tool-call').length,
+                permissionCount:
+                    document.querySelectorAll('.agent-permission-card').length,
+                planVisible: Boolean(document.querySelector(
+                    '.agent-plan-panel'
+                )) && getComputedStyle(document.querySelector(
+                    '.agent-plan-panel'
+                )).display !== 'none',
+                usageVisible: Boolean(document.querySelector(
+                    '.agent-usage-hud'
+                )) && getComputedStyle(document.querySelector(
+                    '.agent-usage-hud'
+                )).display !== 'none',
+                activityText:
+                    document.querySelector('.agent-activity-text')
+                        ?.textContent || '',
+                transcriptPreview:
+                    (document.querySelector('.agent-transcript')?.innerText
+                        || '').slice(0, 2000)
+            })
+        `),
+        awaitPromise: true,
+        returnByValue: true
+    });
+    return result.result?.value || null;
 }
 
 async function main() {
@@ -1074,9 +1113,6 @@ async function main() {
     const expectedAgentLabel = existingAgentTabCount === 0
         ? targetAgentDisplayLabel
         : `${targetAgentDisplayLabel} #${existingAgentTabCount + 1}`;
-    const expectedSecondAgentLabel = existingAgentTabCount === 0
-        ? `${targetAgentDisplayLabel} #2`
-        : `${targetAgentDisplayLabel} #${existingAgentTabCount + 2}`;
     const createOutcome = await waitForAgentTabCreationOrSetup(
         existingAgentTabCount,
         expectedAgentLabel
@@ -1577,13 +1613,19 @@ async function main() {
     }
 
     if (expectTool) {
-        await waitFor('tool-call', async () => {
-            return await evaluate(
-                toExpression(`
-                    () => document.querySelectorAll('.agent-tool-call').length > 0
-                `)
-            );
-        }, 20000, 250);
+        try {
+            await waitFor('tool-call', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll('.agent-tool-call').length > 0
+                    `)
+                );
+            }, 20000, 250);
+        } catch (error) {
+            const debugState = await dumpPageState(page);
+            log('debug-tool-call-state', JSON.stringify(debugState));
+            throw error;
+        }
     }
 
     if (expectToolCount > 0) {
@@ -1680,8 +1722,13 @@ async function main() {
                             '.agent-tool-call-terminal-output'
                         );
                         return Array.from(outputs).some((node) => {
-                            const text = node.textContent || '';
-                            return /alpha/.test(text) && /beta/.test(text);
+                            const text = node.dataset.outputPreview
+                                || node.getAttribute('aria-label')
+                                || node.textContent
+                                || '';
+                            return node.querySelector('.xterm')
+                                && /alpha/.test(text)
+                                && /beta/.test(text);
                         });
                     }
                 `)
@@ -1729,6 +1776,29 @@ async function main() {
 
     const finalHint = await readComposerHint();
     log('composer-hint-after-final', JSON.stringify(finalHint));
+
+    if (expectTitlePattern) {
+        await waitFor('agent-title-update', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const activeTab = document.querySelector(
+                            '.agent-editor-tab.active'
+                        );
+                        const text = activeTab
+                            ? Array.from(activeTab.querySelectorAll('span'))
+                                .map((node) => node.textContent || '')
+                                .join(' ')
+                                .trim()
+                            : '';
+                        return text.includes(${JSON.stringify(
+                            expectTitlePattern
+                        )});
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
 
     if (/needs approval/i.test(finalHint.pill)) {
         await waitFor('late-permission-controls', async () => {
@@ -1909,6 +1979,12 @@ async function main() {
             );
         }, 30000, 500);
 
+        const previousAgentTabCount = await evaluate(
+            toExpression(`
+                () => document.querySelectorAll('.agent-editor-tab').length
+            `)
+        );
+
         const createdSecondAgent = await evaluate(
             toExpression(`
                 () => {
@@ -1929,11 +2005,17 @@ async function main() {
         await waitFor('second-agent-restored', async () => {
             return await evaluate(
                 toExpression(`
-                    () => Array.from(
-                        document.querySelectorAll('.agent-editor-tab')
-                    ).some((tab) => (
-                        tab.textContent || ''
-                    ).includes(${JSON.stringify(expectedSecondAgentLabel)}))
+                    () => {
+                        const tabs = document.querySelectorAll(
+                            '.agent-editor-tab'
+                        );
+                        const active = document.querySelector(
+                            '.agent-editor-tab.active'
+                        );
+                        return tabs.length > ${
+                            Number(previousAgentTabCount || 0)
+                        } && Boolean(active);
+                    }
                 `),
                 15000,
                 250
@@ -2048,13 +2130,15 @@ async function main() {
         if (page) {
             page.close();
         }
-        try {
-            await browser.send('Target.closeTarget', { targetId });
-            await waitFor('target-closed', async () => {
-                const list = await getJson(`${chromeBaseUrl}/json/list`);
-                return !list.some((item) => item.id === targetId);
-            }, 5000, 100);
-        } catch {}
+        if (!debugKeepTarget) {
+            try {
+                await browser.send('Target.closeTarget', { targetId });
+                await waitFor('target-closed', async () => {
+                    const list = await getJson(`${chromeBaseUrl}/json/list`);
+                    return !list.some((item) => item.id === targetId);
+                }, 5000, 100);
+            } catch {}
+        }
         browser.close();
     }
 }

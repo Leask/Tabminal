@@ -2047,12 +2047,24 @@ class EditorManager {
             return;
         }
 
-        const contextRow = document.createElement('div');
-        contextRow.className = 'agent-usage-row primary';
-        contextRow.appendChild(buildAgentUsageMetricLabel('Context'));
-        contextRow.appendChild(buildAgentUsageBar(usage.used, usage.size));
-        contextRow.appendChild(buildAgentUsageValue(usage.used, usage.size));
-        this.agentUsageHud.appendChild(contextRow);
+        const identityMeta = buildAgentUsageIdentityMeta(usage);
+        if (identityMeta) {
+            const identityRow = document.createElement('div');
+            identityRow.className = 'agent-usage-meta primary';
+            identityRow.textContent = identityMeta;
+            this.agentUsageHud.appendChild(identityRow);
+        }
+
+        if (Number.isFinite(usage.used) && Number.isFinite(usage.size)) {
+            const contextRow = document.createElement('div');
+            contextRow.className = 'agent-usage-row primary';
+            contextRow.appendChild(buildAgentUsageMetricLabel('Context'));
+            contextRow.appendChild(buildAgentUsageBar(usage.used, usage.size));
+            contextRow.appendChild(
+                buildAgentUsageValue(usage.used, usage.size)
+            );
+            this.agentUsageHud.appendChild(contextRow);
+        }
 
         const totals = buildAgentUsageTotalsMeta(usage);
         if (totals) {
@@ -2073,6 +2085,12 @@ class EditorManager {
                 buildAgentUsageValue(windowUsage.used, windowUsage.size)
             );
             this.agentUsageHud.appendChild(row);
+            if (windowUsage.subtitle) {
+                const subtitle = document.createElement('div');
+                subtitle.className = 'agent-usage-meta';
+                subtitle.textContent = windowUsage.subtitle;
+                this.agentUsageHud.appendChild(subtitle);
+            }
             if (windowUsage.resetAt) {
                 const reset = document.createElement('div');
                 reset.className = 'agent-usage-reset';
@@ -2119,11 +2137,22 @@ class EditorManager {
                 const marker = document.createElement('span');
                 marker.className = 'agent-plan-entry-marker';
                 marker.textContent = getAgentPlanStatusMarker(entry.status);
+                const body = document.createElement('div');
+                body.className = 'agent-plan-entry-body';
                 const text = document.createElement('span');
                 text.className = 'agent-plan-entry-text';
                 text.textContent = entry.content;
+                const priority = document.createElement('span');
+                priority.className = `agent-plan-entry-priority ${
+                    normalizePlanPriorityClass(entry.priority)
+                }`;
+                priority.textContent = getAgentPlanPriorityLabel(
+                    entry.priority
+                );
                 row.appendChild(marker);
-                row.appendChild(text);
+                body.appendChild(text);
+                body.appendChild(priority);
+                row.appendChild(body);
                 list.appendChild(row);
             }
             this.agentPlan.appendChild(list);
@@ -2136,6 +2165,19 @@ class EditorManager {
                 ? 'Running 1 terminal'
                 : `Running ${runningTerminals.length} terminals`;
             this.agentPlan.appendChild(terminalSummary);
+            const terminalList = document.createElement('div');
+            terminalList.className = 'agent-plan-terminal-list';
+            for (const terminal of runningTerminals.slice(0, 3)) {
+                const row = document.createElement('div');
+                row.className = 'agent-plan-terminal-entry';
+                row.textContent = [
+                    terminal.command || 'Terminal',
+                    terminal.cwd || '',
+                    getAgentTerminalStatusLabel(terminal)
+                ].filter(Boolean).join(' · ');
+                terminalList.appendChild(row);
+            }
+            this.agentPlan.appendChild(terminalList);
         }
 
         this.agentPlan.style.display = '';
@@ -2441,7 +2483,7 @@ class EditorManager {
             return this.buildAgentCodeSectionBody(details, section);
         }
         if (section?.kind === 'terminal') {
-            return this.buildAgentTerminalSectionBody(section);
+            return this.buildAgentTerminalSectionBody(details, section);
         }
         const body = document.createElement('pre');
         body.className = 'agent-tool-call-body';
@@ -2499,7 +2541,7 @@ class EditorManager {
         return host;
     }
 
-    buildAgentTerminalSectionBody(section) {
+    buildAgentTerminalSectionBody(details, section) {
         const host = document.createElement('div');
         host.className = 'agent-tool-call-terminal-host';
 
@@ -2517,10 +2559,53 @@ class EditorManager {
             host.appendChild(meta);
         }
 
-        const output = document.createElement('pre');
-        output.className = 'agent-tool-call-terminal-output';
-        output.textContent = terminal.output || '(no output yet)';
-        host.appendChild(output);
+        const terminalNode = document.createElement('div');
+        terminalNode.className = 'agent-tool-call-terminal-output';
+        terminalNode.dataset.outputPreview = terminal.output || '';
+        terminalNode.setAttribute('aria-label', terminal.output || '(no output yet)');
+        terminalNode.style.height = `${
+            estimateAgentTerminalHeight(terminal.output || '')
+        }px`;
+        host.appendChild(terminalNode);
+
+        const embeddedTerm = new Terminal({
+            disableStdin: true,
+            convertEol: true,
+            cursorBlink: false,
+            cursorStyle: 'bar',
+            theme: {
+                background: 'rgba(0, 43, 54, 0.32)',
+                foreground: '#93a1a1',
+                cursor: '#93a1a1',
+                selectionBackground: 'rgba(38, 139, 210, 0.24)'
+            },
+            scrollback: 2000,
+            fontSize: IS_MOBILE ? 14 : 12,
+            fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", "
+                + '"SFMono-Regular", "SF Mono", '
+                + '"JetBrains Mono", Menlo, Consolas, monospace'
+        });
+        const fitAddon = new FitAddon();
+        embeddedTerm.loadAddon(fitAddon);
+        embeddedTerm.loadAddon(new CanvasAddon());
+        embeddedTerm.open(terminalNode);
+        embeddedTerm.write(terminal.output || '(no output yet)');
+        const layoutTerminal = () => {
+            requestAnimationFrame(() => {
+                try {
+                    fitAddon.fit();
+                } catch {
+                    // Ignore layout failures for collapsed sections.
+                }
+            });
+        };
+        layoutTerminal();
+        details.addEventListener('toggle', () => {
+            if (details.open) {
+                layoutTerminal();
+            }
+        });
+        this.agentEmbeddedEditors.push(embeddedTerm, fitAddon);
 
         return host;
     }
@@ -4539,6 +4624,15 @@ class AgentTab {
             resetAt: typeof usage.resetAt === 'string'
                 ? usage.resetAt
                 : '',
+            vendorLabel: typeof usage.vendorLabel === 'string'
+                ? usage.vendorLabel
+                : '',
+            sessionId: typeof usage.sessionId === 'string'
+                ? usage.sessionId
+                : '',
+            summary: typeof usage.summary === 'string'
+                ? usage.summary
+                : '',
             windows: Array.isArray(usage.windows)
                 ? usage.windows.map((item) => ({
                     label: typeof item?.label === 'string'
@@ -4546,8 +4640,14 @@ class AgentTab {
                         : '',
                     used: Number.isFinite(item?.used) ? item.used : null,
                     size: Number.isFinite(item?.size) ? item.size : null,
+                    remaining: Number.isFinite(item?.remaining)
+                        ? item.remaining
+                        : null,
                     resetAt: typeof item?.resetAt === 'string'
                         ? item.resetAt
+                        : '',
+                    subtitle: typeof item?.subtitle === 'string'
+                        ? item.subtitle
                         : ''
                 }))
                 : []
@@ -5539,6 +5639,20 @@ function normalizePlanStatusClass(status = '') {
     return 'pending';
 }
 
+function normalizePlanPriorityClass(priority = '') {
+    const value = String(priority || '').toLowerCase();
+    if (value === 'high' || value === 'urgent') return 'high';
+    if (value === 'low') return 'low';
+    return 'medium';
+}
+
+function getAgentPlanPriorityLabel(priority = '') {
+    const value = normalizePlanPriorityClass(priority);
+    if (value === 'high') return 'High';
+    if (value === 'low') return 'Low';
+    return 'Medium';
+}
+
 function getAgentPlanStatusMarker(status = '') {
     const value = String(status || '').toLowerCase();
     if (value === 'completed') return '✓';
@@ -5551,7 +5665,20 @@ function buildAgentPlanSummary(entries = []) {
     const completed = entries.filter(
         (entry) => String(entry?.status || '') === 'completed'
     ).length;
-    return `${completed} of ${total} tasks completed`;
+    const inProgress = entries.filter(
+        (entry) => String(entry?.status || '') === 'in_progress'
+    ).length;
+    const pending = Math.max(total - completed - inProgress, 0);
+    const extras = [];
+    if (inProgress > 0) {
+        extras.push(`${inProgress} active`);
+    }
+    if (pending > 0) {
+        extras.push(`${pending} pending`);
+    }
+    return extras.length > 0
+        ? `${completed} of ${total} tasks completed · ${extras.join(' · ')}`
+        : `${completed} of ${total} tasks completed`;
 }
 
 function normalizeAgentUsageForDisplay(usage) {
@@ -5562,7 +5689,15 @@ function normalizeAgentUsageForDisplay(usage) {
             Number.isFinite(item?.used) && Number.isFinite(item?.size)
         )
         : [];
-    if (!hasContext && windows.length === 0 && !usage.cost && !usage.totals) {
+    if (
+        !hasContext
+        && windows.length === 0
+        && !usage.cost
+        && !usage.totals
+        && !usage.vendorLabel
+        && !usage.sessionId
+        && !usage.summary
+    ) {
         return null;
     }
     return {
@@ -5571,7 +5706,16 @@ function normalizeAgentUsageForDisplay(usage) {
         cost: usage.cost || null,
         totals: usage.totals || null,
         resetAt: typeof usage.resetAt === 'string' ? usage.resetAt : '',
-        windows
+        windows,
+        vendorLabel: typeof usage.vendorLabel === 'string'
+            ? usage.vendorLabel
+            : '',
+        sessionId: typeof usage.sessionId === 'string'
+            ? usage.sessionId
+            : '',
+        summary: typeof usage.summary === 'string'
+            ? usage.summary
+            : ''
     };
 }
 
@@ -5590,7 +5734,7 @@ function buildAgentUsageValue(used, size) {
     const node = document.createElement('span');
     node.className = 'agent-usage-value';
     node.textContent = Number.isFinite(used) && Number.isFinite(size)
-        ? `${Math.round((used / Math.max(size, 1)) * 100)}%`
+        ? `${Math.max(0, 100 - Math.round((used / Math.max(size, 1)) * 100))}% left`
         : '—';
     return node;
 }
@@ -5623,13 +5767,49 @@ function formatAgentUsageReset(resetAt = '') {
     }
     const deltaMs = timestamp.getTime() - Date.now();
     const oneDayMs = 24 * 60 * 60 * 1000;
+    const countdown = formatAgentUsageCountdown(deltaMs);
     const localLabel = deltaMs < oneDayMs && deltaMs > -oneDayMs
         ? timestamp.toLocaleTimeString([], {
             hour: 'numeric',
             minute: '2-digit'
         })
         : timestamp.toLocaleString();
-    return `resets ${localLabel}`;
+    return countdown
+        ? `resets ${countdown} · ${localLabel}`
+        : `resets ${localLabel}`;
+}
+
+function formatAgentUsageCountdown(deltaMs) {
+    if (!Number.isFinite(deltaMs)) return '';
+    if (deltaMs <= 0) return 'soon';
+    const minutes = Math.floor(deltaMs / (60 * 1000));
+    if (minutes < 1) {
+        return 'in under a minute';
+    }
+    const days = Math.floor(minutes / (24 * 60));
+    const hours = Math.floor((minutes % (24 * 60)) / 60);
+    const mins = minutes % 60;
+    if (days > 0) {
+        return `in ${days}d ${hours}h`;
+    }
+    if (hours > 0) {
+        return `in ${hours}h ${mins}m`;
+    }
+    return `in ${mins}m`;
+}
+
+function buildAgentUsageIdentityMeta(usage) {
+    const parts = [];
+    if (usage.vendorLabel) {
+        parts.push(usage.vendorLabel);
+    }
+    if (usage.sessionId) {
+        parts.push(`session ${usage.sessionId.slice(0, 8)}`);
+    }
+    if (usage.summary) {
+        parts.push(usage.summary);
+    }
+    return parts.join(' · ');
 }
 
 function buildAgentUsageTotalsMeta(usage) {
@@ -5675,6 +5855,11 @@ function getAgentTerminalStatusLabel(terminal = {}) {
             : `Exit ${terminal.exitStatus.exitCode}`;
     }
     return '';
+}
+
+function estimateAgentTerminalHeight(output) {
+    const lines = countTextLines(output);
+    return Math.min(Math.max(lines * 17 + 28, 120), 320);
 }
 
 function getAgentDisplayLabel(agentTab) {

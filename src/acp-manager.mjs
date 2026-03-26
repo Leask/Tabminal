@@ -672,21 +672,77 @@ function normalizePlanEntries(entries = []) {
         .filter((entry) => entry.content);
 }
 
+function normalizeUsageWindow(item = {}) {
+    if (!item || typeof item !== 'object') return null;
+    const label = String(
+        item.label
+        || item.name
+        || item.window
+        || item.bucket
+        || ''
+    ).trim();
+    const used = Number.isFinite(item.used)
+        ? item.used
+        : Number.isFinite(item.consumed)
+            ? item.consumed
+            : Number.isFinite(item.spent)
+                ? item.spent
+                : null;
+    const size = Number.isFinite(item.size)
+        ? item.size
+        : Number.isFinite(item.limit)
+            ? item.limit
+            : Number.isFinite(item.max)
+                ? item.max
+                : Number.isFinite(item.total)
+                    ? item.total
+                    : null;
+    const remaining = Number.isFinite(item.remaining)
+        ? item.remaining
+        : Number.isFinite(size) && Number.isFinite(used)
+            ? Math.max(size - used, 0)
+            : null;
+    const resetAt = [
+        item.resetAt,
+        item.resetsAt,
+        item.nextResetAt,
+        item.resetTime,
+        item.resetDate
+    ].find((value) => typeof value === 'string' && value.trim()) || '';
+    const subtitle = String(item.subtitle || item.description || '').trim();
+    if (!label && !resetAt && !subtitle) {
+        return null;
+    }
+    return {
+        label: label || 'Window',
+        used,
+        size,
+        remaining,
+        resetAt,
+        subtitle
+    };
+}
+
 function extractUsageResetHints(meta = {}) {
     if (!meta || typeof meta !== 'object') {
-        return { resetAt: '', windows: [] };
+        return {
+            resetAt: '',
+            windows: [],
+            vendorLabel: '',
+            sessionId: '',
+            summary: ''
+        };
     }
-    const windows = Array.isArray(meta.windows)
+    const rawWindows = Array.isArray(meta.windows)
         ? meta.windows
-            .filter((item) => item && typeof item === 'object')
-            .map((item) => ({
-                label: typeof item.label === 'string' ? item.label : '',
-                used: Number.isFinite(item.used) ? item.used : null,
-                size: Number.isFinite(item.size) ? item.size : null,
-                resetAt: typeof item.resetAt === 'string' ? item.resetAt : ''
-            }))
-            .filter((item) => item.label || item.resetAt)
-        : [];
+        : Array.isArray(meta.limits)
+            ? meta.limits
+            : Array.isArray(meta.quotas)
+                ? meta.quotas
+                : [];
+    const windows = rawWindows
+        .map((item) => normalizeUsageWindow(item))
+        .filter(Boolean);
     const resetCandidates = [
         meta.resetAt,
         meta.resetsAt,
@@ -697,7 +753,29 @@ function extractUsageResetHints(meta = {}) {
     const resetAt = resetCandidates.find(
         (value) => typeof value === 'string' && value.trim()
     ) || '';
-    return { resetAt, windows };
+    return {
+        resetAt,
+        windows,
+        vendorLabel: String(
+            meta.vendorLabel
+            || meta.provider
+            || meta.providerLabel
+            || meta.agent
+            || ''
+        ).trim(),
+        sessionId: String(
+            meta.sessionId
+            || meta.session
+            || meta.conversationId
+            || ''
+        ).trim(),
+        summary: String(
+            meta.summary
+            || meta.status
+            || meta.contextLabel
+            || ''
+        ).trim()
+    };
 }
 
 function mergeUsageState(previous = {}, update = {}) {
@@ -717,7 +795,10 @@ function mergeUsageState(previous = {}, update = {}) {
         totals: update?.totals || previous?.totals || null,
         updatedAt: new Date().toISOString(),
         resetAt: meta.resetAt || previous?.resetAt || '',
-        windows: meta.windows.length > 0 ? meta.windows : previous?.windows || []
+        windows: meta.windows.length > 0 ? meta.windows : previous?.windows || [],
+        vendorLabel: meta.vendorLabel || previous?.vendorLabel || '',
+        sessionId: meta.sessionId || previous?.sessionId || '',
+        summary: meta.summary || previous?.summary || ''
     };
     return next;
 }
@@ -731,7 +812,16 @@ function serializeUsageState(usage) {
         totals: usage.totals || null,
         updatedAt: typeof usage.updatedAt === 'string' ? usage.updatedAt : '',
         resetAt: typeof usage.resetAt === 'string' ? usage.resetAt : '',
-        windows: Array.isArray(usage.windows) ? usage.windows : []
+        windows: Array.isArray(usage.windows) ? usage.windows : [],
+        vendorLabel: typeof usage.vendorLabel === 'string'
+            ? usage.vendorLabel
+            : '',
+        sessionId: typeof usage.sessionId === 'string'
+            ? usage.sessionId
+            : '',
+        summary: typeof usage.summary === 'string'
+            ? usage.summary
+            : ''
     };
 }
 
@@ -1430,29 +1520,8 @@ class AcpRuntime extends EventEmitter {
             }
             tab.syntheticStreams.clear();
             tab.pendingUserEcho = null;
-            const previousCommandsLength = Array.isArray(tab.availableCommands)
-                ? tab.availableCommands.length
-                : 0;
-            await this.#hydrateFreshSessionMetadata(tab);
-            if (
-                Array.isArray(tab.availableCommands)
-                && tab.availableCommands.length > previousCommandsLength
-            ) {
-                this.#broadcast(tab, {
-                    type: 'session_update',
-                    update: {
-                        sessionUpdate: 'available_commands_update',
-                        availableCommands: tab.availableCommands
-                    },
-                    tab: {
-                        title: tab.title,
-                        currentModeId: tab.currentModeId,
-                        availableModes: tab.availableModes,
-                        availableCommands: tab.availableCommands,
-                        configOptions: tab.configOptions
-                    }
-                });
-            }
+            const hydratedChanges = await this.#hydrateFreshSessionMetadata(tab);
+            this.#broadcastHydratedSessionMetadata(tab, hydratedChanges);
             this.#broadcast(tab, {
                 type: 'complete',
                 stopReason: response.stopReason,
@@ -1906,6 +1975,13 @@ class AcpRuntime extends EventEmitter {
     }
 
     async #hydrateFreshSessionMetadata(tab) {
+        const previous = {
+            title: tab.title || '',
+            currentModeId: tab.currentModeId || '',
+            availableModes: JSON.stringify(tab.availableModes || []),
+            availableCommands: JSON.stringify(tab.availableCommands || []),
+            configOptions: JSON.stringify(tab.configOptions || [])
+        };
         const needsHydration = (
             !Array.isArray(tab.availableCommands)
             || tab.availableCommands.length === 0
@@ -1917,7 +1993,7 @@ class AcpRuntime extends EventEmitter {
             || !this.agentCapabilities?.loadSession
             || typeof this.connection.loadSession !== 'function'
         ) {
-            return;
+            return null;
         }
 
         try {
@@ -1951,8 +2027,71 @@ class AcpRuntime extends EventEmitter {
                 tab.configOptions,
                 response?.models
             );
+            return {
+                titleChanged: previous.title !== (tab.title || ''),
+                modeChanged: previous.currentModeId !== (tab.currentModeId || ''),
+                modesChanged: previous.availableModes
+                    !== JSON.stringify(tab.availableModes || []),
+                commandsChanged: previous.availableCommands
+                    !== JSON.stringify(tab.availableCommands || []),
+                configChanged: previous.configOptions
+                    !== JSON.stringify(tab.configOptions || [])
+            };
         } catch {
             // Ignore metadata hydration failures for fresh sessions.
+            return null;
+        }
+    }
+
+    #broadcastHydratedSessionMetadata(tab, changes) {
+        if (!changes) return;
+        const tabMeta = {
+            title: tab.title,
+            currentModeId: tab.currentModeId,
+            availableModes: tab.availableModes,
+            availableCommands: tab.availableCommands,
+            configOptions: tab.configOptions
+        };
+        if (changes.titleChanged) {
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: {
+                    sessionUpdate: 'session_info_update',
+                    title: tab.title || null
+                },
+                tab: tabMeta
+            });
+        }
+        if (changes.modeChanged || changes.modesChanged) {
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: {
+                    sessionUpdate: 'current_mode_update',
+                    currentModeId: tab.currentModeId || '',
+                    availableModes: tab.availableModes
+                },
+                tab: tabMeta
+            });
+        }
+        if (changes.commandsChanged) {
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: {
+                    sessionUpdate: 'available_commands_update',
+                    availableCommands: tab.availableCommands
+                },
+                tab: tabMeta
+            });
+        }
+        if (changes.configChanged) {
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: {
+                    sessionUpdate: 'config_option_update',
+                    configOptions: tab.configOptions
+                },
+                tab: tabMeta
+            });
         }
     }
 
