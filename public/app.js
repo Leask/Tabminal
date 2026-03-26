@@ -623,6 +623,13 @@ class EditorManager {
             );
     }
 
+    hasVisibleWorkspaceTabs(session = this.currentSession) {
+        if (!session) return false;
+        return this.hasCompactWorkspaceTabs(session)
+            || session.editorState.openFiles.length > 0
+            || getAgentTabsForSession(session).length > 0;
+    }
+
     initTerminalControls() {
         if (!this.terminalWrapper) return;
 
@@ -643,7 +650,10 @@ class EditorManager {
     updateTerminalLayoutButton() {
         if (!this.terminalLayoutButton) return;
 
-        if (!this.canToggleTerminalWorkspaceMode()) {
+        if (
+            !this.canToggleTerminalWorkspaceMode()
+            || !this.hasVisibleWorkspaceTabs(this.currentSession)
+        ) {
             this.terminalLayoutButton.style.display = 'none';
             this.terminalLayoutButton.classList.remove('active');
             return;
@@ -1384,10 +1394,12 @@ class EditorManager {
         const hasOpenFiles = state.openFiles.length > 0;
         const hasAgentTabs = getAgentTabsForSession(this.currentSession).length > 0;
         const compact = this.hasCompactWorkspaceTabs(this.currentSession);
+        const hasTabs = compact || hasOpenFiles || hasAgentTabs;
         const shouldShow = compact
             ? true
-            : state.isVisible && (hasOpenFiles || hasAgentTabs);
-        
+            : state.isVisible || hasOpenFiles || hasAgentTabs;
+
+        this.tabsContainer.style.display = hasTabs ? 'flex' : 'none';
         this.pane.style.display = shouldShow ? 'flex' : 'none';
         this.resizer.style.display = shouldShow && !compact ? 'flex' : 'none';
         this.syncTerminalWorkspacePlacement();
@@ -1459,7 +1471,7 @@ class EditorManager {
 
         // Only render tabs and content, file tree is persistent in sidebar
         const shouldShowWorkspace = state.isVisible
-            || this.hasCompactWorkspaceTabs(session);
+            || this.hasVisibleWorkspaceTabs(session);
         if (shouldShowWorkspace) {
             this.renderEditorTabs();
             const activeKey = this.getActiveWorkspaceTabKey(session);
@@ -1483,9 +1495,9 @@ class EditorManager {
 
     layout() {
         // console.log('[Editor] layout called');
-        if (!this.currentSession || !this.currentSession.editorState.isVisible) return;
+        if (!this.currentSession) return;
         this.currentSession.mainFitAddon.fit();
-        if (this.editor) {
+        if (this.editor && this.pane.style.display !== 'none') {
             const width = this.pane.clientWidth;
             const height = this.pane.clientHeight - 35; // Subtract fixed safety margin
             
@@ -4198,6 +4210,7 @@ class Session {
         if (!tab) return;
 
         tab.classList.toggle('agent-managed-session', isAgentManagedSession(this));
+        tab.classList.toggle('agent-open', getAgentTabsForSession(this).length > 0);
 
         if (this.env) {
             tab.title = this.env;
@@ -8308,6 +8321,7 @@ function removeAgentTab(agentTabKey) {
     }
 
     session?.saveState?.();
+    session?.updateTabUI?.();
     refreshWorkspaceIfSessionActive(session);
 }
 
@@ -8362,7 +8376,6 @@ async function syncAgentsForServer(server, { force = false } = {}) {
             && state.agentTabs.has(activeKey)
         ) {
             noteRecentAgentTab(session, activeKey);
-            session.editorState.isVisible = true;
             session.saveState();
         }
     }
@@ -8391,7 +8404,6 @@ async function syncAgentsForServer(server, { force = false } = {}) {
                 getAgentTabsForSession(preferredSession)[0]?.key || ''
             );
         }
-        preferredSession.editorState.isVisible = true;
         preferredSession.saveState();
         if (state.activeSessionKey === preferredSession.key) {
             restoreWorkspaceForSession(preferredSession);
@@ -8418,7 +8430,6 @@ async function createAgentTab(session, agentId, options = {}) {
     }
     const data = await response.json();
     const agentTab = upsertAgentTab(session.server, data);
-    session.editorState.isVisible = true;
     session.workspaceState.activeTabKey = agentTab.key;
     noteRecentAgentTab(session, agentTab.key);
     session.saveState();
@@ -9439,6 +9450,9 @@ function createTabElement(session) {
     tab.className = 'tab-item';
     if (session.editorState && session.editorState.isVisible) {
         tab.classList.add('editor-open');
+    }
+    if (getAgentTabsForSession(session).length > 0) {
+        tab.classList.add('agent-open');
     }
     if (isAgentManagedSession(session)) {
         tab.classList.add('agent-managed-session');
