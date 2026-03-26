@@ -240,8 +240,8 @@ class TabminalTestAgent {
     async createTerminalDemo(sessionId) {
         const terminal = await this.connection.createTerminal({
             sessionId,
-            command: 'printf "alpha\\n"; sleep 0.25; '
-                + 'printf "beta\\n"; sleep 0.25',
+            command: 'printf "alpha\\n"; sleep 1.0; '
+                + 'printf "beta\\n"; sleep 6.0',
             cwd: process.cwd(),
             outputByteLimit: 4096
         });
@@ -329,6 +329,10 @@ class TabminalTestAgent {
                     await sleep(120, signal);
                 }
                 return { stopReason: 'end_turn' };
+            }
+
+            if (/fail-prompt/i.test(promptText)) {
+                throw new Error('prompt dispatch failed');
             }
 
             if (/synthetic-order/i.test(promptText)) {
@@ -463,6 +467,49 @@ class TabminalTestAgent {
                         content: {
                             type: 'text',
                             text: 'Rendered diff smoke payload.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
+            if (/stale-tool/i.test(promptText)) {
+                const terminal = await this.createTerminalDemo(params.sessionId);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call',
+                        toolCallId: 'stale-tool',
+                        title: 'Run stale tool',
+                        kind: 'execute',
+                        status: 'pending',
+                        rawInput: { cmd: 'printf "alpha\\n"; printf "beta\\n"' }
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call_update',
+                        toolCallId: 'stale-tool',
+                        status: 'in_progress',
+                        content: [
+                            {
+                                type: 'terminal',
+                                terminalId: terminal.id
+                            }
+                        ]
+                    }
+                });
+                await terminal.waitForExit();
+                await terminal.release();
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'stale-result',
+                        content: {
+                            type: 'text',
+                            text: 'Stale tool finished without a final update.'
                         }
                     }
                 });

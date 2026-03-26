@@ -335,6 +335,9 @@ class ServerClient {
         this.heartbeatSmoothedMaxVal = 1;
         this.heartbeatTimer = null;
         this.nextSyncAt = 0;
+        this.syncPromise = null;
+        this.pendingImmediateSync = false;
+        this.immediateSyncTimer = null;
         this.agentStateLoaded = false;
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
@@ -566,6 +569,10 @@ class EditorManager {
         this.agentThoughtSelect = null;
         this.agentNewChatButton = null;
         this.agentUsageHud = null;
+        this.agentUsageHudHovered = false;
+        this.agentUsageHudAutoExpanded = false;
+        this.agentUsageHudAutoExpandTimer = null;
+        this.agentUsageHudLastSignature = '';
         this.agentPlan = null;
         this.agentTopActions = null;
         this.agentCommands = null;
@@ -860,6 +867,14 @@ class EditorManager {
         this.agentUsageHud = document.createElement('div');
         this.agentUsageHud.className = 'agent-usage-hud';
         this.agentUsageHud.style.display = 'none';
+        this.agentUsageHud.addEventListener('mouseenter', () => {
+            this.agentUsageHudHovered = true;
+            this.syncAgentUsageHudExpandedState();
+        });
+        this.agentUsageHud.addEventListener('mouseleave', () => {
+            this.agentUsageHudHovered = false;
+            this.syncAgentUsageHudExpandedState();
+        });
 
         this.agentSetupButton = document.createElement('button');
         this.agentSetupButton.type = 'button';
@@ -2051,13 +2066,32 @@ class EditorManager {
         const activeTab = getActiveAgentTab();
         if (!activeTab || !this.agentUsageHud) return;
         if (this.agentContainer.style.display === 'none') return;
-        const resetNodes = this.agentUsageHud.querySelectorAll(
-            '.agent-usage-reset[data-reset-at]'
-        );
-        for (const node of resetNodes) {
-            const resetAt = String(node.dataset.resetAt || '').trim();
-            node.textContent = formatAgentUsageReset(resetAt);
+        this.renderAgentUsageHud(activeTab);
+    }
+
+    clearAgentUsageHudAutoExpand() {
+        if (this.agentUsageHudAutoExpandTimer) {
+            clearTimeout(this.agentUsageHudAutoExpandTimer);
+            this.agentUsageHudAutoExpandTimer = null;
         }
+    }
+
+    openAgentUsageHudTemporarily(durationMs = 5000) {
+        this.clearAgentUsageHudAutoExpand();
+        this.agentUsageHudAutoExpanded = true;
+        this.syncAgentUsageHudExpandedState();
+        this.agentUsageHudAutoExpandTimer = window.setTimeout(() => {
+            this.agentUsageHudAutoExpandTimer = null;
+            this.agentUsageHudAutoExpanded = false;
+            this.syncAgentUsageHudExpandedState();
+        }, durationMs);
+    }
+
+    syncAgentUsageHudExpandedState() {
+        if (!this.agentUsageHud) return;
+        const expanded = this.agentUsageHudHovered
+            || this.agentUsageHudAutoExpanded;
+        this.agentUsageHud.classList.toggle('is-expanded', expanded);
     }
 
     renderAgentUsageHud(agentTab) {
@@ -2066,71 +2100,69 @@ class EditorManager {
         const usage = normalizeAgentUsageForDisplay(agentTab?.usage || null);
         if (!usage || isCompactWorkspaceMode()) {
             this.agentUsageHud.style.display = 'none';
+            this.agentUsageHudLastSignature = '';
+            this.agentUsageHudHovered = false;
+            this.agentUsageHudAutoExpanded = false;
+            this.clearAgentUsageHudAutoExpand();
+            return;
+        }
+        const metrics = buildAgentUsageMetrics(usage);
+        if (metrics.length === 0) {
+            this.agentUsageHud.style.display = 'none';
+            this.agentUsageHudLastSignature = '';
+            this.agentUsageHudHovered = false;
+            this.agentUsageHudAutoExpanded = false;
+            this.clearAgentUsageHudAutoExpand();
             return;
         }
 
-        const identityMeta = buildAgentUsageIdentityMeta(usage);
-        if (identityMeta) {
-            const identityRow = document.createElement('div');
-            identityRow.className = 'agent-usage-meta primary';
-            identityRow.textContent = identityMeta;
-            this.agentUsageHud.appendChild(identityRow);
+        const usageSignature = JSON.stringify({
+            used: usage.used,
+            size: usage.size,
+            resetAt: usage.resetAt,
+            totals: usage.totals,
+            cost: usage.cost,
+            windows: usage.windows,
+            vendorLabel: usage.vendorLabel,
+            sessionId: usage.sessionId,
+            summary: usage.summary
+        });
+        if (usageSignature !== this.agentUsageHudLastSignature) {
+            this.agentUsageHudLastSignature = usageSignature;
+            this.openAgentUsageHudTemporarily(5000);
         }
 
-        if (Number.isFinite(usage.used) && Number.isFinite(usage.size)) {
-            const contextRow = document.createElement('div');
-            contextRow.className = 'agent-usage-row primary';
-            contextRow.appendChild(buildAgentUsageMetricLabel('Context'));
-            contextRow.appendChild(buildAgentUsageBar(usage.used, usage.size));
-            contextRow.appendChild(
-                buildAgentUsageValue(usage.used, usage.size)
-            );
-            this.agentUsageHud.appendChild(contextRow);
+        const compact = document.createElement('div');
+        compact.className = 'agent-usage-compact';
+        for (const metric of metrics) {
+            compact.appendChild(buildAgentUsageCompactMetric(metric));
+        }
+        this.agentUsageHud.appendChild(compact);
+
+        const details = document.createElement('div');
+        details.className = 'agent-usage-details';
+
+        const sessionRow = buildAgentUsageSessionRow(usage);
+        if (sessionRow) {
+            details.appendChild(sessionRow);
+        }
+
+        for (const metric of metrics) {
+            details.appendChild(buildAgentUsageDetailRow(metric));
         }
 
         const totals = buildAgentUsageTotalsMeta(usage);
         if (totals) {
             const totalsRow = document.createElement('div');
-            totalsRow.className = 'agent-usage-meta';
+            totalsRow.className = 'agent-usage-details-meta';
             totalsRow.textContent = totals;
-            this.agentUsageHud.appendChild(totalsRow);
+            details.appendChild(totalsRow);
         }
 
-        for (const windowUsage of usage.windows) {
-            const row = document.createElement('div');
-            row.className = 'agent-usage-row secondary';
-            row.appendChild(buildAgentUsageMetricLabel(windowUsage.label));
-            row.appendChild(
-                buildAgentUsageBar(windowUsage.used, windowUsage.size)
-            );
-            row.appendChild(
-                buildAgentUsageValue(windowUsage.used, windowUsage.size)
-            );
-            this.agentUsageHud.appendChild(row);
-            if (windowUsage.subtitle) {
-                const subtitle = document.createElement('div');
-                subtitle.className = 'agent-usage-meta';
-                subtitle.textContent = windowUsage.subtitle;
-                this.agentUsageHud.appendChild(subtitle);
-            }
-            if (windowUsage.resetAt) {
-                const reset = document.createElement('div');
-                reset.className = 'agent-usage-reset';
-                reset.dataset.resetAt = windowUsage.resetAt;
-                reset.textContent = formatAgentUsageReset(windowUsage.resetAt);
-                this.agentUsageHud.appendChild(reset);
-            }
-        }
-
-        if (usage.resetAt && usage.windows.length === 0) {
-            const reset = document.createElement('div');
-            reset.className = 'agent-usage-reset';
-            reset.dataset.resetAt = usage.resetAt;
-            reset.textContent = formatAgentUsageReset(usage.resetAt);
-            this.agentUsageHud.appendChild(reset);
-        }
+        this.agentUsageHud.appendChild(details);
 
         this.agentUsageHud.style.display = '';
+        this.syncAgentUsageHudExpandedState();
     }
 
     renderAgentPlan(agentTab) {
@@ -2250,7 +2282,10 @@ class EditorManager {
 
     buildAgentToolNode(agentTab, toolCall) {
         const node = document.createElement('div');
-        const toolStatusClass = normalizeStatusClass(toolCall.status);
+        const toolStatusClass = getEffectiveAgentToolStatus(
+            toolCall,
+            agentTab
+        );
         node.className = `agent-tool-call state-${toolStatusClass}`;
 
         node.appendChild(buildAgentTimelineHeader(
@@ -2268,7 +2303,7 @@ class EditorManager {
 
         const status = document.createElement('span');
         status.className = `agent-status-pill ${toolStatusClass}`;
-        status.textContent = getAgentStatusLabel(toolCall.status);
+        status.textContent = getAgentStatusLabel(toolStatusClass);
 
         header.appendChild(title);
         header.appendChild(status);
@@ -2318,7 +2353,7 @@ class EditorManager {
                     );
                 }
                 details.open = shouldExpandAgentTimelineSections(
-                    toolCall.status
+                    toolStatusClass
                 );
                 details.appendChild(summary);
                 details.appendChild(
@@ -2569,6 +2604,7 @@ class EditorManager {
         host.className = 'agent-tool-call-terminal-host';
 
         const terminal = section?.terminal || {};
+        const agentTab = getActiveAgentTab();
         const terminalId = String(
             terminal.terminalId || section?.terminalId || ''
         );
@@ -2583,23 +2619,12 @@ class EditorManager {
             header.appendChild(meta);
         }
 
-        if (terminal.terminalSessionId) {
-            const openButton = document.createElement('button');
-            openButton.type = 'button';
-            openButton.className = 'agent-tool-call-terminal-open';
-            openButton.textContent = 'Open in Terminal';
-            openButton.addEventListener('click', async (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const agentTab = getActiveAgentTab();
-                if (!agentTab) return;
-                await jumpToTerminalSession(
-                    agentTab.server,
-                    terminal.terminalSessionId
-                );
-            });
-            header.appendChild(openButton);
-        }
+        const openButton = syncAgentTerminalOpenButton(
+            header,
+            null,
+            agentTab,
+            terminal
+        );
 
         if (header.childElementCount > 0) {
             host.appendChild(header);
@@ -2653,11 +2678,13 @@ class EditorManager {
             if (!this.agentEmbeddedTerminals.has(terminalId)) {
                 this.agentEmbeddedTerminals.set(terminalId, []);
             }
-            this.agentEmbeddedTerminals.get(terminalId).push({
-                meta,
-                terminalNode,
-                terminal: embeddedTerm,
-                fitAddon,
+                this.agentEmbeddedTerminals.get(terminalId).push({
+                    meta,
+                    header,
+                    openButton,
+                    terminalNode,
+                    terminal: embeddedTerm,
+                    fitAddon,
                 layout: layoutTerminal
             });
         }
@@ -2667,7 +2694,13 @@ class EditorManager {
     }
 
     refreshVisibleAgentTerminals(agentTab, terminalId = '') {
-        if (!agentTab || !isAgentTabVisible(agentTab)) {
+        const session = agentTab?.getLinkedSession?.() || null;
+        if (
+            !agentTab
+            || !session
+            || state.activeSessionKey !== session.key
+            || editorManager.getActiveWorkspaceTabKey(session) !== agentTab.key
+        ) {
             return false;
         }
         const updates = terminalId
@@ -2690,6 +2723,12 @@ class EditorManager {
                 if (entry.meta) {
                     entry.meta.textContent = buildAgentTerminalMetaText(summary);
                 }
+                entry.openButton = syncAgentTerminalOpenButton(
+                    entry.header,
+                    entry.openButton,
+                    agentTab,
+                    summary
+                );
                 renderEmbeddedAgentTerminal(
                     entry.terminal,
                     entry.terminalNode,
@@ -3925,6 +3964,7 @@ class Session {
         this.layoutState = {
             editorFlex: '2 1 0%'
         };
+        this.previewRelayoutScheduled = false;
         this.wrapperElement = null;
         this._createTerminals();
 
@@ -4087,6 +4127,7 @@ class Session {
             if (termWidth === 0 || termHeight === 0) return;
             
             const container = this.wrapperElement.parentElement;
+            const tabElement = this.wrapperElement.closest('.tab-item');
             const availableWidth = container.clientWidth;
             
             // Calculate scale to fit width
@@ -4096,7 +4137,8 @@ class Session {
             this.wrapperElement.style.height = `${termHeight}px`;
             
             const scaledHeight = termHeight * scale;
-            const targetHeight = Math.max(76, scaledHeight); // Match CSS min-height
+            const overlayMinHeight = syncSessionTabMinimumHeight(tabElement);
+            const targetHeight = Math.max(scaledHeight, overlayMinHeight);
             container.style.height = `${targetHeight}px`;
             
             if (scaledHeight < targetHeight) {
@@ -4106,6 +4148,15 @@ class Session {
                 this.wrapperElement.style.transform = `scale(${scale})`;
             }
             this.wrapperElement.style.transformOrigin = 'top left';
+        });
+    }
+
+    schedulePreviewRelayout() {
+        if (this.previewRelayoutScheduled) return;
+        this.previewRelayoutScheduled = true;
+        requestAnimationFrame(() => {
+            this.previewRelayoutScheduled = false;
+            this.updatePreviewScale();
         });
     }
 
@@ -4173,6 +4224,11 @@ class Session {
                 metaTimeEl.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
                 metaTimeEl.classList.remove('meta-managed');
             }
+        }
+
+        syncSessionTabMinimumHeight(tab);
+        if (this.wrapperElement && window.innerWidth >= 768) {
+            this.schedulePreviewRelayout();
         }
     }
 
@@ -4513,6 +4569,14 @@ class AgentTab {
                 );
             }
         }
+        for (const summary of this.terminals.values()) {
+            if (shouldSyncManagedTerminalSession(this.server, summary)) {
+                scheduleManagedTerminalSessionSync(
+                    this.server,
+                    String(summary.terminalSessionId || '').trim()
+                );
+            }
+        }
         this.#syncBusyWatchdog();
     }
 
@@ -4609,13 +4673,24 @@ class AgentTab {
                     const previous = this.terminals.get(
                         message.terminal.terminalId
                     ) || {};
+                    const nextSummary = this.#normalizeTerminalSummary({
+                        ...previous,
+                        ...message.terminal
+                    });
                     this.terminals.set(
                         message.terminal.terminalId,
-                        this.#normalizeTerminalSummary({
-                            ...previous,
-                            ...message.terminal
-                        })
+                        nextSummary
                     );
+                    if (shouldSyncManagedTerminalSession(
+                        this.server,
+                        nextSummary,
+                        previous
+                    )) {
+                        scheduleManagedTerminalSessionSync(
+                            this.server,
+                            String(nextSummary.terminalSessionId || '').trim()
+                        );
+                    }
                     const session = this.getLinkedSession();
                     if (session) {
                         session.updateTabUI();
@@ -4694,7 +4769,7 @@ class AgentTab {
 
     #hasActiveTool() {
         return getAgentOrderedMapValues(this.toolCalls).some((toolCall) => {
-            const statusClass = normalizeStatusClass(toolCall?.status);
+            const statusClass = getEffectiveAgentToolStatus(toolCall, this);
             return statusClass === 'pending' || statusClass === 'running';
         });
     }
@@ -5191,6 +5266,54 @@ const pendingChanges = {
     sessions: new Map() // sessionKey -> { resize, editorState, fileWrites: Map<path, content> }
 };
 
+if (typeof window !== 'undefined') {
+    window.__tabminalSmoke = {
+        async syncMainServerSessions() {
+            const server = getMainServer();
+            if (!server) return false;
+            const result = await syncServerSessionsNow(server);
+            await new Promise((resolve) => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(resolve);
+                });
+            });
+            return result;
+        },
+        applyMainServerSessions(sessions) {
+            const server = getMainServer();
+            if (!server) {
+                return {
+                    ok: false,
+                    sessionKeys: [],
+                    managedSessionKeys: []
+                };
+            }
+            const remoteSessions = Array.isArray(sessions) ? sessions : [];
+            reconcileSessions(server, remoteSessions);
+            return {
+                ok: true,
+                sessionKeys: remoteSessions.map((session) => makeSessionKey(
+                    server.id,
+                    session.id
+                )),
+                managedSessionKeys: remoteSessions
+                    .filter((session) => (
+                        session?.managed?.kind === 'agent-terminal'
+                    ))
+                    .map((session) => makeSessionKey(
+                        server.id,
+                        session.id
+                    ))
+            };
+        },
+        getManagedSessionKeys() {
+            return Array.from(state.sessions.values())
+                .filter((session) => isAgentManagedSession(session))
+                .map((session) => session.key);
+        }
+    };
+}
+
 const shiftMap = {
     '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+',
     '[': '{', ']': '}', '\\': '|', ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?'
@@ -5240,6 +5363,141 @@ function hasActiveAgentSyncNeed(serverId) {
     ));
 }
 
+function shouldSyncManagedTerminalSession(server, nextSummary, _previous = null) {
+    if (!server || !nextSummary) return false;
+    const nextSessionId = String(nextSummary.terminalSessionId || '').trim();
+    if (!nextSessionId) return false;
+    if (nextSummary.released) {
+        return false;
+    }
+    return !state.sessions.has(makeSessionKey(server.id, nextSessionId));
+}
+
+function requestImmediateServerSync(server, delayMs = 40) {
+    if (!server || !server.isAuthenticated) return;
+    server.nextSyncAt = 0;
+    if (server.syncPromise) {
+        server.pendingImmediateSync = true;
+        return;
+    }
+    if (server.immediateSyncTimer) return;
+    server.immediateSyncTimer = window.setTimeout(() => {
+        server.immediateSyncTimer = null;
+        void syncServer(server);
+    }, delayMs);
+}
+
+const managedSessionSyncRetryTimers = new Map();
+
+function clearManagedSessionSyncRetry(serverId, sessionId) {
+    const retryKey = `${serverId}:${sessionId}`;
+    const timer = managedSessionSyncRetryTimers.get(retryKey);
+    if (timer) {
+        clearTimeout(timer);
+        managedSessionSyncRetryTimers.delete(retryKey);
+    }
+}
+
+function scheduleManagedTerminalSessionSync(
+    server,
+    terminalSessionId,
+    attemptsRemaining = 20
+) {
+    if (!server || !server.isAuthenticated || !terminalSessionId) {
+        return;
+    }
+
+    const sessionKey = makeSessionKey(server.id, terminalSessionId);
+    if (state.sessions.has(sessionKey)) {
+        clearManagedSessionSyncRetry(server.id, terminalSessionId);
+        return;
+    }
+
+    const retryKey = `${server.id}:${terminalSessionId}`;
+    if (managedSessionSyncRetryTimers.has(retryKey)) {
+        return;
+    }
+
+    const runSyncAttempt = async () => {
+        try {
+            await syncServerSessionsNow(server);
+        } catch {
+            requestImmediateServerSync(server);
+        }
+
+        if (state.sessions.has(sessionKey)) {
+            clearManagedSessionSyncRetry(server.id, terminalSessionId);
+            return;
+        }
+
+        if (attemptsRemaining <= 0) {
+            clearManagedSessionSyncRetry(server.id, terminalSessionId);
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            managedSessionSyncRetryTimers.delete(retryKey);
+            scheduleManagedTerminalSessionSync(
+                server,
+                terminalSessionId,
+                attemptsRemaining - 1
+            );
+        }, 250);
+        managedSessionSyncRetryTimers.set(retryKey, timer);
+    };
+
+    void runSyncAttempt();
+}
+
+async function syncServerSessionsNow(server) {
+    if (!server || !server.isAuthenticated) {
+        return {
+            ok: false,
+            sessionKeys: [],
+            managedSessionKeys: []
+        };
+    }
+    const response = await server.fetch('/api/heartbeat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            updates: { sessions: [] }
+        })
+    });
+    if (!response.ok) {
+        return {
+            ok: false,
+            sessionKeys: [],
+            managedSessionKeys: []
+        };
+    }
+    const data = await response.json();
+    reconcileSessions(server, data.sessions || []);
+    const sessionKeys = Array.isArray(data.sessions)
+        ? data.sessions.map((session) => makeSessionKey(
+            server.id,
+            session.id
+        ))
+        : [];
+    const managedSessionKeys = Array.isArray(data.sessions)
+        ? data.sessions
+            .filter((session) => (
+                session?.managed?.kind === 'agent-terminal'
+            ))
+            .map((session) => makeSessionKey(
+                server.id,
+                session.id
+            ))
+        : [];
+    return {
+        ok: true,
+        sessionKeys,
+        managedSessionKeys
+    };
+}
+
 function getAgentTabsForSession(session) {
     if (!session) return [];
     return getAgentTabsForServer(session.serverId).filter(
@@ -5285,14 +5543,33 @@ function applyStatusIconState(element, baseIconSvg, state = 'idle') {
 
 function getSessionTerminalIndicatorState(session) {
     if (!session) return 'idle';
-    if (isAgentManagedSession(session)) {
-        if (!session.closed) return 'running';
-        if (session.needsAttention) return 'attention';
-        return 'idle';
-    }
     if (session.runningCommand) return 'running';
     if (session.needsAttention) return 'attention';
     return 'idle';
+}
+
+function getSessionTabOverlayMinHeight(tabElement) {
+    if (!tabElement) return 0;
+    const overlay = tabElement.querySelector('.tab-info-overlay');
+    if (!overlay) return 0;
+    const scrollHeight = Number(overlay.scrollHeight) || 0;
+    const offsetHeight = Number(overlay.offsetHeight) || 0;
+    return Math.ceil(Math.max(scrollHeight, offsetHeight, 0));
+}
+
+function syncSessionTabMinimumHeight(tabElement) {
+    if (!tabElement) return 0;
+    const previewContainer = tabElement.querySelector('.preview-container');
+    const overlayMinHeight = getSessionTabOverlayMinHeight(tabElement);
+    if (!previewContainer || !overlayMinHeight) {
+        if (tabElement) {
+            tabElement.style.minHeight = '';
+        }
+        return overlayMinHeight;
+    }
+    previewContainer.style.minHeight = `${overlayMinHeight}px`;
+    tabElement.style.minHeight = `${overlayMinHeight}px`;
+    return overlayMinHeight;
 }
 
 function getAgentTabIndicatorState(agentTab) {
@@ -5736,6 +6013,58 @@ function getAgentRoleDisplayLabel(agentTab, role = 'assistant') {
     return role || 'assistant';
 }
 
+function syncAgentTerminalOpenButton(
+    header,
+    existingButton,
+    agentTab,
+    terminalSummary
+) {
+    if (!header) {
+        return existingButton || null;
+    }
+    const terminalSessionId = String(
+        terminalSummary?.terminalSessionId || ''
+    ).trim();
+    const linkedSession = (
+        agentTab
+        && terminalSessionId
+    )
+        ? state.sessions.get(
+            makeSessionKey(agentTab.server.id, terminalSessionId)
+        )
+        : null;
+
+    if (!linkedSession) {
+        if (
+            agentTab
+            && terminalSessionId
+            && !terminalSummary?.released
+        ) {
+            scheduleManagedTerminalSessionSync(
+                agentTab.server,
+                terminalSessionId
+            );
+        }
+        existingButton?.remove();
+        return null;
+    }
+
+    const button = existingButton || document.createElement('button');
+    button.type = 'button';
+    button.className = 'agent-tool-call-terminal-open';
+    button.textContent = 'Jump in';
+    button.onclick = async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!agentTab) return;
+        await jumpToTerminalSession(agentTab.server, terminalSessionId);
+    };
+    if (!button.isConnected) {
+        header.appendChild(button);
+    }
+    return button;
+}
+
 function getAgentMessageTimeLabel(message) {
     const raw = String(message?.createdAt || '').trim();
     if (!raw) return '';
@@ -5942,33 +6271,182 @@ function formatTokenCompact(value) {
     return String(value);
 }
 
-function buildAgentUsageValue(used, size) {
-    const node = document.createElement('span');
-    node.className = 'agent-usage-value';
-    node.textContent = Number.isFinite(used) && Number.isFinite(size)
-        ? `${Math.max(0, 100 - Math.round((used / Math.max(size, 1)) * 100))}% left`
-        : '—';
-    return node;
+function getAgentUsageRemainingPercent(used, size) {
+    if (!Number.isFinite(used) || !Number.isFinite(size) || size <= 0) {
+        return null;
+    }
+    return Math.max(0, Math.min(100, 100 - Math.round((used / size) * 100)));
 }
 
-function buildAgentUsageMetricLabel(label) {
-    const node = document.createElement('span');
-    node.className = 'agent-usage-label';
-    node.textContent = label;
-    return node;
+function buildAgentUsageMetrics(usage) {
+    const metrics = [];
+    if (Number.isFinite(usage?.used) && Number.isFinite(usage?.size)) {
+        metrics.push({
+            key: 'context',
+            label: 'Context',
+            shortLabel: 'Ctx',
+            used: usage.used,
+            size: usage.size,
+            usageText: `${formatTokenCompact(usage.used)} / ${formatTokenCompact(
+                usage.size
+            )}`,
+            subtitle: '',
+            resetAt: typeof usage?.resetAt === 'string' ? usage.resetAt : '',
+            percentLeft: getAgentUsageRemainingPercent(usage.used, usage.size),
+            percentUsed: Math.max(
+                0,
+                Math.min(100, Math.round((usage.used / usage.size) * 100))
+            )
+        });
+    }
+    for (const [index, windowUsage] of (usage?.windows || []).entries()) {
+        if (!Number.isFinite(windowUsage?.used) || !Number.isFinite(windowUsage?.size)) {
+            continue;
+        }
+        metrics.push({
+            key: `window:${index}:${windowUsage.label || ''}`,
+            label: String(windowUsage.label || `Window ${index + 1}`),
+            shortLabel: String(windowUsage.label || `W${index + 1}`),
+            used: windowUsage.used,
+            size: windowUsage.size,
+            usageText: `${formatTokenCompact(windowUsage.used)} / ${formatTokenCompact(
+                windowUsage.size
+            )}`,
+            subtitle: windowUsage.subtitle || '',
+            resetAt: typeof windowUsage.resetAt === 'string'
+                ? windowUsage.resetAt
+                : '',
+            percentLeft: getAgentUsageRemainingPercent(
+                windowUsage.used,
+                windowUsage.size
+            ),
+            percentUsed: Math.max(
+                0,
+                Math.min(
+                    100,
+                    Math.round((windowUsage.used / windowUsage.size) * 100)
+                )
+            )
+        });
+    }
+    return metrics.filter((metric) => Number.isFinite(metric.percentLeft));
 }
 
-function buildAgentUsageBar(used, size) {
-    const outer = document.createElement('span');
-    outer.className = 'agent-usage-bar';
-    const fill = document.createElement('span');
-    fill.className = 'agent-usage-bar-fill';
-    const percent = Number.isFinite(used) && Number.isFinite(size) && size > 0
-        ? Math.max(0, Math.min(100, (used / size) * 100))
-        : 0;
-    fill.style.width = `${percent}%`;
-    outer.appendChild(fill);
-    return outer;
+function getAgentUsageMetricTone(metric) {
+    if (!metric || !Number.isFinite(metric.percentUsed)) {
+        return 'normal';
+    }
+    return metric.percentUsed >= 80 ? 'critical' : 'normal';
+}
+
+function getAgentUsageMetricDetailLabel(metric) {
+    if (!metric) return '';
+    if (metric.key === 'context') {
+        return 'Context:';
+    }
+    return `${metric.label} limit:`;
+}
+
+function buildAgentUsageCompactMetric(metric) {
+    const pill = document.createElement('div');
+    pill.className = 'agent-usage-pill';
+    pill.dataset.tone = getAgentUsageMetricTone(metric);
+    pill.title = `${metric.label}: ${metric.percentLeft}% left`;
+    pill.style.setProperty(
+        '--agent-usage-progress',
+        `${metric.percentUsed || 0}`
+    );
+
+    const value = document.createElement('span');
+    value.className = 'agent-usage-pill-value';
+    value.textContent = `${metric.percentLeft}%`;
+
+    const label = document.createElement('span');
+    label.className = 'agent-usage-pill-label';
+    label.textContent = metric.shortLabel || metric.label;
+
+    pill.appendChild(value);
+    pill.appendChild(label);
+    return pill;
+}
+
+function buildAgentUsageProgress(metric) {
+    const progress = document.createElement('div');
+    progress.className = 'agent-usage-progress';
+    progress.dataset.tone = getAgentUsageMetricTone(metric);
+
+    const fill = document.createElement('div');
+    fill.className = 'agent-usage-progress-fill';
+    fill.style.width = `${metric.percentUsed || 0}%`;
+    progress.appendChild(fill);
+
+    return progress;
+}
+
+function buildAgentUsageSessionRow(usage) {
+    const identityMeta = buildAgentUsageIdentityMeta(usage);
+    if (!identityMeta) {
+        return null;
+    }
+    const row = document.createElement('div');
+    row.className = 'agent-usage-session-row';
+
+    const label = document.createElement('div');
+    label.className = 'agent-usage-session-label';
+    label.textContent = 'Session:';
+
+    const value = document.createElement('div');
+    value.className = 'agent-usage-session-value';
+    value.textContent = identityMeta;
+
+    row.appendChild(label);
+    row.appendChild(value);
+    return row;
+}
+
+function buildAgentUsageDetailRow(metric) {
+    const row = document.createElement('div');
+    row.className = 'agent-usage-detail-row';
+
+    const label = document.createElement('div');
+    label.className = 'agent-usage-detail-label';
+    label.textContent = getAgentUsageMetricDetailLabel(metric);
+
+    const body = document.createElement('div');
+    body.className = 'agent-usage-detail-body';
+
+    const value = document.createElement('span');
+    value.className = 'agent-usage-detail-value';
+    value.textContent = `${metric.percentLeft}% left`;
+    body.appendChild(buildAgentUsageProgress(metric));
+
+    if (metric.usageText) {
+        const usage = document.createElement('div');
+        usage.className = 'agent-usage-details-meta';
+        usage.textContent = metric.usageText;
+        body.appendChild(usage);
+    }
+
+    if (metric.subtitle) {
+        const subtitle = document.createElement('div');
+        subtitle.className = 'agent-usage-details-meta';
+        subtitle.textContent = metric.subtitle;
+        body.appendChild(subtitle);
+    }
+
+    if (metric.resetAt) {
+        const reset = document.createElement('div');
+        reset.className = 'agent-usage-details-reset';
+        reset.dataset.resetAt = metric.resetAt;
+        reset.textContent = formatAgentUsageReset(metric.resetAt);
+        body.appendChild(reset);
+    }
+
+    row.appendChild(label);
+    row.appendChild(body);
+    row.appendChild(value);
+
+    return row;
 }
 
 function formatAgentUsageReset(resetAt = '') {
@@ -6037,13 +6515,6 @@ function buildAgentUsageTotalsMeta(usage) {
     if (Number.isFinite(usage.totals?.totalTokens)) {
         parts.push(
             `${formatTokenCompact(usage.totals.totalTokens)} tokens`
-        );
-    }
-    if (Number.isFinite(usage.used) && Number.isFinite(usage.size)) {
-        parts.push(
-            `${formatTokenCompact(usage.used)} / ${formatTokenCompact(
-                usage.size
-            )}`
         );
     }
     return parts.join(' · ');
@@ -6291,7 +6762,10 @@ function getAgentComposerFeedback(agentTab) {
 
     const activeTool = getAgentOrderedMapValues(agentTab.toolCalls).find(
         (toolCall) => {
-            const statusClass = normalizeStatusClass(toolCall.status);
+            const statusClass = getEffectiveAgentToolStatus(
+                toolCall,
+                agentTab
+            );
             return statusClass === 'pending' || statusClass === 'running';
         }
     );
@@ -6417,12 +6891,18 @@ function getAgentActivityState(agentTab) {
 
     const activeTool = getAgentOrderedMapValues(agentTab.toolCalls).find(
         (toolCall) => {
-            const statusClass = normalizeStatusClass(toolCall.status);
+            const statusClass = getEffectiveAgentToolStatus(
+                toolCall,
+                agentTab
+            );
             return statusClass === 'pending' || statusClass === 'running';
         }
     );
     if (activeTool) {
-        const toolStatusClass = normalizeStatusClass(activeTool.status);
+        const toolStatusClass = getEffectiveAgentToolStatus(
+            activeTool,
+            agentTab
+        );
         const toolTitle = getAgentToolTitle(activeTool);
         return {
             stateClass: 'tool',
@@ -6855,6 +7335,56 @@ function resolveAgentTerminalSummary(terminals, terminalId) {
         ) || null;
     }
     return null;
+}
+
+function getAgentToolTerminalIds(toolCall) {
+    if (!Array.isArray(toolCall?.content)) {
+        return [];
+    }
+    const ids = new Set();
+    for (const item of toolCall.content) {
+        const terminalId = String(item?.terminalId || '').trim();
+        if (item?.type === 'terminal' && terminalId) {
+            ids.add(terminalId);
+        }
+    }
+    return Array.from(ids);
+}
+
+function toolCallHasRunningTerminal(toolCall, terminals) {
+    for (const terminalId of getAgentToolTerminalIds(toolCall)) {
+        const terminal = resolveAgentTerminalSummary(terminals, terminalId);
+        if (terminal?.running) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getEffectiveAgentToolStatus(toolCall, agentTab) {
+    const statusClass = normalizeStatusClass(toolCall?.status);
+    if (statusClass !== 'pending' && statusClass !== 'running') {
+        return statusClass;
+    }
+    if (!agentTab) {
+        return statusClass;
+    }
+    if (toolCallHasRunningTerminal(toolCall, agentTab.terminals)) {
+        return statusClass;
+    }
+    if (agentTab.status === 'error' || agentTab.errorMessage) {
+        return 'error';
+    }
+    if (
+        agentTab.busy
+        || agentTab.status === 'restoring'
+        || getAgentOrderedMapValues(agentTab.permissions).some(
+            (permission) => permission.status === 'pending'
+        )
+    ) {
+        return statusClass;
+    }
+    return 'completed';
 }
 
 function summarizeToolCallContent(toolCall, terminals = null) {
@@ -8042,68 +8572,140 @@ async function fetchExpandedPaths(server) {
 
 async function syncServer(server) {
     if (!server || !server.isAuthenticated) return;
-    const now = Date.now();
-    const wasReconnecting = server.connectionStatus === 'reconnecting';
-    const shouldRefreshAgents = !server.agentStateLoaded
-        || wasReconnecting
-        || hasActiveAgentSyncNeed(server.id);
-    if (
-        wasReconnecting
-        && server.nextSyncAt
-        && now < server.nextSyncAt
-    ) {
-        return;
+    if (server.syncPromise) {
+        return server.syncPromise;
     }
-
-    for (const session of getSessionsForServer(server.id)) {
-        if (!session.socket || session.socket.readyState === WebSocket.CLOSED) {
-            session.connect();
-        }
-    }
-
-    const updates = { sessions: [] };
-    for (const [sessionKey, pending] of pendingChanges.sessions) {
-        const { serverId, sessionId } = splitSessionKey(sessionKey);
-        if (serverId !== server.id) continue;
-
-        const sessionUpdate = { id: sessionId };
-        let hasUpdate = false;
-
-        if (pending.resize) {
-            sessionUpdate.resize = pending.resize;
-            hasUpdate = true;
-        }
-        if (pending.editorState) {
-            sessionUpdate.editorState = pending.editorState;
-            hasUpdate = true;
-        }
-        if (pending.fileWrites && pending.fileWrites.size > 0) {
-            sessionUpdate.fileWrites = Array.from(pending.fileWrites.entries()).map(([path, content]) => ({ path, content }));
-            hasUpdate = true;
+    const promise = (async () => {
+        const now = Date.now();
+        const wasReconnecting = server.connectionStatus === 'reconnecting';
+        const shouldRefreshAgents = !server.agentStateLoaded
+            || wasReconnecting
+            || hasActiveAgentSyncNeed(server.id);
+        if (
+            wasReconnecting
+            && server.nextSyncAt
+            && now < server.nextSyncAt
+        ) {
+            return;
         }
 
-        if (hasUpdate) {
-            updates.sessions.push(sessionUpdate);
+        for (const session of getSessionsForServer(server.id)) {
+            if (
+                !session.socket
+                || session.socket.readyState === WebSocket.CLOSED
+            ) {
+                session.connect();
+            }
         }
-    }
 
-    const startTime = Date.now();
+        const updates = { sessions: [] };
+        for (const [sessionKey, pending] of pendingChanges.sessions) {
+            const { serverId, sessionId } = splitSessionKey(sessionKey);
+            if (serverId !== server.id) continue;
 
-    try {
-        const response = await server.fetch('/api/heartbeat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates })
-        });
-        
-        const latency = Date.now() - startTime;
+            const sessionUpdate = { id: sessionId };
+            let hasUpdate = false;
 
-        if (!response.ok) {
+            if (pending.resize) {
+                sessionUpdate.resize = pending.resize;
+                hasUpdate = true;
+            }
+            if (pending.editorState) {
+                sessionUpdate.editorState = pending.editorState;
+                hasUpdate = true;
+            }
+            if (pending.fileWrites && pending.fileWrites.size > 0) {
+                sessionUpdate.fileWrites = Array.from(
+                    pending.fileWrites.entries()
+                ).map(([path, content]) => ({ path, content }));
+                hasUpdate = true;
+            }
+
+            if (hasUpdate) {
+                updates.sessions.push(sessionUpdate);
+            }
+        }
+
+        const startTime = Date.now();
+
+        try {
+            const response = await server.fetch('/api/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ updates })
+            });
+
+            const latency = Date.now() - startTime;
+
+            if (!response.ok) {
+                if (!wasReconnecting) {
+                    console.warn(
+                        `[Heartbeat] ${getDisplayHost(server)} returned HTTP ${response.status}. Reconnecting...`
+                    );
+                }
+                server.nextSyncAt = Date.now() + RECONNECT_RETRY_MS;
+                setStatus(server, 'reconnecting');
+                server.lastLatency = -1;
+                pushServerHeartbeat(server, -1);
+                updateServerControlMetric(server);
+                if (getActiveServer()?.id === server.id) {
+                    updateSystemStatus(null, -1, server);
+                }
+                return;
+            }
+
+            for (const update of updates.sessions) {
+                const pending = pendingChanges.sessions.get(
+                    makeSessionKey(server.id, update.id)
+                );
+                if (!pending) continue;
+
+                if (update.resize) delete pending.resize;
+                if (update.editorState) delete pending.editorState;
+                if (update.fileWrites) {
+                    for (const file of update.fileWrites) {
+                        pending.fileWrites.delete(file.path);
+                    }
+                }
+            }
+
+            const data = await response.json();
+            server.nextSyncAt = 0;
+            if (server.isPrimary) {
+                handlePrimaryRuntimeVersion(data);
+            }
+            server.needsAccessLogin = false;
+            server.accessLoginUrl = '';
+            setStatus(server, 'connected');
+            if (data.system) {
+                server.lastSystemData = data.system;
+                server.lastLatency = latency;
+                pushServerHeartbeat(server, latency);
+                updateServerControlMetric(server);
+                if (getActiveServer()?.id === server.id) {
+                    updateSystemStatus(data.system, latency, server);
+                }
+            } else {
+                pushServerHeartbeat(server, latency);
+                updateServerControlMetric(server);
+            }
+
+            const sessions = Array.isArray(data) ? data : data.sessions;
+            reconcileSessions(server, sessions || []);
+            if (shouldRefreshAgents) {
+                try {
+                    await syncAgentsForServer(server, { force: true });
+                } catch (error) {
+                    console.warn('Failed to sync agents:', error);
+                }
+            }
+        } catch (error) {
             if (!wasReconnecting) {
                 console.warn(
-                    `[Heartbeat] ${getDisplayHost(server)} returned HTTP ${response.status}. Reconnecting...`
+                    `[Heartbeat] ${getDisplayHost(server)} unavailable (${formatHeartbeatError(error)}). Reconnecting...`
                 );
             }
+            if (!server.isAuthenticated) return;
             server.nextSyncAt = Date.now() + RECONNECT_RETRY_MS;
             setStatus(server, 'reconnecting');
             server.lastLatency = -1;
@@ -8112,69 +8714,18 @@ async function syncServer(server) {
             if (getActiveServer()?.id === server.id) {
                 updateSystemStatus(null, -1, server);
             }
-            return;
         }
-        
-        // Clear sent updates
-        for (const update of updates.sessions) {
-            const pending = pendingChanges.sessions.get(
-                makeSessionKey(server.id, update.id)
-            );
-            if (!pending) continue;
-            
-            if (update.resize) delete pending.resize;
-            if (update.editorState) delete pending.editorState;
-            if (update.fileWrites) {
-                for (const file of update.fileWrites) {
-                    pending.fileWrites.delete(file.path);
-                }
-            }
+    })();
+    server.syncPromise = promise;
+    try {
+        return await promise;
+    } finally {
+        if (server.syncPromise === promise) {
+            server.syncPromise = null;
         }
-
-        const data = await response.json();
-        server.nextSyncAt = 0;
-        if (server.isPrimary) {
-            handlePrimaryRuntimeVersion(data);
-        }
-        server.needsAccessLogin = false;
-        server.accessLoginUrl = '';
-        setStatus(server, 'connected');
-        if (data.system) {
-            server.lastSystemData = data.system;
-            server.lastLatency = latency;
-            pushServerHeartbeat(server, latency);
-            updateServerControlMetric(server);
-            if (getActiveServer()?.id === server.id) {
-                updateSystemStatus(data.system, latency, server);
-            }
-        } else {
-            pushServerHeartbeat(server, latency);
-            updateServerControlMetric(server);
-        }
-
-        const sessions = Array.isArray(data) ? data : data.sessions;
-        reconcileSessions(server, sessions || []);
-        if (shouldRefreshAgents) {
-            try {
-                await syncAgentsForServer(server, { force: true });
-            } catch (error) {
-                console.warn('Failed to sync agents:', error);
-            }
-        }
-    } catch (error) {
-        if (!wasReconnecting) {
-            console.warn(
-                `[Heartbeat] ${getDisplayHost(server)} unavailable (${formatHeartbeatError(error)}). Reconnecting...`
-            );
-        }
-        if (!server.isAuthenticated) return;
-        server.nextSyncAt = Date.now() + RECONNECT_RETRY_MS;
-        setStatus(server, 'reconnecting');
-        server.lastLatency = -1;
-        pushServerHeartbeat(server, -1);
-        updateServerControlMetric(server);
-        if (getActiveServer()?.id === server.id) {
-            updateSystemStatus(null, -1, server);
+        if (server.pendingImmediateSync) {
+            server.pendingImmediateSync = false;
+            requestImmediateServerSync(server, 0);
         }
     }
 }
@@ -8609,10 +9160,17 @@ function updateSystemStatus(system, latency, server = getActiveServer()) {
 function reconcileSessions(server, remoteSessions) {
     const remoteIds = new Set(remoteSessions.map(session => session.id));
     const localSessions = getSessionsForServer(server.id);
+    const previousManagedSessionKeys = new Set(
+        localSessions
+            .filter((session) => isAgentManagedSession(session))
+            .map((session) => session.key)
+    );
+    let sessionTopologyChanged = false;
 
     for (const session of localSessions) {
         if (!remoteIds.has(session.id)) {
             removeSession(session.key);
+            sessionTopologyChanged = true;
         }
     }
 
@@ -8623,6 +9181,7 @@ function reconcileSessions(server, remoteSessions) {
         } else {
             const session = new Session(data, server);
             state.sessions.set(key, session);
+            sessionTopologyChanged = true;
             if (!state.activeSessionKey) {
                 switchToSession(session.key);
             }
@@ -8639,6 +9198,26 @@ function reconcileSessions(server, remoteSessions) {
     }
 
     renderTabs();
+    const nextManagedSessionKeys = new Set(
+        getSessionsForServer(server.id)
+            .filter((session) => isAgentManagedSession(session))
+            .map((session) => session.key)
+    );
+    const managedSessionTopologyChanged = (
+        sessionTopologyChanged
+        || previousManagedSessionKeys.size !== nextManagedSessionKeys.size
+        || Array.from(previousManagedSessionKeys).some(
+            (key) => !nextManagedSessionKeys.has(key)
+        )
+    );
+    const activeAgentTab = getActiveAgentTab();
+    if (activeAgentTab?.serverId === server.id) {
+        if (managedSessionTopologyChanged) {
+            editorManager?.renderAgentPanel?.(activeAgentTab);
+        } else {
+            editorManager?.refreshVisibleAgentTerminals?.(activeAgentTab);
+        }
+    }
 }
 
 async function createNewSession(server = getActiveServer()) {
@@ -8717,6 +9296,9 @@ function renderTabs() {
                 session.updatePreviewScale();
             }
             session.updateTabUI();
+            if (window.innerWidth >= 768) {
+                session.schedulePreviewRelayout();
+            }
         }
 
         // Force sync editor state class
@@ -8896,6 +9478,9 @@ function createTabElement(session) {
 
     tab.appendChild(previewContainer);
     tab.appendChild(overlay);
+    requestAnimationFrame(() => {
+        syncSessionTabMinimumHeight(tab);
+    });
     
     tab.onclick = () => switchToSession(session.key);
 

@@ -6,6 +6,9 @@ const chromeBaseUrl = process.env.CHROME_DEBUG_URL
 const tabminalUrl = process.env.TABMINAL_URL
     || 'http://127.0.0.1:19846/';
 const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
+const tabminalAuthToken = crypto.createHash('sha256')
+    .update(tabminalPassword)
+    .digest('hex');
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
 const targetAgentDisplayLabel = targetAgentLabel.replace(
     /\s+(CLI|Agent|Adapter)$/i,
@@ -103,6 +106,21 @@ async function getJsonWithAuth(url, token) {
         headers: {
             authorization: token || ''
         }
+    });
+    if (!response.ok) {
+        throw new Error(`${url} -> ${response.status}`);
+    }
+    return await response.json();
+}
+
+async function postJsonWithAuth(url, token, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            authorization: token || '',
+            'content-type': 'application/json'
+        },
+        body: JSON.stringify(body)
     });
     if (!response.ok) {
         throw new Error(`${url} -> ${response.status}`);
@@ -271,7 +289,7 @@ async function main() {
     await browser.open();
 
     let { targetId } = await browser.send('Target.createTarget', {
-        url: tabminalUrl
+        url: 'about:blank'
     });
     log('target-created', targetId);
     let page = null;
@@ -283,11 +301,42 @@ async function main() {
                 return list.find((item) => item.id === targetId);
             });
 
+            await browser.send('Target.activateTarget', { targetId });
             page = new CdpClient(pageTarget.webSocketDebuggerUrl);
             await page.open();
             await page.send('Page.enable');
             await page.send('Runtime.enable');
             await page.send('DOM.enable');
+            await page.send('Page.bringToFront');
+        }
+
+        async function waitForTargetUrl(
+            expectedUrl,
+            label = 'target-url-ready'
+        ) {
+            await waitFor(label, async () => {
+                const list = await getJson(`${chromeBaseUrl}/json/list`);
+                const target = list.find((item) => item.id === targetId);
+                return Boolean(target && target.url === expectedUrl);
+            });
+        }
+
+        async function primeTargetAuthAndNavigate() {
+            const token = await getApiToken();
+            await page.send('Page.addScriptToEvaluateOnNewDocument', {
+                source: `
+                    try {
+                        localStorage.setItem(
+                            'tabminal_auth_token:main',
+                            ${JSON.stringify(token)}
+                        );
+                    } catch {}
+                `
+            });
+            await page.send('Page.navigate', {
+                url: tabminalUrl
+            });
+            await waitForTargetUrl(tabminalUrl, 'tabminal-target-url');
         }
 
         async function recreateTarget(label = 'recreated-target') {
@@ -303,13 +352,15 @@ async function main() {
                 }
             }
             ({ targetId } = await browser.send('Target.createTarget', {
-                url: tabminalUrl
+                url: 'about:blank'
             }));
             log(label, targetId);
             await connectToTarget(`${label}-page-target`);
+            await primeTargetAuthAndNavigate();
         }
 
         await connectToTarget();
+        await primeTargetAuthAndNavigate();
 
         async function evaluate(expression) {
             const result = await page.send('Runtime.evaluate', {
@@ -459,20 +510,45 @@ async function main() {
             }
 
             if (authState === 'login') {
-                await evaluate(
-                    toExpression(`
-                        () => {
-                            const input = document.getElementById('password-input');
-                            input.value = ${JSON.stringify(tabminalPassword)};
-                            input.dispatchEvent(new Event('input', {
-                                bubbles: true
-                            }));
-                            document.getElementById('login-form').requestSubmit();
-                            return true;
-                        }
-                    `)
-                );
-                log('submitted-login');
+                try {
+                    const token = await getApiToken();
+                    await evaluate(
+                        toExpression(`
+                            () => {
+                                localStorage.setItem(
+                                    'tabminal_auth_token:main',
+                                    ${JSON.stringify(token)}
+                                );
+                                return true;
+                            }
+                        `)
+                    );
+                    log('forced-auth-token-before-login');
+                    await page.send('Page.reload', { ignoreCache: true });
+                    await waitForDocumentReady(
+                        'document-ready-after-forced-auth-login'
+                    );
+                } catch {
+                    await evaluate(
+                        toExpression(`
+                            () => {
+                                const input = document.getElementById(
+                                    'password-input'
+                                );
+                                input.value =
+                                    ${JSON.stringify(tabminalPassword)};
+                                input.dispatchEvent(new Event('input', {
+                                    bubbles: true
+                                }));
+                                document.getElementById(
+                                    'login-form'
+                                ).requestSubmit();
+                                return true;
+                            }
+                        `)
+                    );
+                    log('submitted-login');
+                }
             } else {
                 log('reused-existing-auth');
             }
@@ -502,6 +578,27 @@ async function main() {
                 await waitForDocumentReady(
                     'document-ready-after-session-recreate-target'
                 );
+                try {
+                    const token = await getApiToken();
+                    await evaluate(
+                        toExpression(`
+                            () => {
+                                localStorage.setItem(
+                                    'tabminal_auth_token:main',
+                                    ${JSON.stringify(token)}
+                                );
+                                return true;
+                            }
+                        `)
+                    );
+                    log('forced-auth-token-after-session-recreate');
+                    await page.send('Page.reload', { ignoreCache: true });
+                    await waitForDocumentReady(
+                        'document-ready-after-forced-auth-recreate'
+                    );
+                } catch {
+                    // Fall back to the create-session probes below.
+                }
                 await createSessionViaPageApi(
                     'retry-session-create-via-api-post-recreate'
                 );
@@ -1426,6 +1523,22 @@ async function main() {
         }
     }
 
+    const baselineLiveUi = await evaluate(
+        toExpression(`
+            () => ({
+                toolCallCount: document.querySelectorAll(
+                    '.agent-tool-call'
+                ).length,
+                terminalOutputCount: document.querySelectorAll(
+                    '.agent-tool-call-terminal-output'
+                ).length,
+                managedSessionCount: document.querySelectorAll(
+                    '.tab-item.agent-managed-session'
+                ).length
+            })
+        `)
+    );
+
     await evaluate(
         toExpression(`
             () => {
@@ -1443,9 +1556,13 @@ async function main() {
     log('submitted-agent-prompt');
 
     let postPromptState = '';
+    const requireLivePromptStart = expectTerminalLive
+        || expectManagedTerminalUi;
     try {
         postPromptState = await waitFor(
-            'active-or-setup-or-final',
+            requireLivePromptStart
+                ? 'active-or-setup-or-permission'
+                : 'active-or-setup-or-final',
             async () => {
                 const hint = await readComposerHint();
                 const activeState = /starting|running|responding/i
@@ -1463,7 +1580,10 @@ async function main() {
                 if (hasSetupConfig() && await hasSetupAction()) {
                     return 'setup';
                 }
-                if (await hasPermissionRequest() || await hasFinalMessage()) {
+                if (await hasPermissionRequest()) {
+                    return requireLivePromptStart ? 'permission' : 'final';
+                }
+                if (!requireLivePromptStart && await hasFinalMessage()) {
                     return 'final';
                 }
                 return '';
@@ -1491,43 +1611,55 @@ async function main() {
     );
     log('fetch-log-after-prompt', JSON.stringify(fetchLogAfterPrompt));
 
-    let promptOutcome = await waitForPromptOutcome();
-    if (promptOutcome === 'setup') {
-        await handleRuntimeSetup();
-        promptOutcome = await waitForPromptOutcome('permission-final-after-setup');
-    }
-    if (promptOutcome === 'backend-ready') {
-        if (skipRestoreTail) {
-            log('backend-ready-skip-restore-tail');
-        } else {
-            log('backend-ready-fallback');
-            await page.send('Page.reload', { ignoreCache: true });
-            await waitForDocumentReady('document-ready-after-backend-ready');
-            await ensureAuthedSession({
-                authLabel: 'auth-after-backend-ready',
-                sessionLabel: 'session-after-backend-ready'
-            });
-            await waitFor('agent-panel-after-backend-ready', async () => {
-                return await evaluate(
-                    toExpression(`
-                        () => {
-                            const tabs = Array.from(document.querySelectorAll(
-                                '.agent-editor-tab'
-                            ));
-                            const active = tabs.find((tab) =>
-                                tab.classList.contains('active')
-                            );
-                            const panel = document.querySelector('.agent-panel');
-                            return Boolean(active)
-                                && (active.textContent || '').includes(
-                                    ${JSON.stringify(targetAgentDisplayLabel)}
-                                )
-                                && Boolean(panel)
-                                && getComputedStyle(panel).display !== 'none';
-                        }
-                    `)
-                );
-            }, 20000, 250);
+    let promptOutcome = '';
+    if (expectTerminalLive) {
+        promptOutcome = postPromptState === 'permission'
+            ? 'permission'
+            : '';
+        if (postPromptState === 'setup') {
+            await handleRuntimeSetup();
+        }
+    } else {
+        promptOutcome = await waitForPromptOutcome();
+        if (promptOutcome === 'setup') {
+            await handleRuntimeSetup();
+            promptOutcome = await waitForPromptOutcome(
+                'permission-final-after-setup'
+            );
+        }
+        if (promptOutcome === 'backend-ready') {
+            if (skipRestoreTail) {
+                log('backend-ready-skip-restore-tail');
+            } else {
+                log('backend-ready-fallback');
+                await page.send('Page.reload', { ignoreCache: true });
+                await waitForDocumentReady('document-ready-after-backend-ready');
+                await ensureAuthedSession({
+                    authLabel: 'auth-after-backend-ready',
+                    sessionLabel: 'session-after-backend-ready'
+                });
+                await waitFor('agent-panel-after-backend-ready', async () => {
+                    return await evaluate(
+                        toExpression(`
+                            () => {
+                                const tabs = Array.from(document.querySelectorAll(
+                                    '.agent-editor-tab'
+                                ));
+                                const active = tabs.find((tab) =>
+                                    tab.classList.contains('active')
+                                );
+                                const panel = document.querySelector('.agent-panel');
+                                return Boolean(active)
+                                    && (active.textContent || '').includes(
+                                        ${JSON.stringify(targetAgentDisplayLabel)}
+                                    )
+                                    && Boolean(panel)
+                                    && getComputedStyle(panel).display !== 'none';
+                            }
+                        `)
+                    );
+                }, 20000, 250);
+            }
         }
     }
 
@@ -1614,13 +1746,152 @@ async function main() {
     }
 
     if (expectTerminalLive) {
+        if (expectManagedTerminalUi) {
+            let lastManagedTerminalLiveState = null;
+            await waitFor('managed-terminal-session-live', async () => {
+                let heartbeatSessions = [];
+                let managedHeartbeatCount = 0;
+                try {
+                    const heartbeat = await postJsonWithAuth(
+                        new URL('/api/heartbeat', tabminalUrl),
+                        tabminalAuthToken,
+                        { updates: { sessions: [] } }
+                    );
+                    heartbeatSessions = Array.isArray(heartbeat?.sessions)
+                        ? heartbeat.sessions
+                        : [];
+                    managedHeartbeatCount = heartbeatSessions.filter(
+                        (session) => session?.managed?.kind === 'agent-terminal'
+                    ).length;
+                } catch {
+                    heartbeatSessions = [];
+                    managedHeartbeatCount = 0;
+                }
+                const liveUiState = await evaluate(
+                    toExpression(`
+                        async () => {
+                            const heartbeatSessions = ${JSON.stringify(
+                                heartbeatSessions
+                            )};
+                            if (
+                                window.__tabminalSmoke
+                                && typeof window.__tabminalSmoke
+                                    .applyMainServerSessions
+                                    === 'function'
+                            ) {
+                                try {
+                                    const result = await window.__tabminalSmoke
+                                        .applyMainServerSessions(
+                                            heartbeatSessions
+                                        );
+                                    if (result && typeof result === 'object') {
+                                        const managedTabs = Array.from(
+                                            document.querySelectorAll(
+                                                '.tab-item.agent-managed-session'
+                                            )
+                                        );
+                                        return {
+                                            hasManagedSessionState:
+                                                Array.isArray(
+                                                    result.managedSessionKeys
+                                                ) && result.managedSessionKeys
+                                                    .length > 0,
+                                            hasMatchingManagedSession:
+                                                managedTabs.length > 0,
+                                            hasManagedBadge: managedTabs.some(
+                                                (node) => /MANAGED:/i.test(
+                                                    node.textContent || ''
+                                                )
+                                            ),
+                                            managedSessionCount: managedTabs
+                                                .length,
+                                            hasOpenButton: Boolean(
+                                                document.querySelector(
+                                                    '.agent-tool-call-terminal-open'
+                                                )
+                                            )
+                                        };
+                                    }
+                        } catch {
+                            // Ignore in-page sync failures during polling.
+                        }
+                    }
+                            const managedSessionKeys = (
+                                window.__tabminalSmoke
+                                && typeof window.__tabminalSmoke
+                                    .getManagedSessionKeys === 'function'
+                            )
+                                ? window.__tabminalSmoke
+                                    .getManagedSessionKeys()
+                                : [];
+                            const managedTabs = Array.from(
+                                document.querySelectorAll(
+                                    '.tab-item.agent-managed-session'
+                                )
+                            );
+                            return {
+                                hasManagedSessionState:
+                                    managedSessionKeys.length > 0,
+                                hasMatchingManagedSession:
+                                    managedTabs.length > 0,
+                                hasManagedBadge: managedTabs.some(
+                                    (node) => /MANAGED:/i.test(
+                                        node.textContent || ''
+                                    )
+                                ),
+                                managedSessionCount: managedTabs.length,
+                                hasOpenButton: Boolean(
+                                    document.querySelector(
+                                        '.agent-tool-call-terminal-open'
+                                    )
+                                )
+                            };
+                        }
+                    `)
+                );
+                lastManagedTerminalLiveState = {
+                    managedHeartbeatCount,
+                    liveUiState
+                };
+                return managedHeartbeatCount > 0
+                    && liveUiState?.hasManagedSessionState
+                    && liveUiState?.hasMatchingManagedSession
+                    && liveUiState?.hasManagedBadge
+                    && Number(liveUiState?.managedSessionCount || 0) > 0;
+            }, 20000, 250).catch((error) => {
+                throw new Error(
+                    `${error.message}: ${JSON.stringify(
+                        lastManagedTerminalLiveState
+                    )}`
+                );
+            });
+        }
+
         await waitFor('live-tool-call', async () => {
             return await evaluate(
                 toExpression(`
-                    () => document.querySelectorAll('.agent-tool-call').length > 0
+                    () => document.querySelectorAll(
+                        '.agent-tool-call'
+                    ).length > ${Number(
+                        baselineLiveUi?.toolCallCount || 0
+                    )}
                 `)
             );
         }, 20000, 250);
+
+        if (expectManagedTerminalUi) {
+            await waitFor('managed-terminal-jump-in-live', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => Boolean(
+                            document.querySelector(
+                                '.agent-tool-call-terminal-open'
+                            )
+                        )
+                    `)
+                );
+            }, 20000, 250);
+        }
 
         await waitFor('live-tool-sections-expanded', async () => {
             return await evaluate(
@@ -1644,7 +1915,9 @@ async function main() {
                 toExpression(`
                     () => Array.from(document.querySelectorAll(
                         '.agent-tool-call-terminal-output'
-                    )).some((node) => {
+                    )).slice(${Number(
+                        baselineLiveUi?.terminalOutputCount || 0
+                    )}).some((node) => {
                         const text = node.dataset.outputPreview
                             || node.getAttribute('aria-label')
                             || '';
@@ -1659,7 +1932,9 @@ async function main() {
                 toExpression(`
                     () => Array.from(document.querySelectorAll(
                         '.agent-tool-call-terminal-output'
-                    )).some((node) => {
+                    )).slice(${Number(
+                        baselineLiveUi?.terminalOutputCount || 0
+                    )}).some((node) => {
                         const text = node.dataset.outputPreview
                             || node.getAttribute('aria-label')
                             || '';
@@ -1668,6 +1943,52 @@ async function main() {
                 `)
             );
         }, 20000, 150);
+
+        if (!promptOutcome) {
+            promptOutcome = await waitForPromptOutcome(
+                'permission-final-after-live'
+            );
+        }
+        if (promptOutcome === 'setup') {
+            await handleRuntimeSetup();
+            promptOutcome = await waitForPromptOutcome(
+                'permission-final-after-live-setup'
+            );
+        }
+        if (promptOutcome === 'backend-ready') {
+            if (skipRestoreTail) {
+                log('backend-ready-skip-restore-tail');
+            } else {
+                log('backend-ready-fallback');
+                await page.send('Page.reload', { ignoreCache: true });
+                await waitForDocumentReady('document-ready-after-backend-ready');
+                await ensureAuthedSession({
+                    authLabel: 'auth-after-backend-ready',
+                    sessionLabel: 'session-after-backend-ready'
+                });
+                await waitFor('agent-panel-after-backend-ready', async () => {
+                    return await evaluate(
+                        toExpression(`
+                            () => {
+                                const tabs = Array.from(document.querySelectorAll(
+                                    '.agent-editor-tab'
+                                ));
+                                const active = tabs.find((tab) =>
+                                    tab.classList.contains('active')
+                                );
+                                const panel = document.querySelector('.agent-panel');
+                                return Boolean(active)
+                                    && (active.textContent || '').includes(
+                                        ${JSON.stringify(targetAgentDisplayLabel)}
+                                    )
+                                    && Boolean(panel)
+                                    && getComputedStyle(panel).display !== 'none';
+                            }
+                        `)
+                    );
+                }, 20000, 250);
+            }
+        }
     }
 
     if (promptOutcome !== 'backend-ready') {
@@ -1746,12 +2067,12 @@ async function main() {
                         const hud = document.querySelector(
                             '.agent-usage-hud'
                         );
-                        const rows = hud?.querySelectorAll(
-                            '.agent-usage-row'
+                        const compactMetrics = hud?.querySelectorAll(
+                            '.agent-usage-pill'
                         )?.length || 0;
                         return Boolean(hud)
                             && getComputedStyle(hud).display !== 'none'
-                            && rows >= 1;
+                            && compactMetrics >= 1;
                     }
                 `)
             );
@@ -1794,32 +2115,6 @@ async function main() {
                                 && /alpha/.test(text)
                                 && /beta/.test(text);
                         });
-                    }
-                `)
-            );
-        }, 20000, 250);
-    }
-
-    if (expectManagedTerminalUi) {
-        await waitFor('managed-terminal-session', async () => {
-            return await evaluate(
-                toExpression(`
-                    () => {
-                        const tab = document.querySelector(
-                            '.tab-item.agent-managed-session'
-                        );
-                        const managedMeta = tab?.querySelector(
-                            '.meta-time.meta-managed'
-                        );
-                        const openButton = document.querySelector(
-                            '.agent-tool-call-terminal-open'
-                        );
-                        return Boolean(tab)
-                            && Boolean(managedMeta)
-                            && /managed:/i.test(
-                                managedMeta.textContent || ''
-                            )
-                            && Boolean(openButton);
                     }
                 `)
             );
@@ -1939,6 +2234,33 @@ async function main() {
         return readyHint || !hint.visible;
     });
 
+    if (expectManagedTerminalUi) {
+        await waitFor('managed-terminal-released', async () => {
+            return await evaluate(
+                toExpression(`
+                    async () => {
+                        if (
+                            window.__tabminalSmoke
+                            && typeof window.__tabminalSmoke
+                                .syncMainServerSessions
+                                === 'function'
+                        ) {
+                            try {
+                                await window.__tabminalSmoke
+                                    .syncMainServerSessions();
+                            } catch {
+                                // Ignore sync failures during smoke polling.
+                            }
+                        }
+                        return !document.querySelector(
+                            '.agent-tool-call-terminal-open'
+                        );
+                    }
+                `)
+            );
+        }, 20000, 250);
+    }
+
     if (expectCommandsAfterFinal) {
         await waitFor('command-chips-after-final', async () => {
             return await evaluate(
@@ -2019,37 +2341,6 @@ async function main() {
             250
         );
     });
-
-    if (expectManagedTerminalUi) {
-        await evaluate(
-            toExpression(`
-                () => {
-                    const button = document.querySelector(
-                        '.agent-tool-call-terminal-open'
-                    );
-                    button?.click();
-                    return Boolean(button);
-                }
-            `)
-        );
-        log('clicked-open-in-terminal');
-
-        await waitFor('managed-terminal-activated', async () => {
-            return await evaluate(
-                toExpression(`
-                    () => {
-                        const active = document.querySelector(
-                            '.tab-item.active.agent-managed-session'
-                        );
-                        const meta = active?.querySelector('.meta-time');
-                        return Boolean(active)
-                            && Boolean(meta)
-                            && /managed:/i.test(meta.textContent || '');
-                    }
-                `)
-            );
-        }, 15000, 250);
-    }
 
     if (!skipRestoreTail) {
         await page.send('Page.reload', { ignoreCache: true });

@@ -153,8 +153,47 @@ class FakeRuntime extends EventEmitter {
                 text: 'restored'
             }],
             toolCalls: [],
-            permissions: []
+            permissions: [],
+            plan: [],
+            usage: null,
+            terminals: []
         };
+        if (typeof meta.title === 'string') {
+            tab.title = meta.title;
+        }
+        if (typeof meta.currentModeId === 'string' && meta.currentModeId) {
+            tab.currentModeId = meta.currentModeId;
+        }
+        if (Array.isArray(meta.availableModes) && meta.availableModes.length > 0) {
+            tab.availableModes = structuredClone(meta.availableModes);
+        }
+        if (
+            Array.isArray(meta.availableCommands)
+            && meta.availableCommands.length > 0
+        ) {
+            tab.availableCommands = structuredClone(meta.availableCommands);
+        }
+        if (Array.isArray(meta.configOptions) && meta.configOptions.length > 0) {
+            tab.configOptions = structuredClone(meta.configOptions);
+        }
+        if (Array.isArray(meta.messages) && meta.messages.length > 0) {
+            tab.messages = structuredClone(meta.messages);
+        }
+        if (Array.isArray(meta.toolCalls) && meta.toolCalls.length > 0) {
+            tab.toolCalls = structuredClone(meta.toolCalls);
+        }
+        if (Array.isArray(meta.permissions) && meta.permissions.length > 0) {
+            tab.permissions = structuredClone(meta.permissions);
+        }
+        if (Array.isArray(meta.plan) && meta.plan.length > 0) {
+            tab.plan = structuredClone(meta.plan);
+        }
+        if (meta.usage && typeof meta.usage === 'object') {
+            tab.usage = structuredClone(meta.usage);
+        }
+        if (Array.isArray(meta.terminals) && meta.terminals.length > 0) {
+            tab.terminals = structuredClone(meta.terminals);
+        }
         this.tabs.set(tab.id, tab);
         this.restoredTabs.push(tab.id);
         return { ...tab };
@@ -364,14 +403,22 @@ describe('AcpManager', () => {
             terminalSessionId: 'term-1'
         });
 
-        assert.deepEqual(getPersistedTabs(), [{
-            id: tab.id,
-            agentId: 'codex',
-            cwd: '/tmp/project',
-            acpSessionId: `acp-${tab.id}`,
-            terminalSessionId: 'term-1',
-            createdAt: '2026-03-23T00:00:00.000Z'
-        }]);
+        assert.equal(getPersistedTabs().length, 1);
+        assert.equal(getPersistedTabs()[0].id, tab.id);
+        assert.equal(getPersistedTabs()[0].agentId, 'codex');
+        assert.equal(getPersistedTabs()[0].cwd, '/tmp/project');
+        assert.equal(
+            getPersistedTabs()[0].acpSessionId,
+            `acp-${tab.id}`
+        );
+        assert.equal(getPersistedTabs()[0].terminalSessionId, 'term-1');
+        assert.equal(
+            getPersistedTabs()[0].createdAt,
+            '2026-03-23T00:00:00.000Z'
+        );
+        assert.deepEqual(getPersistedTabs()[0].messages, []);
+        assert.deepEqual(getPersistedTabs()[0].toolCalls, []);
+        assert.deepEqual(getPersistedTabs()[0].terminals, []);
 
         await manager.closeTab(tab.id);
         assert.deepEqual(getPersistedTabs(), []);
@@ -393,7 +440,12 @@ describe('AcpManager', () => {
         assert.equal(manager.tabs.has('restored-tab'), true);
         const runtimeEntry = manager.runtimes.values().next().value;
         assert.deepEqual(runtimeEntry.runtime.restoredTabs, ['restored-tab']);
-        assert.deepEqual(getPersistedTabs(), persisted);
+        assert.equal(getPersistedTabs().length, 1);
+        assert.equal(getPersistedTabs()[0].id, 'restored-tab');
+        assert.equal(getPersistedTabs()[0].agentId, 'codex');
+        assert.equal(getPersistedTabs()[0].cwd, '/tmp/project');
+        assert.equal(getPersistedTabs()[0].acpSessionId, 'acp-restored');
+        assert.equal(getPersistedTabs()[0].terminalSessionId, 'term-1');
     });
 
     it('drops persisted tabs whose terminal session no longer exists', async () => {
@@ -423,14 +475,173 @@ describe('AcpManager', () => {
 
         await manager.dispose();
 
-        assert.deepEqual(getPersistedTabs(), [{
-            id: tab.id,
+        assert.equal(getPersistedTabs().length, 1);
+        assert.equal(getPersistedTabs()[0].id, tab.id);
+        assert.equal(getPersistedTabs()[0].agentId, 'codex');
+        assert.equal(getPersistedTabs()[0].cwd, '/tmp/project');
+        assert.equal(
+            getPersistedTabs()[0].acpSessionId,
+            `acp-${tab.id}`
+        );
+        assert.equal(getPersistedTabs()[0].terminalSessionId, 'term-1');
+        assert.equal(
+            getPersistedTabs()[0].createdAt,
+            '2026-03-23T00:00:00.000Z'
+        );
+    });
+
+    it('persists ACP transcript snapshots for restore', async () => {
+        const { manager, getPersistedTabs } = createManager();
+        const tab = await manager.createTab({
             agentId: 'codex',
             cwd: '/tmp/project',
-            acpSessionId: `acp-${tab.id}`,
-            terminalSessionId: 'term-1',
-            createdAt: '2026-03-23T00:00:00.000Z'
+            terminalSessionId: 'term-1'
+        });
+        const runtimeEntry = manager.runtimes.values().next().value;
+        const runtimeTab = runtimeEntry.runtime.tabs.get(tab.id);
+        runtimeTab.title = 'Workspace check';
+        runtimeTab.currentModeId = 'review';
+        runtimeTab.messages = [{
+            id: 'message-1',
+            streamKey: 'message-1',
+            role: 'assistant',
+            kind: 'message',
+            text: 'hello',
+            createdAt: '2026-03-23T00:01:00.000Z',
+            order: 1
+        }];
+        runtimeTab.toolCalls = [{
+            toolCallId: 'tool-1',
+            title: 'Read file',
+            createdAt: '2026-03-23T00:01:01.000Z',
+            order: 2,
+            content: [{
+                type: 'terminal',
+                terminalId: 'terminal-1'
+            }]
+        }];
+        runtimeTab.permissions = [{
+            id: 'permission-1',
+            status: 'selected',
+            createdAt: '2026-03-23T00:01:02.000Z',
+            order: 3
+        }];
+        runtimeTab.plan = [{
+            content: 'Inspect files',
+            priority: 'high',
+            status: 'completed'
+        }];
+        runtimeTab.usage = {
+            used: 12,
+            size: 100,
+            updatedAt: '2026-03-23T00:01:03.000Z'
+        };
+        runtimeTab.terminals = [{
+            terminalId: 'terminal-1',
+            terminalSessionId: '',
+            command: 'pwd',
+            cwd: '/tmp/project',
+            output: '/tmp/project',
+            createdAt: '2026-03-23T00:01:01.000Z',
+            updatedAt: '2026-03-23T00:01:04.000Z',
+            released: true,
+            running: false,
+            exitStatus: {
+                exitCode: 0,
+                signal: null
+            }
+        }];
+
+        await manager.persistTabs();
+
+        assert.equal(getPersistedTabs()[0].title, 'Workspace check');
+        assert.equal(getPersistedTabs()[0].currentModeId, 'review');
+        assert.equal(getPersistedTabs()[0].messages.length, 1);
+        assert.equal(getPersistedTabs()[0].toolCalls.length, 1);
+        assert.equal(getPersistedTabs()[0].permissions.length, 1);
+        assert.equal(getPersistedTabs()[0].plan.length, 1);
+        assert.equal(getPersistedTabs()[0].terminals.length, 1);
+        assert.equal(getPersistedTabs()[0].terminals[0].output, '/tmp/project');
+    });
+
+    it('restores persisted terminal history alongside tool history', async () => {
+        const { manager } = createManager();
+        await manager.saveTabs([{
+            id: 'restored-history',
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            acpSessionId: 'acp-restored-history',
+            terminalSessionId: '',
+            createdAt: '2026-03-23T00:00:00.000Z',
+            title: 'History',
+            currentModeId: 'review',
+            availableModes: [{ id: 'review', name: 'Review' }],
+            availableCommands: [{ name: 'review', description: 'Review code' }],
+            configOptions: [],
+            messages: [{
+                id: 'message-1',
+                streamKey: 'message-1',
+                role: 'assistant',
+                kind: 'message',
+                text: 'restored',
+                createdAt: '2026-03-23T00:01:00.000Z',
+                order: 1
+            }],
+            toolCalls: [{
+                toolCallId: 'tool-1',
+                title: 'Read file',
+                createdAt: '2026-03-23T00:01:01.000Z',
+                order: 2,
+                content: [{
+                    type: 'terminal',
+                    terminalId: 'terminal-1'
+                }]
+            }],
+            permissions: [],
+            plan: [{
+                content: 'Inspect files',
+                priority: 'medium',
+                status: 'completed'
+            }],
+            usage: {
+                used: 5,
+                size: 20,
+                updatedAt: '2026-03-23T00:01:02.000Z'
+            },
+            terminals: [{
+                terminalId: 'terminal-1',
+                terminalSessionId: '',
+                command: 'pwd',
+                cwd: '/tmp/project',
+                output: '/tmp/project',
+                createdAt: '2026-03-23T00:01:01.000Z',
+                updatedAt: '2026-03-23T00:01:04.000Z',
+                released: true,
+                running: false,
+                exitStatus: {
+                    exitCode: 0,
+                    signal: null
+                }
+            }]
         }]);
+
+        await manager.restoreTabs(new Set());
+
+        const restored = manager.tabs.get('restored-history')?.serialize();
+        assert.ok(restored);
+        assert.equal(restored.title, 'History');
+        assert.equal(restored.messages.length, 1);
+        assert.equal(restored.toolCalls.length, 1);
+        assert.equal(restored.terminals.length, 1);
+        assert.equal(restored.terminals[0].released, true);
+        assert.equal(
+            restored.terminals[0].output,
+            '/tmp/project'
+        );
+        assert.equal(
+            restored.toolCalls[0].content[0].terminalId,
+            'terminal-1'
+        );
     });
 
     it('reports restoring state through listState', async () => {
@@ -826,6 +1037,43 @@ describe('AcpManager', () => {
         );
     });
 
+    it('surfaces spawn errors during runtime startup without crashing', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            availabilityProbes: {
+                commandExists: () => true,
+                hasGhCopilotWrapper: () => true,
+                hasGhCopilotCliInstalled: () => true,
+                probeCodexAuth: () => ({
+                    available: true,
+                    reason: ''
+                }),
+                probeGhAuth: () => ({
+                    available: true,
+                    reason: ''
+                })
+            }
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: '__definitely_not_a_real_command__',
+            args: [],
+            commandLabel: '__definitely_not_a_real_command__'
+        }];
+
+        await assert.rejects(
+            manager.createTab({
+                agentId: 'codex',
+                cwd: '/tmp/project'
+            }),
+            /not installed|not found|failed/i
+        );
+        assert.equal(manager.runtimes.size, 0);
+    });
+
     it('streams real ACP test-agent permission turns end-to-end', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
@@ -889,7 +1137,7 @@ describe('AcpManager', () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 return current && !current.busy ? current : null;
-            });
+            }, 12000);
             assert.equal(settledTab.status, 'ready');
             assert.ok(
                 settledTab.messages.some((message) => (
@@ -948,7 +1196,7 @@ describe('AcpManager', () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 return current && !current.busy ? current : null;
-            });
+            }, 12000);
             assert.equal(settledTab.status, 'ready');
         } finally {
             await manager.dispose();
@@ -985,7 +1233,7 @@ describe('AcpManager', () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 return current && !current.busy ? current : null;
-            });
+            }, 12000);
 
             const beforeMessage = settledTab.messages.find((message) => (
                 message.text === 'Before tool.'
@@ -1039,7 +1287,7 @@ describe('AcpManager', () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 return current && !current.busy ? current : null;
-            });
+            }, 12000);
 
             assert.equal(settledTab.title, 'diff-smoke');
             assert.equal(settledTab.plan.length, 3);
@@ -1058,6 +1306,8 @@ describe('AcpManager', () => {
                 'short-term window'
             );
             assert.equal(settledTab.terminals.length, 1);
+            assert.equal(settledTab.terminals[0].released, true);
+            assert.equal(settledTab.terminals[0].terminalSessionId, '');
             assert.match(
                 settledTab.terminals[0].output || '',
                 /alpha[\s\S]*beta/
@@ -1066,6 +1316,59 @@ describe('AcpManager', () => {
                 event.type === 'session_update'
                 && event.update?.sessionUpdate === 'session_info_update'
                 && event.update?.title === 'diff-smoke'
+            )));
+        } finally {
+            await manager.dispose();
+        }
+    });
+
+    it('settles stale running tool calls when a prompt completes', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, 'stale-tool');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            }, 12000);
+
+            const staleTool = settledTab.toolCalls.find((tool) => (
+                tool.toolCallId === 'stale-tool'
+            ));
+            assert.ok(staleTool);
+            assert.equal(staleTool.status, 'completed');
+            assert.equal(settledTab.terminals.length, 1);
+            assert.equal(settledTab.terminals[0].released, true);
+            assert.equal(settledTab.terminals[0].running, false);
+            assert.ok(events.some((event) => (
+                event.type === 'session_update'
+                && event.update?.sessionUpdate === 'tool_call_update'
+                && event.update?.toolCallId === 'stale-tool'
+                && event.update?.status === 'completed'
             )));
         } finally {
             await manager.dispose();
@@ -1101,6 +1404,50 @@ describe('AcpManager', () => {
                 tempPath: '/tmp/notes.txt'
             }]
         });
+    });
+
+    it('marks a tab errored when a real ACP prompt fails', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+
+            await manager.sendPrompt(tab.id, 'fail-prompt');
+            const erroredTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && current.status === 'error' && !current.busy
+                    ? current
+                    : null;
+            });
+
+            assert.equal(erroredTab.status, 'error');
+            assert.equal(erroredTab.busy, false);
+            assert.ok(
+                (erroredTab.errorMessage || '').length > 0,
+                'expected a surfaced prompt failure message'
+            );
+        } finally {
+            await manager.dispose();
+        }
     });
 
     it('merges sentence chunks into separate paragraphs', () => {

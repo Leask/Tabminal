@@ -216,6 +216,39 @@ function normalizeAgentTabs(tabs) {
         const createdAt = typeof entry.createdAt === 'string'
             ? entry.createdAt.trim()
             : '';
+        const title = typeof entry.title === 'string'
+            ? entry.title
+            : '';
+        const currentModeId = typeof entry.currentModeId === 'string'
+            ? entry.currentModeId
+            : '';
+        const availableModes = Array.isArray(entry.availableModes)
+            ? entry.availableModes
+            : [];
+        const availableCommands = Array.isArray(entry.availableCommands)
+            ? entry.availableCommands
+            : [];
+        const configOptions = Array.isArray(entry.configOptions)
+            ? entry.configOptions
+            : [];
+        const messages = Array.isArray(entry.messages)
+            ? entry.messages
+            : [];
+        const toolCalls = Array.isArray(entry.toolCalls)
+            ? entry.toolCalls
+            : [];
+        const permissions = Array.isArray(entry.permissions)
+            ? entry.permissions
+            : [];
+        const plan = Array.isArray(entry.plan)
+            ? entry.plan
+            : [];
+        const usage = entry.usage && typeof entry.usage === 'object'
+            ? entry.usage
+            : null;
+        const terminals = Array.isArray(entry.terminals)
+            ? entry.terminals
+            : [];
         if (!id || !agentId || !cwd || !acpSessionId) continue;
         normalized.push({
             id,
@@ -223,7 +256,18 @@ function normalizeAgentTabs(tabs) {
             cwd,
             acpSessionId,
             terminalSessionId,
-            createdAt
+            createdAt,
+            title,
+            currentModeId,
+            availableModes,
+            availableCommands,
+            configOptions,
+            messages,
+            toolCalls,
+            permissions,
+            plan,
+            usage,
+            terminals
         });
     }
     return normalized;

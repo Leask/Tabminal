@@ -15,6 +15,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
 const DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS = 30 * 1000;
 const DEFAULT_PROBE_CACHE_TTL_MS = 15 * 1000;
+const DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS = 250;
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
     'txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'toml',
     'ini', 'env', 'xml', 'html', 'htm', 'css', 'scss', 'less', 'csv',
@@ -502,6 +503,14 @@ function getDefinitionAvailability(
 
 function formatAgentStartupError(definition, error) {
     const rawMessage = error?.message || 'Failed to start agent';
+    if (/ENOENT|not found/i.test(rawMessage)) {
+        const label = definition?.label || 'Agent';
+        const command = definition?.commandLabel || definition?.command || '';
+        return command
+            ? `${label} is not installed or not found on this host. `
+                + `Install \`${command}\` and retry.`
+            : `${label} is not installed or not found on this host.`;
+    }
     if (
         definition?.id === 'claude'
         && /not servable in region|not available on your vertex deployment/i
@@ -825,6 +834,233 @@ function serializeUsageState(usage) {
     };
 }
 
+function normalizeToolStatusClass(status = '') {
+    const value = String(status || 'pending').toLowerCase();
+    if (value.includes('ready')) {
+        return 'ready';
+    }
+    if (value.includes('restore')) {
+        return 'running';
+    }
+    if (value.includes('disconnect')) {
+        return 'error';
+    }
+    if (
+        value.includes('complete')
+        || value.includes('success')
+        || value.includes('select')
+        || value.includes('approve')
+    ) {
+        return 'completed';
+    }
+    if (value.includes('cancel')) {
+        return 'cancelled';
+    }
+    if (value.includes('error') || value.includes('fail')) {
+        return 'error';
+    }
+    if (value.includes('run') || value.includes('progress')) {
+        return 'running';
+    }
+    return 'pending';
+}
+
+function getToolCallTerminalIds(toolCall) {
+    if (!Array.isArray(toolCall?.content)) {
+        return [];
+    }
+    const ids = new Set();
+    for (const item of toolCall.content) {
+        const terminalId = String(item?.terminalId || '').trim();
+        if (item?.type === 'terminal' && terminalId) {
+            ids.add(terminalId);
+        }
+    }
+    return Array.from(ids);
+}
+
+function cloneSerializable(value, fallback) {
+    try {
+        const cloned = structuredClone(value);
+        return cloned === undefined ? fallback : cloned;
+    } catch {
+        return fallback;
+    }
+}
+
+function normalizePersistedTimelineOrder(value, fallback = 0) {
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function normalizePersistedMessage(message = {}, fallbackOrder = 0) {
+    const nextMessage = cloneSerializable(message, {}) || {};
+    nextMessage.id = typeof nextMessage.id === 'string'
+        ? nextMessage.id
+        : crypto.randomUUID();
+    nextMessage.streamKey = typeof nextMessage.streamKey === 'string'
+        ? nextMessage.streamKey
+        : nextMessage.id;
+    nextMessage.role = typeof nextMessage.role === 'string'
+        ? nextMessage.role
+        : 'assistant';
+    nextMessage.kind = typeof nextMessage.kind === 'string'
+        ? nextMessage.kind
+        : 'message';
+    nextMessage.text = typeof nextMessage.text === 'string'
+        ? nextMessage.text
+        : '';
+    nextMessage.createdAt = typeof nextMessage.createdAt === 'string'
+        ? nextMessage.createdAt
+        : '';
+    nextMessage.order = normalizePersistedTimelineOrder(
+        nextMessage.order,
+        fallbackOrder
+    );
+    nextMessage.attachments = Array.isArray(nextMessage.attachments)
+        ? cloneSerializable(nextMessage.attachments, [])
+        : [];
+    return nextMessage;
+}
+
+function normalizePersistedTimelineEntry(entry = {}, fallbackOrder = 0) {
+    const nextEntry = cloneSerializable(entry, {}) || {};
+    nextEntry.createdAt = typeof nextEntry.createdAt === 'string'
+        ? nextEntry.createdAt
+        : '';
+    nextEntry.order = normalizePersistedTimelineOrder(
+        nextEntry.order,
+        fallbackOrder
+    );
+    return nextEntry;
+}
+
+function normalizePersistedTerminalSummary(summary = {}) {
+    const nextSummary = cloneSerializable(summary, {}) || {};
+    return {
+        terminalId: typeof nextSummary.terminalId === 'string'
+            ? nextSummary.terminalId
+            : '',
+        terminalSessionId: typeof nextSummary.terminalSessionId === 'string'
+            ? nextSummary.terminalSessionId
+            : '',
+        command: typeof nextSummary.command === 'string'
+            ? nextSummary.command
+            : '',
+        cwd: typeof nextSummary.cwd === 'string' ? nextSummary.cwd : '',
+        output: typeof nextSummary.output === 'string'
+            ? nextSummary.output
+            : '',
+        createdAt: typeof nextSummary.createdAt === 'string'
+            ? nextSummary.createdAt
+            : '',
+        updatedAt: typeof nextSummary.updatedAt === 'string'
+            ? nextSummary.updatedAt
+            : '',
+        released: !!nextSummary.released,
+        running: !!nextSummary.running,
+        exitStatus: nextSummary.exitStatus
+            && typeof nextSummary.exitStatus === 'object'
+            ? {
+                exitCode: Number.isFinite(nextSummary.exitStatus.exitCode)
+                    ? nextSummary.exitStatus.exitCode
+                    : null,
+                signal: typeof nextSummary.exitStatus.signal === 'string'
+                    ? nextSummary.exitStatus.signal
+                    : null
+            }
+            : null
+    };
+}
+
+function restorePersistedTabSnapshot(tab, snapshot = {}) {
+    const messages = Array.isArray(snapshot.messages)
+        ? snapshot.messages.map((message, index) =>
+            normalizePersistedMessage(message, index + 1)
+        )
+        : [];
+    const toolCalls = Array.isArray(snapshot.toolCalls)
+        ? snapshot.toolCalls.map((entry, index) =>
+            normalizePersistedTimelineEntry(
+                entry,
+                messages.length + index + 1
+            )
+        )
+        : [];
+    const permissions = Array.isArray(snapshot.permissions)
+        ? snapshot.permissions.map((entry, index) =>
+            normalizePersistedTimelineEntry(
+                entry,
+                messages.length + toolCalls.length + index + 1
+            )
+        )
+        : [];
+    const terminals = Array.isArray(snapshot.terminals)
+        ? snapshot.terminals.map((entry) =>
+            normalizePersistedTerminalSummary(entry)
+        ).filter((entry) => entry.terminalId)
+        : [];
+
+    tab.messages = messages;
+    tab.toolCalls = new Map(
+        toolCalls
+            .filter((entry) => typeof entry.toolCallId === 'string')
+            .map((entry) => [entry.toolCallId, entry])
+    );
+    tab.permissions = new Map(
+        permissions
+            .filter((entry) => typeof entry.id === 'string')
+            .map((entry) => [
+                entry.id,
+                {
+                    ...entry,
+                    resolve: null
+                }
+            ])
+    );
+    tab.plan = normalizePlanEntries(snapshot.plan);
+    tab.usage = serializeUsageState(snapshot.usage)
+        ? mergeUsageState(null, snapshot.usage)
+        : null;
+    tab.terminals = new Map(
+        terminals.map((entry) => [entry.terminalId, entry])
+    );
+    tab.title = typeof snapshot.title === 'string'
+        ? snapshot.title
+        : tab.title;
+    tab.currentModeId = typeof snapshot.currentModeId === 'string'
+        ? snapshot.currentModeId
+        : tab.currentModeId;
+    tab.availableModes = Array.isArray(snapshot.availableModes)
+        ? cloneSerializable(snapshot.availableModes, [])
+        : tab.availableModes;
+    tab.availableCommands = Array.isArray(snapshot.availableCommands)
+        ? cloneSerializable(snapshot.availableCommands, [])
+        : tab.availableCommands;
+    tab.configOptions = Array.isArray(snapshot.configOptions)
+        ? cloneSerializable(snapshot.configOptions, [])
+        : tab.configOptions;
+
+    const maxMessageOrder = messages.reduce(
+        (maxOrder, entry) => Math.max(maxOrder, entry.order || 0),
+        0
+    );
+    const maxToolOrder = toolCalls.reduce(
+        (maxOrder, entry) => Math.max(maxOrder, entry.order || 0),
+        0
+    );
+    const maxPermissionOrder = permissions.reduce(
+        (maxOrder, entry) => Math.max(maxOrder, entry.order || 0),
+        0
+    );
+    tab.timelineCounter = Math.max(
+        tab.timelineCounter,
+        maxMessageOrder,
+        maxToolOrder,
+        maxPermissionOrder
+    );
+    tab.messageCounter = Math.max(tab.messageCounter, messages.length);
+}
+
 class LocalExecTerminal extends EventEmitter {
     constructor(request) {
         super();
@@ -1025,7 +1261,7 @@ class ManagedTerminalSession extends EventEmitter {
         return {};
     }
 
-    async release({ destroy = false } = {}) {
+    async release({ destroy = true } = {}) {
         this.released = true;
         this.unsubscribe?.();
         this.unsubscribe = null;
@@ -1033,6 +1269,7 @@ class ManagedTerminalSession extends EventEmitter {
             await this.terminalSession.manager?.removeSession?.(
                 this.terminalSession.id
             );
+            this.terminalSessionId = '';
         }
     }
 }
@@ -1164,9 +1401,15 @@ class AcpRuntime extends EventEmitter {
         currentModeId = '',
         availableModes = [],
         availableCommands = [],
-        configOptions = []
+        configOptions = [],
+        messages = [],
+        toolCalls = [],
+        permissions = [],
+        plan = [],
+        usage = null,
+        terminals = []
     }) {
-        return {
+        const tab = {
             id,
             runtimeId: this.runtimeId,
             runtimeKey: this.runtimeKey,
@@ -1198,6 +1441,20 @@ class AcpRuntime extends EventEmitter {
             messageCounter: 0,
             timelineCounter: 0
         };
+        restorePersistedTabSnapshot(tab, {
+            title,
+            currentModeId,
+            availableModes,
+            availableCommands,
+            configOptions,
+            messages,
+            toolCalls,
+            permissions,
+            plan,
+            usage,
+            terminals
+        });
+        return tab;
     }
 
     async start() {
@@ -1220,6 +1477,14 @@ class AcpRuntime extends EventEmitter {
         });
 
         this.process = child;
+        let startupSettled = false;
+        let rejectStartup = null;
+        const startupError = new Promise((_, reject) => {
+            rejectStartup = reject;
+        });
+        const spawned = new Promise((resolve) => {
+            child.once('spawn', resolve);
+        });
         child.stderr?.on('data', (chunk) => {
             const text = Buffer.isBuffer(chunk)
                 ? chunk.toString('utf8')
@@ -1230,7 +1495,42 @@ class AcpRuntime extends EventEmitter {
                 message: text.trim()
             });
         });
+        child.on('error', (error) => {
+            if (!startupSettled) {
+                startupSettled = true;
+                rejectStartup?.(error);
+                return;
+            }
+            const detail = {
+                runtimeId: this.runtimeId,
+                code: null,
+                signal: null,
+                error: error?.message || String(error)
+            };
+            for (const tab of this.tabs.values()) {
+                tab.status = 'disconnected';
+                tab.busy = false;
+                tab.errorMessage = formatAgentStartupError(
+                    this.definition,
+                    error
+                );
+            }
+            this.emit('runtime_exit', detail);
+        });
         child.on('exit', (code, signal) => {
+            if (!startupSettled) {
+                startupSettled = true;
+                rejectStartup?.(
+                    new Error(
+                        signal
+                            ? `Agent runtime exited (${signal}) before `
+                                + 'initialization completed.'
+                            : `Agent runtime exited (${code ?? 'unknown'}) `
+                                + 'before initialization completed.'
+                    )
+                );
+            }
+            startupSettled = true;
             const detail = {
                 runtimeId: this.runtimeId,
                 code: typeof code === 'number' ? code : null,
@@ -1245,6 +1545,11 @@ class AcpRuntime extends EventEmitter {
             }
             this.emit('runtime_exit', detail);
         });
+
+        await Promise.race([
+            spawned,
+            startupError
+        ]);
 
         const input = Writable.toWeb(child.stdin);
         const output = Readable.toWeb(child.stdout);
@@ -1265,20 +1570,24 @@ class AcpRuntime extends EventEmitter {
             stream
         );
 
-        const result = await this.connection.initialize({
-            protocolVersion: acp.PROTOCOL_VERSION,
-            clientInfo: {
-                name: 'Tabminal',
-                version: pkg.version
-            },
-            clientCapabilities: {
-                fs: {
-                    readTextFile: true,
-                    writeTextFile: true
+        const result = await Promise.race([
+            this.connection.initialize({
+                protocolVersion: acp.PROTOCOL_VERSION,
+                clientInfo: {
+                    name: 'Tabminal',
+                    version: pkg.version
                 },
-                terminal: true
-            }
-        });
+                clientCapabilities: {
+                    fs: {
+                        readTextFile: true,
+                        writeTextFile: true
+                    },
+                    terminal: true
+                }
+            }),
+            startupError
+        ]);
+        startupSettled = true;
 
         this.agentInfo = result.agentInfo || null;
         this.agentCapabilities = result.agentCapabilities || null;
@@ -1372,7 +1681,17 @@ class AcpRuntime extends EventEmitter {
             terminalSessionId: meta.terminalSessionId,
             cwd: meta.cwd,
             createdAt: meta.createdAt,
-            title: meta.title || ''
+            title: meta.title || '',
+            currentModeId: meta.currentModeId || '',
+            availableModes: meta.availableModes || [],
+            availableCommands: meta.availableCommands || [],
+            configOptions: meta.configOptions || [],
+            messages: meta.messages || [],
+            toolCalls: meta.toolCalls || [],
+            permissions: meta.permissions || [],
+            plan: meta.plan || [],
+            usage: meta.usage || null,
+            terminals: meta.terminals || []
         });
         tab.status = 'restoring';
         tab.busy = true;
@@ -1418,6 +1737,14 @@ class AcpRuntime extends EventEmitter {
             this.sessionToTabId.delete(tab.acpSessionId);
             throw error;
         }
+    }
+
+    #markTabDirty(tab) {
+        if (!tab) return;
+        this.emit('tab_dirty', {
+            tabId: tab.id,
+            sessionId: tab.acpSessionId
+        });
     }
 
     serializeTab(tab) {
@@ -1592,6 +1919,7 @@ class AcpRuntime extends EventEmitter {
             busy: tab.busy,
             errorMessage: ''
         });
+        this.#markTabDirty(tab);
 
         const promptPromise = this.connection.prompt({
             sessionId: tab.acpSessionId,
@@ -1602,6 +1930,12 @@ class AcpRuntime extends EventEmitter {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'ready';
+            this.#settleStaleToolCalls(
+                tab,
+                response?.stopReason === 'cancelled'
+                    ? 'cancelled'
+                    : 'completed'
+            );
             if (response?.usage) {
                 tab.usage = mergeUsageState(tab.usage, {
                     totals: response.usage
@@ -1621,11 +1955,16 @@ class AcpRuntime extends EventEmitter {
                 status: tab.status,
                 busy: false
             });
+            this.#markTabDirty(tab);
         }).catch((error) => {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'error';
-            tab.errorMessage = formatAgentStartupError(definition, error);
+            this.#settleStaleToolCalls(tab, 'error');
+            tab.errorMessage = formatAgentStartupError(
+                tab.definition,
+                error
+            );
             tab.syntheticStreams.clear();
             tab.pendingUserEcho = null;
             this.#broadcast(tab, {
@@ -1634,6 +1973,7 @@ class AcpRuntime extends EventEmitter {
                 busy: false,
                 errorMessage: tab.errorMessage
             });
+            this.#markTabDirty(tab);
         }).finally(() => {
             void this.#cleanupPromptAttachments(promptAttachments);
         });
@@ -1660,6 +2000,7 @@ class AcpRuntime extends EventEmitter {
         await this.connection.cancel({
             sessionId: tab.acpSessionId
         });
+        this.#markTabDirty(tab);
     }
 
     async resolvePermission(tabId, permissionId, optionId) {
@@ -1687,6 +2028,7 @@ class AcpRuntime extends EventEmitter {
             status: permission.status,
             selectedOptionId: permission.selectedOptionId
         });
+        this.#markTabDirty(tab);
     }
 
     async setMode(tabId, modeId) {
@@ -1726,6 +2068,7 @@ class AcpRuntime extends EventEmitter {
                 configOptions: tab.configOptions
             }
         });
+        this.#markTabDirty(tab);
         return this.serializeTab(tab);
     }
 
@@ -1788,6 +2131,7 @@ class AcpRuntime extends EventEmitter {
                 configOptions: tab.configOptions
             }
         });
+        this.#markTabDirty(tab);
         return this.serializeTab(tab);
     }
 
@@ -1849,16 +2193,20 @@ class AcpRuntime extends EventEmitter {
         if (!tab) return;
         const update = params.update;
         let broadcastUpdate = update;
+        let didChange = false;
 
         switch (update.sessionUpdate) {
             case 'agent_message_chunk':
                 this.#appendContentChunk(tab, update, 'assistant', 'message');
+                didChange = true;
                 break;
             case 'agent_thought_chunk':
                 this.#appendContentChunk(tab, update, 'assistant', 'thought');
+                didChange = true;
                 break;
             case 'user_message_chunk':
                 this.#appendContentChunk(tab, update, 'user', 'message');
+                didChange = true;
                 break;
             case 'tool_call': {
                 this.#advanceSyntheticStreamTurn(tab);
@@ -1869,6 +2217,7 @@ class AcpRuntime extends EventEmitter {
                 };
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
+                didChange = true;
                 break;
             }
             case 'tool_call_update': {
@@ -1886,22 +2235,26 @@ class AcpRuntime extends EventEmitter {
                 };
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
+                didChange = true;
                 break;
             }
             case 'current_mode_update':
                 tab.currentModeId = update.currentModeId || update.modeId || '';
+                didChange = true;
                 break;
             case 'available_commands_update':
                 tab.availableCommands = this.#resolveAvailableCommands(
                     update.availableCommands,
                     tab.availableCommands
                 );
+                didChange = true;
                 break;
             case 'config_option_update':
                 tab.configOptions = this.#resolveConfigOptions(
                     update.configOptions,
                     tab.configOptions
                 );
+                didChange = true;
                 break;
             case 'session_info_update':
                 if (typeof update.title === 'string') {
@@ -1909,12 +2262,15 @@ class AcpRuntime extends EventEmitter {
                 } else if (update.title === null) {
                     tab.title = '';
                 }
+                didChange = true;
                 break;
             case 'plan':
                 tab.plan = normalizePlanEntries(update.entries);
+                didChange = true;
                 break;
             case 'usage_update':
                 tab.usage = mergeUsageState(tab.usage, update);
+                didChange = true;
                 break;
             default:
                 break;
@@ -1931,6 +2287,9 @@ class AcpRuntime extends EventEmitter {
                 configOptions: tab.configOptions
             }
         });
+        if (didChange) {
+            this.#markTabDirty(tab);
+        }
     }
 
     #appendContentChunk(tab, update, role, kind) {
@@ -2061,6 +2420,7 @@ class AcpRuntime extends EventEmitter {
                 selectedOptionId: request.selectedOptionId
             }
         });
+        this.#markTabDirty(tab);
 
         return new Promise((resolve) => {
             request.resolve = resolve;
@@ -2279,8 +2639,12 @@ class AcpRuntime extends EventEmitter {
         if (!terminal) {
             return {};
         }
-        await terminal.release();
-        this.#syncTerminalSummary(params.sessionId, terminal, { released: true });
+        await terminal.release({ destroy: true });
+        this.terminals.delete(params.terminalId);
+        this.#syncTerminalSummary(params.sessionId, terminal, {
+            released: true,
+            terminalSessionId: ''
+        });
         return {};
     }
 
@@ -2292,10 +2656,67 @@ class AcpRuntime extends EventEmitter {
             ...overrides,
             terminalId: terminal.id
         });
+        if (!tab.busy) {
+            this.#settleStaleToolCalls(
+                tab,
+                tab.status === 'error' ? 'error' : 'completed'
+            );
+        }
         this.#broadcast(tab, {
             type: 'terminal_update',
             terminal: tab.terminals.get(terminal.id)
         });
+        this.#markTabDirty(tab);
+    }
+
+    #toolCallHasRunningTerminal(tab, toolCall) {
+        for (const terminalId of getToolCallTerminalIds(toolCall)) {
+            const terminal = tab.terminals.get(terminalId);
+            if (terminal?.running) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    #settleStaleToolCalls(tab, nextStatus = 'completed') {
+        let didChange = false;
+        for (const [toolCallId, toolCall] of tab.toolCalls.entries()) {
+            const statusClass = normalizeToolStatusClass(toolCall?.status);
+            if (
+                statusClass !== 'pending'
+                && statusClass !== 'running'
+            ) {
+                continue;
+            }
+            if (this.#toolCallHasRunningTerminal(tab, toolCall)) {
+                continue;
+            }
+            const nextToolCall = {
+                ...toolCall,
+                status: nextStatus
+            };
+            tab.toolCalls.set(toolCallId, nextToolCall);
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: {
+                    sessionUpdate: 'tool_call_update',
+                    ...nextToolCall
+                },
+                tab: {
+                    title: tab.title,
+                    currentModeId: tab.currentModeId,
+                    availableModes: tab.availableModes,
+                    availableCommands: tab.availableCommands,
+                    configOptions: tab.configOptions
+                }
+            });
+            didChange = true;
+        }
+        if (didChange) {
+            this.#markTabDirty(tab);
+        }
+        return didChange;
     }
 
     #getTabBySession(sessionId) {
@@ -2359,6 +2780,9 @@ export class AcpManager {
         this.loadConfigs = options.loadConfigs || persistence.loadAgentConfigs;
         this.saveConfigs = options.saveConfigs || persistence.saveAgentConfigs;
         this.persistenceChain = Promise.resolve();
+        this.transcriptPersistDelayMs = options.transcriptPersistDelayMs
+            || DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS;
+        this.persistTabsTimer = null;
         this.disposing = false;
         this.restoring = false;
         this.agentConfigs = {};
@@ -2583,6 +3007,23 @@ export class AcpManager {
         return this.persistenceChain;
     }
 
+    clearPendingTabPersistence() {
+        if (this.persistTabsTimer) {
+            clearTimeout(this.persistTabsTimer);
+            this.persistTabsTimer = null;
+        }
+    }
+
+    schedulePersistTabs() {
+        if (this.disposing || this.persistTabsTimer) {
+            return;
+        }
+        this.persistTabsTimer = setTimeout(() => {
+            this.persistTabsTimer = null;
+            void this.persistTabs();
+        }, this.transcriptPersistDelayMs);
+    }
+
     getPersistedTabs() {
         return Array.from(this.tabs.values()).map((entry) => {
             const tab = entry.serialize();
@@ -2592,12 +3033,40 @@ export class AcpManager {
                 cwd: tab.cwd,
                 acpSessionId: tab.acpSessionId,
                 terminalSessionId: tab.terminalSessionId,
-                createdAt: tab.createdAt
+                createdAt: tab.createdAt,
+                title: tab.title || '',
+                currentModeId: tab.currentModeId || '',
+                availableModes: Array.isArray(tab.availableModes)
+                    ? cloneSerializable(tab.availableModes, [])
+                    : [],
+                availableCommands: Array.isArray(tab.availableCommands)
+                    ? cloneSerializable(tab.availableCommands, [])
+                    : [],
+                configOptions: Array.isArray(tab.configOptions)
+                    ? cloneSerializable(tab.configOptions, [])
+                    : [],
+                messages: Array.isArray(tab.messages)
+                    ? cloneSerializable(tab.messages, [])
+                    : [],
+                toolCalls: Array.isArray(tab.toolCalls)
+                    ? cloneSerializable(tab.toolCalls, [])
+                    : [],
+                permissions: Array.isArray(tab.permissions)
+                    ? cloneSerializable(tab.permissions, [])
+                    : [],
+                plan: Array.isArray(tab.plan)
+                    ? cloneSerializable(tab.plan, [])
+                    : [],
+                usage: tab.usage ? cloneSerializable(tab.usage, null) : null,
+                terminals: Array.isArray(tab.terminals)
+                    ? cloneSerializable(tab.terminals, [])
+                    : []
             };
         });
     }
 
     persistTabs() {
+        this.clearPendingTabPersistence();
         return this.queuePersistence(() => this.saveTabs(this.getPersistedTabs()));
     }
 
@@ -2670,6 +3139,9 @@ export class AcpManager {
             };
             this.runtimes.set(runtimeStoreKey, runtimeEntry);
             createdRuntime = true;
+            runtime.on('tab_dirty', () => {
+                this.schedulePersistTabs();
+            });
             runtime.on('runtime_exit', () => {
                 if (this.disposing) return;
                 for (const [tabId, tabEntry] of this.tabs.entries()) {
@@ -2774,6 +3246,9 @@ export class AcpManager {
                     runtimeStoreKey
                 };
                 this.runtimes.set(runtimeStoreKey, runtimeEntry);
+                runtime.on('tab_dirty', () => {
+                    this.schedulePersistTabs();
+                });
                 runtime.on('runtime_exit', () => {
                     if (this.disposing) return;
                     for (const [tabId, tabEntry] of this.tabs.entries()) {
@@ -2931,6 +3406,7 @@ export class AcpManager {
 
     async dispose({ preserveTabs = true } = {}) {
         this.disposing = true;
+        this.clearPendingTabPersistence();
         if (preserveTabs) {
             await this.persistTabs();
         } else {
