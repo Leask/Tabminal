@@ -1647,12 +1647,12 @@ kbd {
 }
 
 .agent-usage-hud {
-    --agent-usage-details-width: 712px;
-    --agent-usage-label-width: 108px;
-    --agent-usage-progress-width: 328px;
-    --agent-usage-value-width: 96px;
+    --agent-usage-details-width: 528px;
+    --agent-usage-label-width: 86px;
+    --agent-usage-progress-width: 200px;
+    --agent-usage-value-width: 68px;
     --agent-usage-meta-width: 144px;
-    --agent-usage-column-gap: 12px;
+    --agent-usage-column-gap: 10px;
     position: absolute;
     top: 8px;
     right: 56px;
