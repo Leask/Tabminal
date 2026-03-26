@@ -240,14 +240,11 @@ class TabminalTestAgent {
     async createTerminalDemo(sessionId) {
         const terminal = await this.connection.createTerminal({
             sessionId,
-            command: 'printf "alpha\\nbeta\\n"; sleep 0.05',
+            command: 'printf "alpha\\n"; sleep 0.25; '
+                + 'printf "beta\\n"; sleep 0.25',
             cwd: process.cwd(),
             outputByteLimit: 4096
         });
-        await sleep(80);
-        await terminal.currentOutput();
-        await terminal.waitForExit();
-        await terminal.release();
         return terminal;
     }
 
@@ -391,6 +388,25 @@ class TabminalTestAgent {
                     }
                 });
                 await sleep(30, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call_update',
+                        toolCallId: 'diff-tool',
+                        status: 'pending',
+                        content: [
+                            {
+                                type: 'terminal',
+                                terminalId: terminal.id
+                            }
+                        ]
+                    }
+                });
+                await sleep(120, signal);
+                await terminal.currentOutput();
+                await terminal.waitForExit();
+                await terminal.currentOutput();
+                await terminal.release();
                 await this.connection.sessionUpdate({
                     sessionId: params.sessionId,
                     update: {

@@ -565,6 +565,7 @@ class EditorManager {
         this.isApplyingAgentPromptState = false;
         this.suppressAgentCommandMenu = false;
         this.agentEmbeddedEditors = [];
+        this.agentEmbeddedTerminals = new Map();
 
         this.initTerminalControls();
         this.initResizer();
@@ -2457,6 +2458,7 @@ class EditorManager {
     }
 
     disposeAgentEmbeddedEditors() {
+        this.agentEmbeddedTerminals.clear();
         for (const disposable of this.agentEmbeddedEditors) {
             try {
                 disposable.dispose();
@@ -2546,15 +2548,13 @@ class EditorManager {
         host.className = 'agent-tool-call-terminal-host';
 
         const terminal = section?.terminal || {};
+        const terminalId = String(
+            terminal.terminalId || section?.terminalId || ''
+        );
 
         const meta = document.createElement('div');
         meta.className = 'agent-tool-call-terminal-meta';
-        const metaParts = [];
-        if (terminal.command) metaParts.push(terminal.command);
-        if (terminal.cwd) metaParts.push(terminal.cwd);
-        const terminalStatus = getAgentTerminalStatusLabel(terminal);
-        if (terminalStatus) metaParts.push(terminalStatus);
-        meta.textContent = metaParts.join(' · ');
+        meta.textContent = buildAgentTerminalMetaText(terminal);
         if (meta.textContent) {
             host.appendChild(meta);
         }
@@ -2589,7 +2589,12 @@ class EditorManager {
         embeddedTerm.loadAddon(fitAddon);
         embeddedTerm.loadAddon(new CanvasAddon());
         embeddedTerm.open(terminalNode);
-        embeddedTerm.write(terminal.output || '(no output yet)');
+        renderEmbeddedAgentTerminal(
+            embeddedTerm,
+            terminalNode,
+            terminal,
+            fitAddon
+        );
         const layoutTerminal = () => {
             requestAnimationFrame(() => {
                 try {
@@ -2605,9 +2610,61 @@ class EditorManager {
                 layoutTerminal();
             }
         });
+        if (terminalId) {
+            if (!this.agentEmbeddedTerminals.has(terminalId)) {
+                this.agentEmbeddedTerminals.set(terminalId, []);
+            }
+            this.agentEmbeddedTerminals.get(terminalId).push({
+                meta,
+                terminalNode,
+                terminal: embeddedTerm,
+                fitAddon,
+                layout: layoutTerminal
+            });
+        }
         this.agentEmbeddedEditors.push(embeddedTerm, fitAddon);
 
         return host;
+    }
+
+    refreshVisibleAgentTerminals(agentTab, terminalId = '') {
+        if (!agentTab || !isAgentTabVisible(agentTab)) {
+            return false;
+        }
+        const updates = terminalId
+            ? [[terminalId, this.agentEmbeddedTerminals.get(terminalId) || []]]
+            : Array.from(this.agentEmbeddedTerminals.entries());
+        if (updates.length === 0) {
+            return false;
+        }
+        let refreshed = false;
+        for (const [id, entries] of updates) {
+            if (!Array.isArray(entries) || entries.length === 0) {
+                continue;
+            }
+            const summary = agentTab.terminals.get(id);
+            if (!summary) {
+                continue;
+            }
+            for (const entry of entries) {
+                if (!entry) continue;
+                if (entry.meta) {
+                    entry.meta.textContent = buildAgentTerminalMetaText(summary);
+                }
+                renderEmbeddedAgentTerminal(
+                    entry.terminal,
+                    entry.terminalNode,
+                    summary,
+                    entry.fitAddon
+                );
+                entry.layout?.();
+                refreshed = true;
+            }
+        }
+        if (refreshed) {
+            this.renderAgentPlan(agentTab);
+        }
+        return refreshed;
     }
 
     buildAgentDiffSectionBody(details, section) {
@@ -4459,6 +4516,19 @@ class AgentTab {
                             ...message.terminal
                         })
                     );
+                    const session = this.getLinkedSession();
+                    if (session) {
+                        session.updateTabUI();
+                    }
+                    if (
+                        editorManager?.refreshVisibleAgentTerminals?.(
+                            this,
+                            message.terminal.terminalId
+                        )
+                    ) {
+                        this.#syncBusyWatchdog();
+                        return;
+                    }
                 }
                 break;
             case 'usage_state':
@@ -5855,6 +5925,46 @@ function getAgentTerminalStatusLabel(terminal = {}) {
             : `Exit ${terminal.exitStatus.exitCode}`;
     }
     return '';
+}
+
+function buildAgentTerminalMetaText(terminal = {}) {
+    const parts = [];
+    if (terminal.command) parts.push(terminal.command);
+    if (terminal.cwd) parts.push(terminal.cwd);
+    const status = getAgentTerminalStatusLabel(terminal);
+    if (status) parts.push(status);
+    return parts.join(' · ');
+}
+
+function renderEmbeddedAgentTerminal(
+    embeddedTerm,
+    terminalNode,
+    terminal,
+    fitAddon = null
+) {
+    if (!embeddedTerm || !terminalNode) return;
+    const output = terminal?.output || '(no output yet)';
+    terminalNode.dataset.outputPreview = output;
+    terminalNode.setAttribute('aria-label', output);
+    terminalNode.style.height = `${
+        estimateAgentTerminalHeight(terminal?.output || '')
+    }px`;
+    try {
+        embeddedTerm.reset();
+    } catch {
+        // Ignore reset failures on disposed terminals.
+    }
+    embeddedTerm.write(output);
+    embeddedTerm.scrollToBottom();
+    if (fitAddon) {
+        requestAnimationFrame(() => {
+            try {
+                fitAddon.fit();
+            } catch {
+                // Ignore layout failures for hidden sections.
+            }
+        });
+    }
 }
 
 function estimateAgentTerminalHeight(output) {

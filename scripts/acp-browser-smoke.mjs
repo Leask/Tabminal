@@ -29,6 +29,7 @@ const expectPlanPanel = process.env.TABMINAL_EXPECT_PLAN_PANEL === '1';
 const expectUsageHud = process.env.TABMINAL_EXPECT_USAGE_HUD === '1';
 const expectTerminalSection = process.env.TABMINAL_EXPECT_TERMINAL_SECTION
     === '1';
+const expectTerminalLive = process.env.TABMINAL_EXPECT_TERMINAL_LIVE === '1';
 const expectTitlePattern = process.env.TABMINAL_EXPECT_TITLE_PATTERN || '';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
@@ -1604,6 +1605,63 @@ async function main() {
     } else {
         log('permission-options', '[]');
         log('resolved-permission', 'not-required');
+    }
+
+    if (expectTerminalLive) {
+        await waitFor('live-tool-call', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll('.agent-tool-call').length > 0
+                `)
+            );
+        }, 20000, 250);
+
+        await waitFor('live-tool-sections-expanded', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const sections = Array.from(document.querySelectorAll(
+                            '.agent-tool-call-section'
+                        ));
+                        if (sections.length === 0) return false;
+                        for (const section of sections) {
+                            section.open = true;
+                        }
+                        return sections.every((section) => section.open);
+                    }
+                `)
+            );
+        }, 20000, 250);
+
+        await waitFor('terminal-live-alpha', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => Array.from(document.querySelectorAll(
+                        '.agent-tool-call-terminal-output'
+                    )).some((node) => {
+                        const text = node.dataset.outputPreview
+                            || node.getAttribute('aria-label')
+                            || '';
+                        return /alpha/.test(text);
+                    })
+                `)
+            );
+        }, 20000, 150);
+
+        await waitFor('terminal-live-beta', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => Array.from(document.querySelectorAll(
+                        '.agent-tool-call-terminal-output'
+                    )).some((node) => {
+                        const text = node.dataset.outputPreview
+                            || node.getAttribute('aria-label')
+                            || '';
+                        return /alpha/.test(text) && /beta/.test(text);
+                    })
+                `)
+            );
+        }, 20000, 150);
     }
 
     if (promptOutcome !== 'backend-ready') {
