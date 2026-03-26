@@ -13,6 +13,8 @@ import * as persistence from './persistence.mjs';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
+const DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS = 30 * 1000;
+const DEFAULT_PROBE_CACHE_TTL_MS = 15 * 1000;
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
     'txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'toml',
     'ini', 'env', 'xml', 'html', 'htm', 'css', 'scss', 'less', 'csv',
@@ -101,6 +103,133 @@ function buildAgentConfigSummary(agentId, config = {}) {
 
 let ghCopilotCliInstalledCache = null;
 let ghAuthTokenCache = null;
+const availabilityProbeCache = new Map();
+
+function getCachedProbeValue(key) {
+    if (!key) return null;
+    const entry = availabilityProbeCache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+        availabilityProbeCache.delete(key);
+        return null;
+    }
+    return entry.value;
+}
+
+function setCachedProbeValue(key, value) {
+    if (!key) return value;
+    availabilityProbeCache.set(key, {
+        value,
+        expiresAt: Date.now() + DEFAULT_PROBE_CACHE_TTL_MS
+    });
+    return value;
+}
+
+function getAvailabilityCacheScopeKey(runtimeEnv = {}) {
+    return String(
+        runtimeEnv.HOME
+        || process.env.HOME
+        || process.cwd()
+    );
+}
+
+function probeCodexAuth(runtimeEnv = {}) {
+    if (!commandExists('codex')) {
+        return { available: true, reason: '' };
+    }
+
+    const cacheKey = `codex-auth:${getAvailabilityCacheScopeKey(runtimeEnv)}`;
+    const cached = getCachedProbeValue(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const result = spawnSync('codex', ['login', 'status'], {
+        encoding: 'utf8',
+        timeout: 1500,
+        env: runtimeEnv
+    });
+    if (result.status === 0) {
+        return setCachedProbeValue(cacheKey, {
+            available: true,
+            reason: ''
+        });
+    }
+    const output = [
+        result.stdout,
+        result.stderr,
+        result.error?.message
+    ].filter(Boolean).join('\n');
+    if (/not logged in|authentication required|login/i.test(output)) {
+        return setCachedProbeValue(cacheKey, {
+            available: false,
+            reason: 'Run `codex login` on this host'
+        });
+    }
+    return setCachedProbeValue(cacheKey, {
+        available: true,
+        reason: ''
+    });
+}
+
+function probeGhAuth(runtimeEnv = {}) {
+    const explicitToken = String(
+        runtimeEnv.COPILOT_GITHUB_TOKEN
+        || runtimeEnv.GH_TOKEN
+        || runtimeEnv.GITHUB_TOKEN
+        || ''
+    ).trim();
+    if (explicitToken) {
+        return { available: true, reason: '' };
+    }
+    if (!commandExists('gh')) {
+        return {
+            available: false,
+            reason: 'Run `gh auth login` or set `COPILOT_GITHUB_TOKEN`'
+        };
+    }
+
+    const cacheKey = `gh-auth:${getAvailabilityCacheScopeKey(runtimeEnv)}`;
+    const cached = getCachedProbeValue(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const result = spawnSync('gh', ['auth', 'status'], {
+        encoding: 'utf8',
+        timeout: 1500,
+        env: runtimeEnv
+    });
+    if (result.status === 0) {
+        return setCachedProbeValue(cacheKey, {
+            available: true,
+            reason: ''
+        });
+    }
+    const output = [
+        result.stdout,
+        result.stderr,
+        result.error?.message
+    ].filter(Boolean).join('\n');
+    if (/not logged|not logged into any github hosts/i.test(output)) {
+        return setCachedProbeValue(cacheKey, {
+            available: false,
+            reason: 'Run `gh auth login` or set `COPILOT_GITHUB_TOKEN`'
+        });
+    }
+    return setCachedProbeValue(cacheKey, {
+        available: true,
+        reason: ''
+    });
+}
+
+const DEFAULT_AVAILABILITY_PROBES = {
+    commandExists,
+    hasGhCopilotWrapper,
+    hasGhCopilotCliInstalled,
+    probeCodexAuth,
+    probeGhAuth
+};
 
 function hasGhCopilotCliInstalled() {
     if (typeof ghCopilotCliInstalledCache === 'boolean') {
@@ -297,8 +426,13 @@ function makeBuiltInDefinitions() {
     return definitions;
 }
 
-function getDefinitionAvailability(definition, agentConfig = {}) {
-    if (!commandExists(definition.command)) {
+function getDefinitionAvailability(
+    definition,
+    agentConfig = {},
+    probes = DEFAULT_AVAILABILITY_PROBES
+) {
+    const commandExistsFn = probes.commandExists || commandExists;
+    if (!commandExistsFn(definition.command)) {
         return {
             available: false,
             reason: 'not installed'
@@ -319,21 +453,40 @@ function getDefinitionAvailability(definition, agentConfig = {}) {
         }
     }
 
+    if (definition.id === 'codex') {
+        const codexAvailability = (
+            probes.probeCodexAuth || probeCodexAuth
+        )(runtimeEnv);
+        if (!codexAvailability.available) {
+            return codexAvailability;
+        }
+    }
+
     if (
         definition.id === 'copilot'
         && definition.command === 'gh'
     ) {
-        if (!hasGhCopilotWrapper()) {
+        const hasWrapper = (
+            probes.hasGhCopilotWrapper || hasGhCopilotWrapper
+        )();
+        if (!hasWrapper) {
             return {
                 available: false,
                 reason: 'Install the gh-copilot extension first'
             };
         }
-        if (!hasGhCopilotCliInstalled()) {
+        const hasCli = (
+            probes.hasGhCopilotCliInstalled || hasGhCopilotCliInstalled
+        )();
+        if (!hasCli) {
             return {
                 available: false,
                 reason: 'Run gh copilot once to install Copilot CLI'
             };
+        }
+        const ghAvailability = (probes.probeGhAuth || probeGhAuth)(runtimeEnv);
+        if (!ghAvailability.available) {
+            return ghAvailability;
         }
         return {
             available: true,
@@ -349,6 +502,15 @@ function getDefinitionAvailability(definition, agentConfig = {}) {
 
 function formatAgentStartupError(definition, error) {
     const rawMessage = error?.message || 'Failed to start agent';
+    if (
+        definition?.id === 'claude'
+        && /not servable in region|not available on your vertex deployment/i
+            .test(rawMessage)
+    ) {
+        return 'Claude Vertex is configured with a region that cannot serve '
+            + 'the current model. Use a supported region such as `global`, '
+            + '`us-east5`, or `europe-west1`, then retry.';
+    }
     if (
         definition?.id === 'codex'
         && /authentication required/i.test(rawMessage)
@@ -1301,7 +1463,7 @@ class AcpRuntime extends EventEmitter {
             if (!this.tabs.has(tabId)) return;
             tab.busy = false;
             tab.status = 'error';
-            tab.errorMessage = error?.message || 'Agent request failed.';
+            tab.errorMessage = formatAgentStartupError(definition, error);
             tab.syntheticStreams.clear();
             tab.pendingUserEcho = null;
             this.#broadcast(tab, {
@@ -1944,7 +2106,58 @@ export class AcpManager {
         this.restoring = false;
         this.agentConfigs = {};
         this.agentConfigVersions = new Map();
+        this.definitionAvailabilityOverrides = new Map();
+        this.availabilityOverrideTtlMs =
+            options.availabilityOverrideTtlMs
+            || DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS;
+        this.availabilityProbes = options.availabilityProbes
+            || DEFAULT_AVAILABILITY_PROBES;
         this.configLoaded = false;
+    }
+
+    #getDefinitionAvailabilityOverride(agentId) {
+        const entry = this.definitionAvailabilityOverrides.get(agentId);
+        if (!entry) return null;
+        if (entry.expiresAt <= Date.now()) {
+            this.definitionAvailabilityOverrides.delete(agentId);
+            return null;
+        }
+        return entry;
+    }
+
+    #setDefinitionAvailabilityOverride(agentId, availability = {}) {
+        this.definitionAvailabilityOverrides.set(agentId, {
+            available: Boolean(availability.available),
+            reason: String(availability.reason || ''),
+            expiresAt: Date.now() + this.availabilityOverrideTtlMs
+        });
+    }
+
+    #clearDefinitionAvailabilityOverride(agentId) {
+        this.definitionAvailabilityOverrides.delete(agentId);
+    }
+
+    #recordDefinitionStartupFailure(definition, error) {
+        const reason = formatAgentStartupError(definition, error);
+        if (!reason) return;
+        this.#setDefinitionAvailabilityOverride(definition.id, {
+            available: false,
+            reason
+        });
+    }
+
+    getDefinitionAvailability(definition) {
+        const baseAvailability = getDefinitionAvailability(
+            definition,
+            this.getAgentConfig(definition.id),
+            this.availabilityProbes
+        );
+        if (!baseAvailability.available) {
+            this.#clearDefinitionAvailabilityOverride(definition.id);
+            return baseAvailability;
+        }
+        return this.#getDefinitionAvailabilityOverride(definition.id)
+            || baseAvailability;
     }
 
     getAgentConfigVersion(agentId) {
@@ -2009,6 +2222,7 @@ export class AcpManager {
                 env: mergedEnv
             }
         };
+        this.#clearDefinitionAvailabilityOverride(agentId);
         this.agentConfigVersions.set(
             agentId,
             this.getAgentConfigVersion(agentId) + 1
@@ -2022,6 +2236,7 @@ export class AcpManager {
         const nextConfigs = { ...this.agentConfigs };
         delete nextConfigs[agentId];
         this.agentConfigs = nextConfigs;
+        this.#clearDefinitionAvailabilityOverride(agentId);
         this.agentConfigVersions.set(
             agentId,
             this.getAgentConfigVersion(agentId) + 1
@@ -2132,10 +2347,7 @@ export class AcpManager {
     async listDefinitions() {
         await this.ensureConfigsLoaded();
         return this.definitions.map((definition) => {
-            const availability = getDefinitionAvailability(
-                definition,
-                this.getAgentConfig(definition.id)
-            );
+            const availability = this.getDefinitionAvailability(definition);
             return {
                 id: definition.id,
                 label: definition.label,
@@ -2167,6 +2379,10 @@ export class AcpManager {
         );
         if (!definition) {
             throw new Error('Unknown agent');
+        }
+        const availability = this.getDefinitionAvailability(definition);
+        if (!availability.available) {
+            throw new Error(availability.reason || 'Agent unavailable');
         }
 
         const cwd = path.resolve(options.cwd || process.cwd());
@@ -2233,6 +2449,7 @@ export class AcpManager {
                 }
             };
             this.tabs.set(tabId, tabEntry);
+            this.#clearDefinitionAvailabilityOverride(definition.id);
             await this.persistTabs();
             return tabEntry.serialize();
         } catch (error) {
@@ -2242,6 +2459,7 @@ export class AcpManager {
                 this.runtimes.delete(runtimeStoreKey);
                 await runtimeEntry.runtime.dispose().catch(() => {});
             }
+            this.#recordDefinitionStartupFailure(definition, error);
             throw new Error(formatAgentStartupError(definition, error));
         }
     }
@@ -2269,10 +2487,7 @@ export class AcpManager {
             }
 
             const agentConfig = this.getAgentConfig(definition.id);
-            const availability = getDefinitionAvailability(
-                definition,
-                agentConfig
-            );
+            const availability = this.getDefinitionAvailability(definition);
             if (!availability.available) {
                 changed = true;
                 continue;
@@ -2333,8 +2548,10 @@ export class AcpManager {
                         );
                     }
                 });
+                this.#clearDefinitionAvailabilityOverride(definition.id);
             } catch (error) {
                 changed = true;
+                this.#recordDefinitionStartupFailure(definition, error);
                 console.warn(
                     `[ACP] Failed to restore agent tab ${meta.id}:`,
                     error?.message || error

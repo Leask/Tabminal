@@ -571,6 +571,80 @@ describe('AcpManager', () => {
         assert.equal(definition.config.hasCopilotToken, true);
     });
 
+    it('marks Codex unavailable when auth probe fails', async () => {
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new FakeRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            availabilityProbes: {
+                commandExists: () => true,
+                hasGhCopilotWrapper: () => true,
+                hasGhCopilotCliInstalled: () => true,
+                probeCodexAuth: () => ({
+                    available: false,
+                    reason: 'Run `codex login` on this host'
+                }),
+                probeGhAuth: () => ({
+                    available: true,
+                    reason: ''
+                })
+            }
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const [definition] = await manager.listDefinitions();
+
+        assert.equal(definition.available, false);
+        assert.equal(definition.reason, 'Run `codex login` on this host');
+    });
+
+    it('marks Copilot unavailable when gh auth probe fails', async () => {
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new FakeRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            availabilityProbes: {
+                commandExists: () => true,
+                hasGhCopilotWrapper: () => true,
+                hasGhCopilotCliInstalled: () => true,
+                probeCodexAuth: () => ({
+                    available: true,
+                    reason: ''
+                }),
+                probeGhAuth: () => ({
+                    available: false,
+                    reason: 'Run `gh auth login` or set `COPILOT_GITHUB_TOKEN`'
+                })
+            }
+        });
+        manager.definitions = [{
+            id: 'copilot',
+            label: 'GitHub Copilot',
+            description: 'test',
+            command: 'gh',
+            args: ['copilot', '--', '--acp', '--stdio'],
+            commandLabel: 'gh copilot -- --acp --stdio',
+            setupCommandLabel: 'gh copilot'
+        }];
+
+        const [definition] = await manager.listDefinitions();
+
+        assert.equal(definition.available, false);
+        assert.equal(
+            definition.reason,
+            'Run `gh auth login` or set `COPILOT_GITHUB_TOKEN`'
+        );
+    });
+
     it('merges and clears saved agent config values', async () => {
         const { manager, getPersistedConfigs } = createManager();
         manager.definitions.push({
@@ -707,7 +781,20 @@ describe('AcpManager', () => {
                 return runtime;
             },
             loadTabs: async () => [],
-            saveTabs: async () => {}
+            saveTabs: async () => {},
+            availabilityProbes: {
+                commandExists: () => true,
+                hasGhCopilotWrapper: () => true,
+                hasGhCopilotCliInstalled: () => true,
+                probeCodexAuth: () => ({
+                    available: true,
+                    reason: ''
+                }),
+                probeGhAuth: () => ({
+                    available: true,
+                    reason: ''
+                })
+            }
         });
         manager.definitions = [{
             id: 'codex',
@@ -730,6 +817,13 @@ describe('AcpManager', () => {
         assert.ok(runtime);
         assert.equal(runtime.disposed, true);
         assert.equal(manager.runtimes.size, 0);
+
+        const [definition] = await manager.listDefinitions();
+        assert.equal(definition.available, false);
+        assert.match(
+            definition.reason,
+            /Codex is not authenticated on this host/
+        );
     });
 
     it('streams real ACP test-agent permission turns end-to-end', async () => {
