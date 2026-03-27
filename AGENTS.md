@@ -266,7 +266,7 @@ Relevant code:
 
 ## 4) ACP Status and Remaining Gaps
 
-`ACP_PLANING.md` is partly stale.
+`docs/ACP.md` is partly stale.
 
 Implemented from that plan:
 
@@ -290,7 +290,7 @@ Still not clearly done end-to-end:
 
 Implication:
 
-- Do not delete `ACP_PLANING.md` just because most of the MVP shipped.
+- Do not delete `docs/ACP.md` just because most of the MVP shipped.
 - If it is removed later, first copy the still-open deferred items into a new
   canonical roadmap document.
 

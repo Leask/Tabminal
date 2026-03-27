@@ -4,6 +4,7 @@
 .history/
 .vscode/
 apps/
+docs/
 scripts/
 test/
 tests/

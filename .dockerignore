@@ -5,3 +5,4 @@ coverage
 dist
 .DS_Store
 apps
+docs
