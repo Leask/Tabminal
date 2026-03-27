@@ -1,4 +1,4 @@
-# ACP Planning
+# ACP
 
 Last updated: 2026-03-27
 
