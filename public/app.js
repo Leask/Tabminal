@@ -111,6 +111,9 @@ const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="c
 const SPINNER_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
 const ATTACH_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.49"></path></svg>';
 const CHEVRON_DOWN_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>';
+const MODE_SELECT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v5c0 5 3.4 8.7 8 9 4.6-.3 8-4 8-9V7l-8-4Z"></path><path d="m9.5 12 1.7 1.7 3.3-3.4"></path></svg>';
+const MODEL_SELECT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 7 12 11 19.5 7 12 3Z"></path><path d="M4.5 12 12 16 19.5 12"></path><path d="M4.5 17 12 21 19.5 17"></path></svg>';
+const THOUGHT_SELECT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"></path><path d="M10 21h4"></path><path d="M8 14a5 5 0 1 1 8 0c-.8.63-1.28 1.12-1.6 2H9.6c-.32-.88-.8-1.37-1.6-2Z"></path></svg>';
 const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="m9 15 3-3 3 3"></path></svg>';
 const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
@@ -567,6 +570,9 @@ class EditorManager {
         this.agentModeSelect = null;
         this.agentModelSelect = null;
         this.agentThoughtSelect = null;
+        this.agentModeSelectShell = null;
+        this.agentModelSelectShell = null;
+        this.agentThoughtSelectShell = null;
         this.agentNewChatButton = null;
         this.agentUsageHud = null;
         this.agentUsageHudHovered = false;
@@ -837,15 +843,22 @@ class EditorManager {
         this.agentModeSelect = document.createElement('select');
         this.agentModeSelect.className = 'agent-panel-mode-select';
         this.agentModeSelect.dataset.selectorRole = 'mode';
+        this.agentModeSelect.setAttribute('aria-label', 'Permissions');
         this.agentModeSelect.addEventListener('change', async () => {
             const modeId = this.agentModeSelect.value;
             if (!modeId) return;
             await this.setActiveAgentMode(modeId);
         });
+        this.agentModeSelectShell = this.buildAgentCompactSelectShell(
+            this.agentModeSelect,
+            MODE_SELECT_ICON_SVG,
+            'Permissions'
+        );
 
         this.agentModelSelect = document.createElement('select');
         this.agentModelSelect.className = 'agent-panel-mode-select';
         this.agentModelSelect.dataset.selectorRole = 'model';
+        this.agentModelSelect.setAttribute('aria-label', 'Model');
         this.agentModelSelect.style.display = 'none';
         this.agentModelSelect.addEventListener('change', async () => {
             const configId = this.agentModelSelect.dataset.configId || '';
@@ -853,10 +866,16 @@ class EditorManager {
             if (!configId || !valueId) return;
             await this.setActiveAgentConfigOption(configId, valueId);
         });
+        this.agentModelSelectShell = this.buildAgentCompactSelectShell(
+            this.agentModelSelect,
+            MODEL_SELECT_ICON_SVG,
+            'Model'
+        );
 
         this.agentThoughtSelect = document.createElement('select');
         this.agentThoughtSelect.className = 'agent-panel-mode-select';
         this.agentThoughtSelect.dataset.selectorRole = 'thought_level';
+        this.agentThoughtSelect.setAttribute('aria-label', 'Thought depth');
         this.agentThoughtSelect.style.display = 'none';
         this.agentThoughtSelect.addEventListener('change', async () => {
             const configId = this.agentThoughtSelect.dataset.configId || '';
@@ -864,6 +883,11 @@ class EditorManager {
             if (!configId || !valueId) return;
             await this.setActiveAgentConfigOption(configId, valueId);
         });
+        this.agentThoughtSelectShell = this.buildAgentCompactSelectShell(
+            this.agentThoughtSelect,
+            THOUGHT_SELECT_ICON_SVG,
+            'Thought depth'
+        );
 
         this.agentNewChatButton = document.createElement('button');
         this.agentNewChatButton.type = 'button';
@@ -1142,9 +1166,9 @@ class EditorManager {
         });
 
         this.agentFixedActions.appendChild(this.agentScrollBottomButton);
-        this.agentFixedActions.appendChild(this.agentModelSelect);
-        this.agentFixedActions.appendChild(this.agentThoughtSelect);
-        this.agentFixedActions.appendChild(this.agentModeSelect);
+        this.agentFixedActions.appendChild(this.agentModelSelectShell);
+        this.agentFixedActions.appendChild(this.agentThoughtSelectShell);
+        this.agentFixedActions.appendChild(this.agentModeSelectShell);
         this.agentFixedActions.appendChild(this.agentSetupButton);
         this.agentFixedActions.appendChild(this.agentAttachmentButton);
         this.agentFixedActions.appendChild(this.agentSendButton);
@@ -1204,6 +1228,23 @@ class EditorManager {
         this.agentContainer.appendChild(this.agentQueue);
         this.agentContainer.appendChild(composer);
         this.contentContainer.appendChild(this.agentContainer);
+    }
+
+    buildAgentCompactSelectShell(selectEl, iconSvg, label) {
+        const shell = document.createElement('div');
+        shell.className = 'agent-panel-select-shell';
+        shell.dataset.selectorRole = selectEl?.dataset?.selectorRole || '';
+        shell.style.display = selectEl?.style?.display === 'none' ? 'none' : '';
+
+        const icon = document.createElement('span');
+        icon.className = 'agent-panel-select-shell-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = iconSvg;
+
+        shell.appendChild(icon);
+        shell.appendChild(selectEl);
+        shell.title = label;
+        return shell;
     }
 
     getActiveWorkspaceTabKey(session = this.currentSession) {
@@ -5933,15 +5974,27 @@ function getAgentConfigOptionByCategory(agentTab, category) {
 
 function updateAgentConfigSelect(selectEl, option) {
     if (!selectEl) return;
+    const shell = selectEl.closest('.agent-panel-select-shell');
+    const label = selectEl.getAttribute('aria-label') || 'Option';
     selectEl.innerHTML = '';
     selectEl.dataset.configId = '';
+    selectEl.title = label;
+    if (shell) {
+        shell.title = label;
+    }
     if (!option) {
         selectEl.style.display = 'none';
+        if (shell) {
+            shell.style.display = 'none';
+        }
         return;
     }
     const normalizedOptions = normalizeAgentConfigOptionOptions(option.options);
     if (normalizedOptions.length <= 1) {
         selectEl.style.display = 'none';
+        if (shell) {
+            shell.style.display = 'none';
+        }
         return;
     }
     const groups = new Map();
@@ -5972,6 +6025,19 @@ function updateAgentConfigSelect(selectEl, option) {
     }
     selectEl.dataset.configId = option.id;
     selectEl.style.display = '';
+    if (shell) {
+        shell.style.display = '';
+    }
+    const selected = normalizedOptions.find((item) => (
+        item.value === option.currentValue
+    )) || normalizedOptions[0] || null;
+    if (selected?.name) {
+        const title = `${label}: ${selected.name}`;
+        selectEl.title = title;
+        if (shell) {
+            shell.title = title;
+        }
+    }
 }
 
 function normalizeAgentCommands(commands) {

@@ -1999,6 +1999,62 @@ kbd {
     -webkit-appearance: none;
 }
 
+.agent-panel-select-shell {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.agent-panel-select-shell-icon {
+    display: none;
+}
+
+@media (max-width: 1100px) {
+    .agent-panel-select-shell[data-selector-role="mode"],
+    .agent-panel-select-shell[data-selector-role="model"],
+    .agent-panel-select-shell[data-selector-role="thought_level"] {
+        width: 36px;
+        height: 36px;
+        justify-content: center;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background-color: rgba(7, 54, 66, 0.45);
+        overflow: hidden;
+    }
+
+    .agent-panel-select-shell[data-selector-role="mode"]
+        .agent-panel-select-shell-icon,
+    .agent-panel-select-shell[data-selector-role="model"]
+        .agent-panel-select-shell-icon,
+    .agent-panel-select-shell[data-selector-role="thought_level"]
+        .agent-panel-select-shell-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-highlight);
+        pointer-events: none;
+    }
+
+    .agent-panel-select-shell[data-selector-role="mode"]
+        .agent-panel-mode-select,
+    .agent-panel-select-shell[data-selector-role="model"]
+        .agent-panel-mode-select,
+    .agent-panel-select-shell[data-selector-role="thought_level"]
+        .agent-panel-mode-select {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        background-image: none;
+        opacity: 0;
+    }
+}
+
 .agent-panel-tools,
 .agent-panel-permissions {
     display: flex;
