@@ -631,6 +631,10 @@ body {
     opacity: 1;
 }
 
+.tab-item.agent-open .toggle-editor-btn {
+    opacity: 1;
+}
+
 .tab-item.active {
     border-color: var(--accent-color);
     background-color: rgba(38, 139, 210, 0.15);
@@ -3120,6 +3124,7 @@ kbd {
     border-radius: 10px;
     background-color: rgba(0, 43, 54, 0.96);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    scroll-padding-block: 6px;
 }
 
 .agent-dropdown-item:disabled,
@@ -3140,6 +3145,15 @@ kbd {
     text-align: left;
     width: 100%;
     padding-right: 38px;
+    scroll-margin-block: 6px;
+}
+
+.agent-dropdown-item:hover,
+.agent-dropdown-item:focus-visible,
+.agent-dropdown-item.is-active {
+    border-color: rgba(38, 139, 210, 0.42);
+    background-color: rgba(38, 139, 210, 0.2);
+    outline: none;
 }
 
 .agent-dropdown-label {
@@ -3337,6 +3351,10 @@ kbd {
     border-color: rgba(38, 139, 210, 0.8);
     box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.3);
     color: white;
+}
+
+.tab-item.agent-open .toggle-editor-btn {
+    opacity: 1;
 }
 
 /* Show on active tab (for mobile discoverability) */

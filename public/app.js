@@ -3611,12 +3611,98 @@ const editorManager = new EditorManager();
 const agentDropdownEl = document.createElement('div');
 agentDropdownEl.className = 'agent-dropdown';
 agentDropdownEl.style.display = 'none';
+agentDropdownEl.setAttribute('role', 'listbox');
 document.body.appendChild(agentDropdownEl);
 
 function closeAgentDropdown() {
     agentDropdownEl.style.display = 'none';
     agentDropdownEl.dataset.sessionKey = '';
+    agentDropdownEl.dataset.activeIndex = '-1';
     agentDropdownEl.innerHTML = '';
+}
+
+function getAgentDropdownItems() {
+    return Array.from(
+        agentDropdownEl.querySelectorAll('.agent-dropdown-item')
+    );
+}
+
+function getAgentDropdownActiveIndex() {
+    const parsed = Number.parseInt(
+        agentDropdownEl.dataset.activeIndex || '-1',
+        10
+    );
+    return Number.isFinite(parsed) ? parsed : -1;
+}
+
+function setAgentDropdownActiveIndex(index, options = {}) {
+    const items = getAgentDropdownItems();
+    if (!items.length) {
+        agentDropdownEl.dataset.activeIndex = '-1';
+        return;
+    }
+    const { scroll = true } = options;
+    const nextIndex = Math.max(0, Math.min(index, items.length - 1));
+    agentDropdownEl.dataset.activeIndex = String(nextIndex);
+    items.forEach((item, itemIndex) => {
+        const isActive = itemIndex === nextIndex;
+        item.classList.toggle('is-active', isActive);
+        item.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        if (isActive && scroll) {
+            item.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function moveAgentDropdownActiveIndex(delta) {
+    const items = getAgentDropdownItems();
+    if (!items.length) return;
+    const currentIndex = getAgentDropdownActiveIndex();
+    const nextIndex = currentIndex < 0
+        ? 0
+        : (currentIndex + delta + items.length) % items.length;
+    setAgentDropdownActiveIndex(nextIndex);
+}
+
+function triggerActiveAgentDropdownItem() {
+    const items = getAgentDropdownItems();
+    if (!items.length) return;
+    const activeIndex = getAgentDropdownActiveIndex();
+    const target = items[Math.max(0, activeIndex)];
+    if (target) target.click();
+}
+
+function getSessionAgentToggleButton(session) {
+    if (!session) return null;
+    const escapedKey = typeof CSS !== 'undefined' && CSS.escape
+        ? CSS.escape(session.key)
+        : session.key;
+    return tabListEl?.querySelector(
+        `.tab-item[data-session-key="${escapedKey}"] .toggle-agent-btn`
+    ) || null;
+}
+
+async function toggleAgentDropdownForSession(session, anchor) {
+    if (!session || !anchor) return;
+    if (
+        agentDropdownEl.style.display !== 'none'
+        && agentDropdownEl.dataset.sessionKey === session.key
+    ) {
+        closeAgentDropdown();
+        return;
+    }
+    if (!session.server.agentStateLoaded) {
+        try {
+            await syncAgentsForServer(session.server, { force: true });
+        } catch (error) {
+            alert(error.message, {
+                type: 'error',
+                title: 'Agent'
+            });
+            return;
+        }
+    }
+    openAgentDropdown(session, anchor);
 }
 
 function updateAgentDefinitions(serverId, definitions) {
@@ -3976,13 +4062,15 @@ function openAgentDropdown(session, anchor) {
     );
     agentDropdownEl.innerHTML = '';
 
-    for (const definition of definitions) {
+    definitions.forEach((definition, definitionIndex) => {
         const entry = document.createElement('div');
         entry.className = 'agent-dropdown-entry';
 
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'agent-dropdown-item';
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', 'false');
         if (definition.available === false) {
             button.classList.add('unavailable');
             button.setAttribute('aria-disabled', 'true');
@@ -4035,6 +4123,11 @@ function openAgentDropdown(session, anchor) {
                 button.disabled = definition.available === false;
             }
         };
+        button.addEventListener('mouseenter', () => {
+            setAgentDropdownActiveIndex(definitionIndex, {
+                scroll: false
+            });
+        });
         entry.appendChild(button);
 
         if (definition.websiteUrl) {
@@ -4059,7 +4152,7 @@ function openAgentDropdown(session, anchor) {
         }
 
         agentDropdownEl.appendChild(entry);
-    }
+    });
 
     if (definitions.length === 0) {
         const empty = document.createElement('div');
@@ -4091,6 +4184,7 @@ function openAgentDropdown(session, anchor) {
     agentDropdownEl.style.display = 'flex';
     agentDropdownEl.style.top = `${rect.bottom + window.scrollY + 6}px`;
     agentDropdownEl.style.left = `${rect.left + window.scrollX}px`;
+    setAgentDropdownActiveIndex(0, { scroll: false });
 }
 
 document.addEventListener('click', (event) => {
@@ -9845,25 +9939,7 @@ function createTabElement(session) {
     agentBtn.title = 'Open Agent';
     agentBtn.onclick = async (e) => {
         e.stopPropagation();
-        if (
-            agentDropdownEl.style.display !== 'none'
-            && agentDropdownEl.dataset.sessionKey === session.key
-        ) {
-            closeAgentDropdown();
-            return;
-        }
-        if (!session.server.agentStateLoaded) {
-            try {
-                await syncAgentsForServer(session.server, { force: true });
-            } catch (error) {
-                alert(error.message, {
-                    type: 'error',
-                    title: 'Agent'
-                });
-                return;
-            }
-        }
-        openAgentDropdown(session, agentBtn);
+        await toggleAgentDropdownForSession(session, agentBtn);
     };
     tab.appendChild(agentBtn);
     
@@ -11118,6 +11194,35 @@ document.addEventListener('keydown', (e) => {
         return;
     }
 
+    const agentDropdownOpen = agentDropdownEl.style.display !== 'none';
+    if (
+        agentDropdownOpen
+        && !e.ctrlKey
+        && !e.metaKey
+        && !e.altKey
+    ) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeAgentDropdown();
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            moveAgentDropdownActiveIndex(1);
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            moveAgentDropdownActiveIndex(-1);
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            triggerActiveAgentDropdownItem();
+            return;
+        }
+    }
+
     const activeAgentTab = getActiveAgentTab();
     const blockingOverlayOpen = !!(
         (searchBar && searchBar.style.display === 'flex')
@@ -11183,6 +11288,15 @@ document.addEventListener('keydown', (e) => {
             if (editorManager && state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
                 editorManager.toggle(state.sessions.get(state.activeSessionKey));
             }
+            return;
+        }
+
+        // Ctrl + Shift + A: Open Agent Menu
+        if (key === 'a') {
+            e.preventDefault();
+            const session = getActiveSession();
+            const anchor = getSessionAgentToggleButton(session);
+            void toggleAgentDropdownForSession(session, anchor);
             return;
         }
 

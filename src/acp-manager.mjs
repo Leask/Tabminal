@@ -3292,7 +3292,6 @@ export class AcpManager {
                 this.#clearDefinitionAvailabilityOverride(definition.id);
             } catch (error) {
                 changed = true;
-                this.#recordDefinitionStartupFailure(definition, error);
                 console.warn(
                     `[ACP] Failed to restore agent tab ${meta.id}:`,
                     error?.message || error
