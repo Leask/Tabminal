@@ -1755,6 +1755,7 @@ class EditorManager {
             label.textContent = 'Terminal';
 
             tab.onclick = () => this.activateTerminalTab();
+            bindSingleTapActivation(tab, () => this.activateTerminalTab());
             tab.appendChild(icon);
             tab.appendChild(label);
             this.tabsContainer.appendChild(tab);
@@ -1773,6 +1774,10 @@ class EditorManager {
             }
             
             const name = path.split('/').pop();
+            const icon = document.createElement('span');
+            icon.className = 'file-editor-tab-icon';
+            icon.innerHTML = this.getIcon(name, false, false);
+
             const span = document.createElement('span');
             span.textContent = name;
             
@@ -1785,7 +1790,11 @@ class EditorManager {
             };
             
             tab.onclick = () => this.activateFileTab(path);
+            bindSingleTapActivation(tab, () => this.activateFileTab(path), {
+                ignoreSelector: '.close-btn'
+            });
             
+            tab.appendChild(icon);
             tab.appendChild(span);
             tab.appendChild(closeBtn);
             this.tabsContainer.appendChild(tab);
@@ -1818,6 +1827,11 @@ class EditorManager {
             };
 
             tab.onclick = () => this.activateAgentTab(agentTab.key);
+            bindSingleTapActivation(tab, () => this.activateAgentTab(
+                agentTab.key
+            ), {
+                ignoreSelector: '.close-btn'
+            });
 
             tab.appendChild(icon);
             tab.appendChild(label);
@@ -3601,6 +3615,7 @@ document.body.appendChild(agentDropdownEl);
 
 function closeAgentDropdown() {
     agentDropdownEl.style.display = 'none';
+    agentDropdownEl.dataset.sessionKey = '';
     agentDropdownEl.innerHTML = '';
 }
 
@@ -4072,6 +4087,7 @@ function openAgentDropdown(session, anchor) {
     agentDropdownEl.appendChild(footer);
 
     const rect = anchor.getBoundingClientRect();
+    agentDropdownEl.dataset.sessionKey = session.key;
     agentDropdownEl.style.display = 'flex';
     agentDropdownEl.style.top = `${rect.bottom + window.scrollY + 6}px`;
     agentDropdownEl.style.left = `${rect.left + window.scrollX}px`;
@@ -4556,6 +4572,11 @@ class Session {
 
     handleExecutionMessage(message) {
         if (message.phase === 'started') {
+            if (isIgnoredTerminalExecutionCommand(message.command || '')) {
+                this.runningExecutionId = '';
+                this.runningCommand = '';
+                return;
+            }
             this.runningExecutionId = String(message.executionId || '');
             this.runningCommand = message.command || '';
             this.needsAttention = false;
@@ -4586,6 +4607,19 @@ class Session {
             || this.runningExecutionId
             || `${message.entry?.completedAt || ''}:${message.entry?.command || ''}`
         );
+        if (
+            isIgnoredTerminalExecutionCommand(message.entry?.command || '')
+        ) {
+            this.lastExecutionEntry = null;
+            this.runningExecutionId = '';
+            this.runningCommand = '';
+            this.needsAttention = false;
+            this.updateTabUI();
+            if (state.activeSessionKey === this.key) {
+                editorManager.renderEditorTabs();
+            }
+            return;
+        }
         this.lastExecutionEntry = message.entry || null;
         this.runningExecutionId = '';
         this.runningCommand = '';
@@ -6055,6 +6089,48 @@ function normalizeAgentCommands(commands) {
             };
         })
         .filter(Boolean);
+}
+
+function bindSingleTapActivation(element, onActivate, options = {}) {
+    if (!element || typeof onActivate !== 'function') {
+        return;
+    }
+    const ignoreSelector = options.ignoreSelector || '';
+    let touchStartY = 0;
+    let isScrolling = false;
+
+    element.addEventListener('touchstart', (event) => {
+        touchStartY = event.touches[0].clientY;
+        isScrolling = false;
+    }, { passive: true });
+
+    element.addEventListener('touchmove', (event) => {
+        if (Math.abs(event.touches[0].clientY - touchStartY) > 5) {
+            isScrolling = true;
+        }
+    }, { passive: true });
+
+    element.addEventListener('touchend', (event) => {
+        if (isScrolling) return;
+        if (ignoreSelector && event.target.closest(ignoreSelector)) {
+            return;
+        }
+        if (event.cancelable) {
+            event.preventDefault();
+        }
+        onActivate(event);
+    });
+}
+
+function isIgnoredTerminalExecutionCommand(command) {
+    return !!(
+        command
+        && (
+            command.includes('TABMINAL_SHELL_READY=1')
+            || command.includes('export PROMPT_COMMAND')
+            || command.includes('__bash_prompt')
+        )
+    );
 }
 
 function formatAgentAttachmentSize(size) {
@@ -9769,6 +9845,13 @@ function createTabElement(session) {
     agentBtn.title = 'Open Agent';
     agentBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (
+            agentDropdownEl.style.display !== 'none'
+            && agentDropdownEl.dataset.sessionKey === session.key
+        ) {
+            closeAgentDropdown();
+            return;
+        }
         if (!session.server.agentStateLoaded) {
             try {
                 await syncAgentsForServer(session.server, { force: true });

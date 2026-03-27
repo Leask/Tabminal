@@ -162,6 +162,26 @@ describe('TerminalSession', () => {
         assert.strictEqual(completed.entry.exitCode, 0);
     });
 
+    it('does not broadcast internal shell ready commands as executions', async () => {
+        session = new TerminalSession(pty);
+        const client = new MockSocket();
+        session.attach(client);
+        await client.waitForMessages(3);
+        client.sent = [];
+
+        pty.emitData(buildStartSequence('TABMINAL_SHELL_READY=1'));
+        pty.emitData(buildExitSequence(0, 'TABMINAL_SHELL_READY=1'));
+
+        const payloads = client.sent.map((raw) => JSON.parse(raw));
+        const executionPayloads = payloads.filter(
+            (payload) => payload.type === 'execution'
+        );
+
+        assert.deepStrictEqual(executionPayloads, []);
+        assert.ok(session.lastExecution);
+        assert.strictEqual(session.lastExecution.command, 'TABMINAL_SHELL_READY=1');
+    });
+
     it('broadcasts idle when a prompt arrives with a dangling execution', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();

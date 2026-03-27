@@ -1540,6 +1540,20 @@ kbd {
     color: var(--text-muted);
 }
 
+.file-editor-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.file-editor-tab-icon .file-icon {
+    width: 16px;
+    height: 16px;
+}
+
 .tab-status-icon.is-attention,
 .agent-editor-tab-icon.is-attention,
 .toggle-agent-btn.is-attention {
@@ -2010,7 +2024,7 @@ kbd {
     display: none;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1408px) {
     .agent-panel-select-shell[data-selector-role="mode"],
     .agent-panel-select-shell[data-selector-role="model"],
     .agent-panel-select-shell[data-selector-role="thought_level"] {

@@ -29,6 +29,13 @@ const IGNORED_COMMANDS = [
     'TABMINAL_SHELL_READY=1'
 ];
 
+function isIgnoredExecutionCommand(command) {
+    return !!(
+        command
+        && IGNORED_COMMANDS.some((ignored) => command.includes(ignored))
+    );
+}
+
 const PROMPT_PREFIX = "You are now operating as an AI terminal assistant. Your name is `Tabminal`. You will assist users in resolving terminal or coding issues and answering other inquiries. When troubleshooting terminal errors, you will be provided with the execution history to understand the context. However, please focus primarily on the most recent runtime errors and the user's latest questions. Keep your answers concise and accurate. Resolve the issue clearly and provide the reasoning while avoiding lengthy elaborations. Most user terminal variable keys are normal under typical circumstances and do not need to be treated as security risks.\n\n";
 
 async function loadHeadlessXtermPackages() {
@@ -132,6 +139,7 @@ export class TerminalSession {
         this.lastExecution = null;
         this.executionCounter = 0;
         this.currentExecutionId = '';
+        this.ignoreCurrentExecution = false;
         this.skipNextShellLog = false;
         this.skipNextShellLogResetTimer = null;
         this.partialSequenceBuffer = '';
@@ -791,14 +799,15 @@ export class TerminalSession {
     }
 
     _handlePromptMarker() {
-        if (this.currentExecutionId) {
+        if (this.currentExecutionId && !this.ignoreCurrentExecution) {
             this._broadcast({
                 type: 'execution',
                 phase: 'idle',
                 executionId: this.currentExecutionId
             });
-            this.currentExecutionId = '';
         }
+        this.currentExecutionId = '';
+        this.ignoreCurrentExecution = false;
         this.captureBuffer = '';
         this.captureStartedAt = null;
     }
@@ -807,6 +816,11 @@ export class TerminalSession {
         const command = this._decodeCommandSafe(cmdB64);
         const startedAt = new Date();
         this.captureStartedAt = startedAt;
+        this.ignoreCurrentExecution = isIgnoredExecutionCommand(command);
+        if (this.ignoreCurrentExecution) {
+            this.currentExecutionId = '';
+            return;
+        }
         this.executionCounter += 1;
         this.currentExecutionId = `exec-${this.executionCounter}`;
         this._broadcast({
@@ -831,6 +845,8 @@ export class TerminalSession {
         const command = this._decodeCommandSafe(cmdB64);
         const executionId = this.currentExecutionId
             || `exec-${++this.executionCounter}`;
+        const isIgnored = this.ignoreCurrentExecution
+            || isIgnoredExecutionCommand(command);
 
         const completedAt = new Date();
         const entry = this._postProcessExecutionEntry({
@@ -845,6 +861,12 @@ export class TerminalSession {
 
         this.lastExecution = entry;
         this.currentExecutionId = '';
+        this.ignoreCurrentExecution = false;
+        if (isIgnored) {
+            this.captureBuffer = '';
+            this.captureStartedAt = null;
+            return;
+        }
         this._logCommandExecution(entry);
         this.captureBuffer = '';
         this.captureStartedAt = null;
@@ -1162,7 +1184,7 @@ export class TerminalSession {
 
     _logCommandExecution(entry) {
         // Filter out internal shell integration commands
-        if (entry.command && IGNORED_COMMANDS.some(ignored => entry.command.includes(ignored))) {
+        if (isIgnoredExecutionCommand(entry.command)) {
             return;
         }
 
