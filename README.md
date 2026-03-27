@@ -11,6 +11,8 @@ experience.
 
 ![Tabminal Banner](public/favicon.svg)
 
+![IMG_0918](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
+
 ## What It Does
 
 - Persistent terminal sessions that survive refreshes, reconnects, and device
