@@ -3,7 +3,7 @@
 > `Tab(ter)minal`, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.
 
 `Tabminal` combines persistent server-side terminal sessions, a built-in
-workspace, multi-host access, and Agent Client Protocol (ACP) integrations in
+workspace, multi-host access, and [Agent Client Protocol (ACP)](https://agentclientprotocol.com/get-started/introduction) integrations in
 one UI. It is designed for people who want a real terminal, real files, and
 real agent tooling without being tied to a desktop-only client let you code from
 your desktop, tablet, or phone with an intelligent, persistent, and rich
