@@ -33,6 +33,14 @@ experience.
 <details>
 <summary>More screenshots</summary>
 
+<img width="2069" height="1177" alt="Screenshot 2026-03-26 at 5 34 05 PM" src="https://github.com/user-attachments/assets/dc189a40-2c3d-4ab7-86ae-e82ad4ec7e75" />
+
+<img width="2188" height="1691" alt="Screenshot 2026-03-26 at 2 40 39 PM" src="https://github.com/user-attachments/assets/ed2d624e-f39f-44e8-9564-d7a44bf67db3" />
+
+<img width="1409" height="1450" alt="Screenshot 2026-03-25 at 10 11 37 PM" src="https://github.com/user-attachments/assets/0a938c5e-c0c4-4878-8697-cab344f007a6" />
+
+<img width="1621" height="892" alt="Screenshot 2026-03-25 at 5 37 05 AM" src="https://github.com/user-attachments/assets/ff29facb-e207-49e2-9699-b87ec34baf8e" />
+
 ![Tabminal Screenshot](https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5)
 
 <img width="2016" height="1170" alt="Screenshot 2025-11-24 at 3 03 03 PM" src="https://github.com/user-attachments/assets/a74490be-fe97-41c6-9026-44bbf3be79f9" />
@@ -42,6 +50,8 @@ experience.
 <img width="1816" height="1186" alt="Screenshot 2025-11-24 at 3 01 46 PM" src="https://github.com/user-attachments/assets/509f7e99-1d70-46be-bc18-a202c0fe11a4" />
 
 <img width="1815" height="826" alt="Screenshot 2025-11-24 at 2 57 39 PM" src="https://github.com/user-attachments/assets/c503c236-dc38-470e-9a0d-6b824e0dd624" />
+
+<img width="759" height="162" alt="Screenshot 2026-03-26 at 5 28 17 PM" src="https://github.com/user-attachments/assets/b493a7bb-ba0c-4063-ad17-3c8ecc7e4f01" />
 
 </details>
 
