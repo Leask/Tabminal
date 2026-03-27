@@ -1,7 +1,7 @@
 {
   "name": "tabminal",
   "version": "3.0.1",
-  "description": "A modern, persistent web terminal with multi-tab support and real-time system monitoring.",
+  "description": "Tab(ter)minal, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.",
   "type": "module",
   "bin": {
     "tabminal": "./src/server.mjs"
