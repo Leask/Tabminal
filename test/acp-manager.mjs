@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -780,6 +783,55 @@ describe('AcpManager', () => {
 
         assert.equal(definition.available, true);
         assert.equal(definition.config.hasCopilotToken, true);
+    });
+
+    it('detects a standalone Copilot binary from HOME local bin', async () => {
+        const originalHome = process.env.HOME;
+        const originalPath = process.env.PATH;
+        const tmpHome = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-copilot-path-')
+        );
+        const localBin = path.join(tmpHome, '.local', 'bin');
+        const copilotPath = path.join(localBin, 'copilot');
+        await fs.mkdir(localBin, { recursive: true });
+        await fs.writeFile(copilotPath, '#!/bin/sh\nexit 0\n', 'utf8');
+        await fs.chmod(copilotPath, 0o755);
+
+        process.env.HOME = tmpHome;
+        process.env.PATH = '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) =>
+                new FakeRuntime(definition, options),
+            loadTabs: async () => [],
+            saveTabs: async () => {},
+            loadConfigs: async () => ({}),
+            saveConfigs: async () => {}
+        });
+
+        try {
+            const definitions = await manager.listDefinitions();
+            const builtIn = manager.definitions.find((item) => item.id === 'copilot');
+            const definition = definitions.find((item) => item.id === 'copilot');
+            assert.ok(builtIn);
+            assert.ok(definition);
+            assert.equal(builtIn.command, 'copilot');
+            assert.equal(definition.commandLabel, 'copilot --acp --stdio');
+            assert.equal(definition.available, true);
+        } finally {
+            await manager.dispose();
+            if (originalHome === undefined) {
+                delete process.env.HOME;
+            } else {
+                process.env.HOME = originalHome;
+            }
+            if (originalPath === undefined) {
+                delete process.env.PATH;
+            } else {
+                process.env.PATH = originalPath;
+            }
+            await fs.rm(tmpHome, { recursive: true, force: true });
+        }
     });
 
     it('marks Codex unavailable when auth probe fails', async () => {

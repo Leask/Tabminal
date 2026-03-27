@@ -135,7 +135,7 @@ function getAvailabilityCacheScopeKey(runtimeEnv = {}) {
 }
 
 function probeCodexAuth(runtimeEnv = {}) {
-    if (!commandExists('codex')) {
+    if (!commandExists('codex', runtimeEnv)) {
         return { available: true, reason: '' };
     }
 
@@ -148,7 +148,7 @@ function probeCodexAuth(runtimeEnv = {}) {
     const result = spawnSync('codex', ['login', 'status'], {
         encoding: 'utf8',
         timeout: 1500,
-        env: runtimeEnv
+        env: withAgentPath(runtimeEnv)
     });
     if (result.status === 0) {
         return setCachedProbeValue(cacheKey, {
@@ -183,7 +183,7 @@ function probeGhAuth(runtimeEnv = {}) {
     if (explicitToken) {
         return { available: true, reason: '' };
     }
-    if (!commandExists('gh')) {
+    if (!commandExists('gh', runtimeEnv)) {
         return {
             available: false,
             reason: 'Run `gh auth login` or set `COPILOT_GITHUB_TOKEN`'
@@ -199,7 +199,7 @@ function probeGhAuth(runtimeEnv = {}) {
     const result = spawnSync('gh', ['auth', 'status'], {
         encoding: 'utf8',
         timeout: 1500,
-        env: runtimeEnv
+        env: withAgentPath(runtimeEnv)
     });
     if (result.status === 0) {
         return setCachedProbeValue(cacheKey, {
@@ -241,7 +241,8 @@ function hasGhCopilotCliInstalled() {
         return ghCopilotCliInstalledCache;
     }
     const result = spawnSync('gh', ['copilot', '--', '--version'], {
-        encoding: 'utf8'
+        encoding: 'utf8',
+        env: withAgentPath(process.env)
     });
     ghCopilotCliInstalledCache = result.status === 0;
     return ghCopilotCliInstalledCache;
@@ -256,7 +257,8 @@ function readGhAuthToken() {
         return ghAuthTokenCache;
     }
     const result = spawnSync('gh', ['auth', 'token'], {
-        encoding: 'utf8'
+        encoding: 'utf8',
+        env: withAgentPath(process.env)
     });
     ghAuthTokenCache = result.status === 0
         ? String(result.stdout || '').trim()
@@ -264,11 +266,50 @@ function readGhAuthToken() {
     return ghAuthTokenCache;
 }
 
+function buildAugmentedPath(env = {}) {
+    const delimiter = path.delimiter;
+    const home = String(
+        env.HOME
+        || process.env.HOME
+        || ''
+    ).trim();
+    const existingEntries = String(
+        env.PATH
+        || process.env.PATH
+        || ''
+    )
+        .split(delimiter)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    const extraEntries = [
+        home ? path.join(home, '.local', 'bin') : '',
+        home ? path.join(home, 'bin') : '',
+        '/opt/homebrew/bin',
+        '/opt/homebrew/sbin',
+        '/usr/local/bin'
+    ].filter(Boolean);
+    const seen = new Set();
+    return [...existingEntries, ...extraEntries]
+        .filter((entry) => {
+            if (seen.has(entry)) return false;
+            seen.add(entry);
+            return true;
+        })
+        .join(delimiter);
+}
+
+function withAgentPath(env = {}) {
+    return {
+        ...env,
+        PATH: buildAugmentedPath(env)
+    };
+}
+
 function mergeDefinitionEnv(definition, agentConfig = {}) {
-    const env = {
+    const env = withAgentPath({
         ...process.env,
         ...normalizeConfiguredEnv(definition.id, agentConfig.env)
-    };
+    });
     if (definition.id === 'copilot') {
         const hasToken = Boolean(
             env.COPILOT_GITHUB_TOKEN
@@ -288,17 +329,19 @@ function mergeDefinitionEnv(definition, agentConfig = {}) {
 function hasGhCopilotWrapper() {
     if (!commandExists('gh')) return false;
     const result = spawnSync('gh', ['extension', 'list'], {
-        encoding: 'utf8'
+        encoding: 'utf8',
+        env: withAgentPath(process.env)
     });
     return result.status === 0
         && typeof result.stdout === 'string'
         && result.stdout.includes('gh-copilot');
 }
 
-function commandExists(command) {
+function commandExists(command, env = process.env) {
     const checker = process.platform === 'win32' ? 'where' : 'which';
     const result = spawnSync(checker, [command], {
-        stdio: 'ignore'
+        stdio: 'ignore',
+        env: withAgentPath(env)
     });
     return result.status === 0;
 }
@@ -433,14 +476,13 @@ function getDefinitionAvailability(
     probes = DEFAULT_AVAILABILITY_PROBES
 ) {
     const commandExistsFn = probes.commandExists || commandExists;
-    if (!commandExistsFn(definition.command)) {
+    const runtimeEnv = mergeDefinitionEnv(definition, agentConfig);
+    if (!commandExistsFn(definition.command, runtimeEnv)) {
         return {
             available: false,
             reason: 'not installed'
         };
     }
-
-    const runtimeEnv = mergeDefinitionEnv(definition, agentConfig);
 
     if (definition.id === 'gemini') {
         const hasApiKey = Boolean(
