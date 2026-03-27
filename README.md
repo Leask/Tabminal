@@ -1,169 +1,302 @@
 # `t>` Tabminal
 
-> **Tab(ter)minal, the Cloud-Native, Proactive AI Integrated Terminal works in modern browsers.**
-> Seamlessly code from your desktop, tablet, or phone with an intelligent, persistent, and rich experience.
-> This project was built using Gemini and Codex wich 80% vibe-coding, means `built for the vibe, with the vibe`.
+> **Tab(ter)minal, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.
+
+`Tabminal` combines persistent server-side terminal sessions, a built-in
+workspace, multi-host access, and Agent Client Protocol (ACP) integrations in
+one UI. It is designed for people who want a real terminal, real files, and
+real agent tooling without being tied to a desktop-only client let you code from
+your desktop, tablet, or phone with an intelligent, persistent, and rich
+experience.
 
 ![Tabminal Banner](public/favicon.svg)
 
-## 🌟 Why `t> Tabminal`?
+## What It Does
 
-`t> Tabminal` bridges the gap between traditional CLI tools and modern AI capabilities, all while solving the UX challenges of coding on desktop and mobile devices.
+- Persistent terminal sessions that survive refreshes, reconnects, and device
+  switches.
+- Built-in workspace tabs for files, images, agents, and pinned terminals.
+- ACP agent support with managed terminals, live tool calls, diffs, code
+  viewers, permission requests, plans, and usage HUDs.
+- Multi-host cluster support from a single UI, with per-host auth and heartbeat
+  state.
+- Browser-first mobile and tablet UX, including compact workspace mode and PWA
+  install support.
+- Terminal-native AI assistance for shell history and auto-fix flows when
+  OpenAI or OpenRouter is configured.
 
-![IMG_0918](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
-
-As a long-time terminal user who frequently needs to step away from my computer while maintaining my workflow, and considering the various scalability issues of traditional terminals alongside the irreversible trend of vibe-coding, I reconsidered a solution that would first serve my own needs. Then, it would serve others whose workflows happen to be similar to mine. So, while waiting for AI to write code for the company, I tried to vibe a terminal from scratch that could meet my daily work needs and that I would enjoy using. As a result, I intermittently wrote this project. I believe this project is not for everyone. However, it is especially suitable for CLI and AI enthusiasts, which is the core motivation behind this project's creation.
-
-## ✨ Innovative Designs
-
-- `Server-side session persistence` ensures your sessions with the AI agent are maintained, allowing you to pick up where you left off at any time.
-- `Fast and stable connection management` delivers a seamless, agile experience across platforms and devices, with native support for network roaming.
-- Enjoy a comprehensive `Progressive Web App (PWA) experience` anytime, anywhere; all you need is a modern browser to start working.
-- `Proactive AI integration` means your terminal becomes your work context. You can ask questions about your current session at any time, and the AI will automatically retrieve the context to accurately solve problems, even proactively offering assistance when commands fail.
-- `Cloud-native design` enables access via Zero Trust or VPN, providing unprecedented convenience for managing cloud servers.
-
-<img width="1689" height="1386" alt="Screenshot 2026-02-10 at 1 10 01 AM" src="https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5" />
+![Tabminal Screenshot](https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5)
 
 <details>
+<summary>More screenshots</summary>
 
-<summary>📷 More screenshots</summary>
+<img width="2016" height="1170" alt="Screenshot 2025-11-24 at 3 03 03 PM" src="https://github.com/user-attachments/assets/a74490be-fe97-41c6-9026-44bbf3be79f9" />
 
-<img width="2016" height="1170" alt="Screenshot 2025-11-24 at 3 03 03 PM" src="https://github.com/user-attachments/assets/a74490be-fe97-41c6-9026-44bbf3be79f9" />
+<img width="2012" height="1439" alt="Screenshot 2025-11-24 at 3 02 12 PM" src="https://github.com/user-attachments/assets/80fed651-48ce-482a-80a3-03d9dd2767b0" />
 
-<img width="2012" height="1439" alt="Screenshot 2025-11-24 at 3 02 12 PM" src="https://github.com/user-attachments/assets/80fed651-48ce-482a-80a3-03d9dd2767b0" />
+<img width="1816" height="1186" alt="Screenshot 2025-11-24 at 3 01 46 PM" src="https://github.com/user-attachments/assets/509f7e99-1d70-46be-bc18-a202c0fe11a4" />
 
-<img width="1816" height="1186" alt="Screenshot 2025-11-24 at 3 01 46 PM" src="https://github.com/user-attachments/assets/509f7e99-1d70-46be-bc18-a202c0fe11a4" />
-
-<img width="1815" height="826" alt="Screenshot 2025-11-24 at 2 57 39 PM" src="https://github.com/user-attachments/assets/c503c236-dc38-470e-9a0d-6b824e0dd624" />
+<img width="1815" height="826" alt="Screenshot 2025-11-24 at 2 57 39 PM" src="https://github.com/user-attachments/assets/c503c236-dc38-470e-9a0d-6b824e0dd624" />
 
 </details>
 
-### 🧠 AI-Native Intelligence
-Powered by **modern AI models** (via OpenRouter or OpenAI), `t> Tabminal` understands your context.
-*(Defaults to **Gemini 3 Flash** for OpenRouter or **GPT-5.4** for OpenAI if not configured)*
-*   **Context-Aware Chat**: Type `# how do I...` to ask questions. The AI knows your **CWD**, **Environment**, and **Recent History**.
-*   **Auto-Fix**: Command failed? `t> Tabminal` automatically analyzes the exit code and error output to suggest fixes. No copy-pasting required.
-*   **Web Search**: Enable Google Search integration to let the AI fetch real-time answers from the web.
-*   **Provider Risk Notice**: AI features may send terminal context to your selected model provider. You are responsible for choosing trusted providers/models and acceptable data boundaries.
+## Current Highlights
 
-### 📱 Ultimate Mobile Experience
-Built from the ground up for **iPadOS**, **iOS** and **Android**.
-*   **HHKB Virtual Keyboard**: You can perform nearly all terminal operations on any device, without being frustrated by os limitations.
-*   **Responsive Layout**: Auto-adapts to landscape/portrait modes, respecting Safe Areas and Notches.
-*   **PWA Ready**: Install to Home Screen for a full-screen, native app feel.
+### ACP Agent Workspace
 
-Native app work now lives under:
+Tabminal now has a full ACP agent surface, not just an AI chat box.
 
-- `apps/Apple`: Apple-platform native client
-- `apps/ghostty-vendor`: Ghostty xcframework vendor/build tooling
+- Agent tabs live beside files and terminal tabs in the same workspace bar.
+- Tool calls can render live terminal output, diffs, code/resource payloads,
+  and file paths inline.
+- `Jump in` moves you into the managed terminal session while it is still
+  running.
+- Agent plans, running-terminal summaries, slash-command menus, permissions,
+  and usage data are first-class UI elements.
+- The agent composer supports provider-defined slash commands and keyboard
+  navigation.
+- Agent state restores across refreshes, including transcript history and
+  managed terminal relationships.
 
-### 💻 Powerful Desktop Features
-*   **Persistent Sessions**: Your terminal state lives on the server. Refresh or switch devices without losing your work.
-*   **Built-in Editor**: Integrated **Monaco Editor** (VS Code core) allows you to edit files directly on the server.
-*   **Visual File Manager**: Sidebar file tree for easy navigation.
-*   **Network Heartbeat**: Real-time latency visualization.
-*   **Cluster Host Registry**: Multi-host entries are stored on the main server at `~/.tabminal/cluster.json` (including per-host auth hash). Entries that resolve to the current node are ignored at runtime to avoid self-loop duplicates. Non-main host tokens are restored from this server-side registry; main-host auth stays in browser local storage.
+Built-in agent definitions currently include:
 
-### 🌐 Multi-Server Support
-`t> Tabminal` can manage multiple backend nodes from one UI.
-*   Register hosts from the sidebar using `+ Add Host`.
-*   Open sessions on a specific host with `New Tab @ Host`.
-*   Each host maintains its own heartbeat, session list, and file/editor state.
-*   Authentication is host-scoped: the main host controls page login, while sub-host login state is shown per-host in the sidebar.
-*   Host registry is saved on the main host at `~/.tabminal/cluster.json`, so added hosts can be restored after refresh and across browsers/devices.
+- Gemini CLI
+- Codex CLI
+- Claude Agent
+- GitHub Copilot CLI
+- ACP Test Agent (`TABMINAL_ENABLE_TEST_AGENT=1`)
 
-## 🚀 Getting Started
+Each definition is detected per host. Availability depends on the runtime
+environment of that host and any required local auth or API keys.
 
-### Prerequisites
-*   Node.js >= 22
-*   (Optional) An [OpenRouter](https://openrouter.ai/) API Key or [OpenAI](https://openai.com/) API Key for AI features.
-*   (Optional) A pair of Google API Key and Search Engine ID (CX) for web search capabilities.
+### Terminal-Native AI Assistant
 
-### ⚠️ Security Warning
-`t> Tabminal` provides **full read/write access** to the underlying file system.
-*   **Do NOT expose this to the public internet** without proper protection (VPN, etc).
-*   If AI features are enabled, terminal history/environment/context may be sent to your configured model provider. You are responsible for this risk and provider selection.
-*   The `--accept-terms` flag is required to acknowledge that you understand these risks.
+Tabminal still includes the original terminal-native assistant path.
 
+- Prefix a shell prompt with `#` to ask the built-in assistant about your
+  current terminal context.
+- Failed commands can trigger an automatic AI follow-up using recent history and
+  error output.
+- This path uses your configured OpenAI or OpenRouter key and is separate from
+  ACP agent integrations.
 
-### Quick Start (npx)
+### Multi-Host Cluster
+
+One UI can manage multiple Tabminal backends.
+
+- Add hosts from the sidebar.
+- Open sessions on any connected host.
+- Auth is host-scoped.
+- The main host controls the global login modal.
+- Sub-host auth failures stay local to that host.
+- Host registry is persisted on the main host and restored after refresh.
+
+### Built-In Workspace
+
+- Monaco-based file editor
+- File tree and image preview
+- Terminal, file, and agent tabs in one shared workspace bar
+- Managed terminal previews in the sidebar
+- Restore-aware terminal pinning and workspace switching
+
+### Mobile and Tablet UX
+
+- PWA install support
+- Safe-area aware responsive layout
+- Compact workspace mode for small or short screens
+- Touch-friendly controls and virtual keyboard support
+- Small-screen agent config controls collapse into icon-only selectors to keep
+  the composer usable on tablets and phones
+
+## Getting Started
+
+### Requirements
+
+- Node.js `>= 22`
+- A secure environment. Tabminal is a high-privilege app by design.
+- Optional provider credentials:
+  - OpenAI or OpenRouter for the built-in terminal-native assistant
+  - Google Search API key and CX for web search augmentation
+  - Local CLI/auth for ACP agents such as Codex, Gemini, Claude, or Copilot
+
+### Security Warning
+
+Tabminal provides direct read/write access to the host file system and can run
+commands on that host.
+
+- Do not expose it directly to the public internet.
+- Use a VPN, Tailscale, or a Zero Trust layer such as Cloudflare Access.
+- If AI features are enabled, terminal history, paths, env hints, or recent
+  command context may be sent to your configured provider.
+- `--accept-terms` is required to start the server.
+
+### Quick Start
+
+Terminal only:
 
 ```bash
-npx tabminal --openrouter-key "YOUR_API_KEY" --accept-terms
-# Or use OpenAI:
+npx tabminal --accept-terms
+```
+
+With OpenAI:
+
+```bash
 npx tabminal --openai-key "YOUR_API_KEY" --accept-terms
 ```
 
-### Quick Start (Docker)
+With OpenRouter:
+
+```bash
+npx tabminal --openrouter-key "YOUR_API_KEY" --accept-terms
+```
+
+### Docker
 
 ```bash
 docker run --rm -it -p 9846:9846 \
   leask/tabminal \
-  --openrouter-key "YOUR_API_KEY" \
   --accept-terms
 ```
 
-### Installation
+With AI enabled:
 
 ```bash
-# Clone the repository
-git clone https://github.com/leask/tabminal.git
-cd tabminal
-
-# Install dependencies
-npm install
-
-# Start the server
-npm start -- --openrouter-key "YOUR_API_KEY" --accept-terms
+docker run --rm -it -p 9846:9846 \
+  leask/tabminal \
+  --openai-key "YOUR_API_KEY" \
+  --accept-terms
 ```
 
-### Configuration
+### Local Development
 
-You can configure `t> Tabminal` via command-line arguments, environment variables, or a `config.json` file.
+```bash
+git clone https://github.com/leask/tabminal.git
+cd tabminal
+npm install
+npm start -- --accept-terms
+```
+
+## Configuration
+
+Configuration precedence is:
+
+1. built-in defaults
+2. `~/.tabminal/config.json`
+3. `./config.json`
+4. CLI flags
+5. environment variables
+
+If no password is provided, Tabminal generates a temporary password at startup
+and prints it to the terminal.
+
+### CLI Flags and Environment Variables
 
 | Argument | Env Variable | Description | Default |
 | :--- | :--- | :--- | :--- |
 | `-p`, `--port` | `TABMINAL_PORT` | Server port | `9846` |
 | `-h`, `--host` | `TABMINAL_HOST` | Bind address | `127.0.0.1` |
-| `-a`, `--password` | `TABMINAL_PASSWORD` | Access password | (Randomly Generated) |
-| `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | OpenRouter API Key (Mutually exclusive with OpenAI) | `null` |
-| `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API Key (Mutually exclusive with OpenRouter) | `null` |
-| `-u`, `--openai-api` | `TABMINAL_OPENAI_API` | OpenAI Base API URL (Optional) | `null` |
-| `-m`, `--model` | `TABMINAL_MODEL` | AI Model ID | `gpt-5.4` (OpenAI) / `gemini-3-flash-preview` (OpenRouter) |
-| `-f`, `--cloudflare-key` | `TABMINAL_CLOUDFLARE_KEY` | Cloudflare Tunnel Token | `null` |
-| `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API Key | `null` |
-| `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID (CX) | `null` |
+| `-a`, `--password` | `TABMINAL_PASSWORD` | Access password | generated at startup |
+| `-s`, `--shell` | `TABMINAL_SHELL` | Default shell executable | system default |
+| `-k`, `--openrouter-key` | `TABMINAL_OPENROUTER_KEY` | OpenRouter API key | `null` |
+| `-o`, `--openai-key` | `TABMINAL_OPENAI_KEY` | OpenAI API key | `null` |
+| `-u`, `--openai-api` | `TABMINAL_OPENAI_API` | OpenAI-compatible base URL | `null` |
+| `-m`, `--model` | `TABMINAL_MODEL` | Built-in assistant model ID | `gpt-5.2` with OpenAI, `gemini-3-flash-preview` with OpenRouter |
+| `-f`, `--cloudflare-key` | `TABMINAL_CLOUDFLARE_KEY` | Cloudflare Tunnel token | `null` |
+| `-g`, `--google-key` | `TABMINAL_GOOGLE_KEY` | Google Search API key | `null` |
+| `-c`, `--google-cx` | `TABMINAL_GOOGLE_CX` | Google Search Engine ID | `null` |
 | `-d`, `--debug` | `TABMINAL_DEBUG` | Enable debug logs | `false` |
-| `--heartbeat` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval (ms, minimum `1000`) | `10000` |
-| `--history` | `TABMINAL_HISTORY` | Terminal history limit (characters) | `1048576` |
-| `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | **Required**: Accept security risks (Full FS Access) | `false` |
+| `--heartbeat` | `TABMINAL_HEARTBEAT` | WebSocket heartbeat interval in ms, minimum `1000` | `10000` |
+| `--history` | `TABMINAL_HISTORY` | Terminal history limit in characters | `1048576` |
+| `-y`, `--accept-terms` | `TABMINAL_ACCEPT` / `TABMINAL_ACCEPT_TERMS` | Required risk acknowledgement | `false` |
 
-`config.json` also supports:
-- `heartbeatInterval` or `heartbeat-interval`
-- `historyLimit` or `history-limit`
+Notes:
 
-## ⌨️ Shortcuts & Gestures
+- `--openrouter-key` and `--openai-key` are mutually exclusive.
+- `config.json` also supports `heartbeatInterval` / `heartbeat-interval` and
+  `historyLimit` / `history-limit`.
 
-*   **`Ctrl + Shift + T`**: New Terminal
-*   **`Ctrl + Shift + W`**: Close Terminal
-*   **`Ctrl + Shift + E`**: Toggle Editor Pane
-*   **`Ctrl + Up` / `Down`**: Focus Editor / Terminal
-*   **`Ctrl + Shift + [` / `]`**: Switch Terminal
-*   **`Ctrl + Alt + [` / `]`**: Switch Open File in Editor
-*   **`Ctrl + Shift + ?`**: Show Shortcuts Help
-*   **`Ctrl` / `Cmd` + `F`**: Find in Terminal
+### Persistence Files
 
-### Touch Actions
-*   **Virtual `SYM`**: Toggle HHKB keyboard overlay.
+Tabminal stores runtime state under `~/.tabminal/`:
 
-## 🛠 Tech Stack
-*   **Backend**: [Node.js](https://nodejs.org), [Koa](https://github.com/koajs/koa), [node-pty](https://github.com/microsoft/node-pty), [WebSocket](https://github.com/websockets/ws).
-*   **Frontend**: [Vanilla JS](http://vanilla-js.com/) 😝, [xterm.js](https://github.com/xtermjs/xterm.js), [Monaco Editor](https://github.com/microsoft/monaco-editor).
-*   **AI**: Integration via [utilitas](https://github.com/leask/utilitas).
+- `config.json`: optional home-level config
+- `cluster.json`: multi-host registry
+- `agent-tabs.json`: ACP agent tab restore state
+- `agent-config.json`: saved per-agent setup/config values
 
-## 🐛 Troubleshooting
+For multi-host:
 
-- On macOS, you may need to run `chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper` to fix permission issues.
+- The main host token stays in browser local storage.
+- Sub-host tokens are persisted in the main host's `cluster.json`.
 
-## 📄 License
+## ACP Agent Notes
+
+ACP availability is discovered per host. A backend may show different results if
+its runtime environment differs from your interactive shell.
+
+Typical requirements:
+
+- Codex: `codex login`
+- Gemini: `gemini --acp` or `npx @google/gemini-cli@latest --acp`
+- Claude: `npx @zed-industries/claude-code-acp@latest` plus required Anthropic
+  or Vertex configuration
+- Copilot: `copilot --acp --stdio` or `gh copilot -- --acp --stdio`
+
+On hosts where the CLI lives in a user-local bin directory such as
+`~/.local/bin`, Tabminal augments the agent runtime `PATH` so discovery is more
+reliable.
+
+## Keyboard Shortcuts
+
+- `Ctrl + Shift + T`: New terminal
+- `Ctrl + Shift + W`: Close terminal
+- `Ctrl + Shift + E`: Toggle file workspace pane
+- `Ctrl + Shift + A`: Open agent menu
+- `Ctrl + Up / Down`: Move focus between workspace and terminal
+- `Ctrl + Shift + [ / ]`: Switch session
+- `Ctrl + Alt + [ / ]`: Switch workspace tab
+- `Ctrl + Shift + ?`: Show shortcuts help
+- `Ctrl` / `Cmd` + `F`: Find in terminal
+- `Esc`: Stops a running ACP prompt when supported, or closes transient agent UI
+  such as menus
+
+### Touch
+
+- The virtual keyboard exposes terminal-friendly modifier keys.
+- Workspace and agent controls are optimized for touch and compact screens.
+
+## Architecture Snapshot
+
+- Backend: Node.js, Koa, `node-pty`, WebSocket, ACP SDK
+- Frontend: vanilla JS, `xterm.js`, Monaco Editor
+- Persistence: host-local files under `~/.tabminal`
+- Native clients and packaging work live under:
+  - `apps/Apple`
+  - `apps/ghostty-vendor`
+
+## Troubleshooting
+
+- On macOS, `node-pty` may need:
+
+  ```bash
+  chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper
+  ```
+
+- If a sub-host keeps asking for login, check whether Cloudflare Access or
+  another auth layer requires an interactive browser login for that host.
+- If an ACP agent is missing, verify the CLI is installed on the backend host
+  and available in that host's runtime environment.
+
+## Quality Checks
+
+Recommended before shipping changes:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+## License
+
 [MIT](LICENSE)
