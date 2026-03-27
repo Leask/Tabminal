@@ -3371,6 +3371,10 @@ kbd {
     transform: translateY(1px);
 }
 
+.tab-item.editor-open .toggle-agent-btn {
+    opacity: 1;
+}
+
 .tab-item.agent-open .toggle-agent-btn {
     opacity: 1;
     background-color: rgba(38, 139, 210, 0.5);
