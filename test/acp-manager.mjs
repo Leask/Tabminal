@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import {
     AcpManager,
     buildTerminalSpawnRequest,
+    consumeRestoredMessageReplay,
+    createRestoreReplayState,
     mergeAgentMessageText
 } from '../src/acp-manager.mjs';
 
@@ -312,6 +314,62 @@ async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
 }
 
 describe('AcpManager', () => {
+    it('consumes replayed restore transcript chunks in order', () => {
+        const replay = createRestoreReplayState([
+            {
+                role: 'user',
+                kind: 'message',
+                text: 'what can you do for me?'
+            },
+            {
+                role: 'assistant',
+                kind: 'message',
+                text: 'I can inspect the repo and make changes.'
+            }
+        ]);
+
+        assert.equal(
+            consumeRestoredMessageReplay(
+                replay,
+                'user',
+                'message',
+                'what can you do for me?'
+            ),
+            true
+        );
+        assert.equal(
+            consumeRestoredMessageReplay(
+                replay,
+                'assistant',
+                'message',
+                'I can inspect the repo and make changes.'
+            ),
+            true
+        );
+        assert.equal(replay.exhausted, true);
+    });
+
+    it('stops consuming when restore replay diverges', () => {
+        const replay = createRestoreReplayState([
+            {
+                role: 'user',
+                kind: 'message',
+                text: 'what can you do for me?'
+            }
+        ]);
+
+        assert.equal(
+            consumeRestoredMessageReplay(
+                replay,
+                'assistant',
+                'message',
+                'different text'
+            ),
+            false
+        );
+        assert.equal(replay.exhausted, true);
+    });
+
     function createManager() {
         let persistedTabs = [];
         let persistedConfigs = {};

@@ -941,6 +941,106 @@ function normalizePersistedTimelineOrder(value, fallback = 0) {
     return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function normalizeReplayMessageEntry(message = {}) {
+    return {
+        role: typeof message.role === 'string'
+            ? message.role
+            : 'assistant',
+        kind: typeof message.kind === 'string'
+            ? message.kind
+            : 'message',
+        text: typeof message.text === 'string'
+            ? message.text
+            : ''
+    };
+}
+
+export function createRestoreReplayState(messages = []) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return null;
+    }
+    const replayMessages = messages
+        .map((message) => normalizeReplayMessageEntry(message))
+        .filter((message) => message.text);
+    if (replayMessages.length === 0) {
+        return null;
+    }
+    return {
+        messages: replayMessages,
+        index: -1,
+        offset: 0,
+        started: false,
+        exhausted: false
+    };
+}
+
+export function consumeRestoredMessageReplay(state, role, kind, text) {
+    if (!state || state.exhausted) {
+        return false;
+    }
+    const chunk = typeof text === 'string' ? text : '';
+    if (!chunk) {
+        return false;
+    }
+
+    const findReplayStart = () => {
+        for (let index = 0; index < state.messages.length; index += 1) {
+            const message = state.messages[index];
+            if (message.role !== role || message.kind !== kind) {
+                continue;
+            }
+            if (message.text.startsWith(chunk)) {
+                state.index = index;
+                state.offset = chunk.length;
+                state.started = true;
+                if (state.offset >= message.text.length) {
+                    state.index += 1;
+                    state.offset = 0;
+                }
+                if (state.index >= state.messages.length) {
+                    state.exhausted = true;
+                }
+                return true;
+            }
+        }
+        state.exhausted = true;
+        return false;
+    };
+
+    if (!state.started) {
+        return findReplayStart();
+    }
+    if (
+        state.index < 0
+        || state.index >= state.messages.length
+    ) {
+        state.exhausted = true;
+        return false;
+    }
+
+    const message = state.messages[state.index];
+    if (message.role !== role || message.kind !== kind) {
+        state.exhausted = true;
+        return false;
+    }
+
+    const remaining = message.text.slice(state.offset);
+    if (!remaining.startsWith(chunk)) {
+        state.exhausted = true;
+        return false;
+    }
+
+    state.offset += chunk.length;
+    if (state.offset >= message.text.length) {
+        state.index += 1;
+        state.offset = 0;
+    }
+    if (state.index >= state.messages.length) {
+        state.exhausted = true;
+    }
+    return true;
+}
+
 function normalizePersistedMessage(message = {}, fallbackOrder = 0) {
     const nextMessage = cloneSerializable(message, {}) || {};
     nextMessage.id = typeof nextMessage.id === 'string'
@@ -1479,6 +1579,7 @@ class AcpRuntime extends EventEmitter {
             syntheticStreams: new Map(),
             syntheticStreamTurn: 0,
             pendingUserEcho: null,
+            restoreReplay: null,
             currentModeId,
             availableModes,
             availableCommands,
@@ -1742,6 +1843,7 @@ class AcpRuntime extends EventEmitter {
             usage: meta.usage || null,
             terminals: meta.terminals || []
         });
+        tab.restoreReplay = createRestoreReplayState(meta.messages || []);
         tab.status = 'restoring';
         tab.busy = true;
 
@@ -1777,11 +1879,13 @@ class AcpRuntime extends EventEmitter {
                 tab.configOptions,
                 response?.models
             );
+            tab.restoreReplay = null;
             tab.status = 'ready';
             tab.busy = false;
             tab.errorMessage = '';
             return this.serializeTab(tab);
         } catch (error) {
+            tab.restoreReplay = null;
             this.tabs.delete(tab.id);
             this.sessionToTabId.delete(tab.acpSessionId);
             throw error;
@@ -2347,6 +2451,9 @@ class AcpRuntime extends EventEmitter {
             ? (content.text || '')
             : `[${content.type}]`;
         if (role === 'user' && kind === 'message' && this.#consumeUserEcho(tab, text)) {
+            return;
+        }
+        if (consumeRestoredMessageReplay(tab.restoreReplay, role, kind, text)) {
             return;
         }
         const streamKey = this.#getStreamKey(tab, update, role, kind);
