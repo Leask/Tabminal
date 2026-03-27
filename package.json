@@ -1,6 +1,6 @@
 {
   "name": "tabminal",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Tab(ter)minal, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.",
   "type": "module",
   "bin": {
