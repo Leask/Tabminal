@@ -267,8 +267,8 @@ reliable.
 
 ## Architecture Snapshot
 
-- Backend: `Node.js`, [`utilitas`](https://github.com/leask/utilitas), `Koa`, `node-pty`, `WebSocket`, `ACP SDK`
-- Frontend: [`Vanilla JS 😝`](http://vanilla-js.com/), `xterm.js`, `Monaco Editor`
+- Backend: [`Node.js`](https://nodejs.org/), [`utilitas`](https://github.com/leask/utilitas), [`Koa`](https://github.com/koajs/koa), [`node-pty`](https://github.com/Tyriar/node-pty), [`WebSocket`](https://github.com/websockets/ws), [`ACP SDK`](https://github.com/acp-kit/acp-sdk)
+- Frontend: [`Vanilla JS 😝`](http://vanilla-js.com/), [`xterm.js`](https://github.com/xtermjs/xterm.js), [`Monaco Editor`](https://github.com/microsoft/monaco-editor)
 - Persistence: host-local files under `~/.tabminal`
 - Native clients and packaging work live under:
   - `apps/Apple`

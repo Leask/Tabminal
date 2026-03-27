@@ -1,184 +1,271 @@
-# ACP Planing
+# ACP Planning
 
-## Goal
+Last updated: 2026-03-27
 
-Integrate ACP-based coding agents into Tabminal without implementing agents
-ourselves. Agents run on the Tabminal host, managed by the Tabminal backend.
-The web UI adds an Agent panel integrated into the existing workspace/editor
-area and supports multiple concurrent agent tabs per host.
+This file is no longer a pure implementation plan.
+It is now the ACP status ledger for Tabminal:
 
-## Constraints
+- what shipped
+- what is stable
+- what remains open
 
-- Do not break existing terminal, file editor, multi-host, or AI-assist flows.
-- Reuse community-maintained protocol and agent ecosystem pieces where
-  practical.
-- Keep lifecycle bounded: lazy start, reusable while tabs are open, and
-  cleaned up after inactivity.
-- Host isolation remains strict: each agent runtime and tab belongs to one
-  host.
-- MVP should be usable before advanced ACP capabilities are added.
+Use `/Users/leask/Documents/Tabminal/AGENTS.md` as the broader engineering
+handoff document. Use this file as the ACP-specific roadmap/status snapshot.
 
-## Selected Architecture
+## 1) Goal
+
+Integrate ACP-based coding agents into Tabminal without building custom agents
+in-repo. Agents should run on the Tabminal host, be managed by the Tabminal
+backend, and feel native inside the existing workspace/editor UI.
+
+## 2) Current Architecture
 
 ### Backend
 
-Add an ACP supervisor inside the Tabminal backend.
+Implemented:
 
-Responsibilities:
-- List supported agent definitions available on the host.
-- Start ACP runtimes on demand.
-- Reuse ACP runtime processes while tabs/sessions are active.
-- Create ACP sessions within a runtime.
-- Bridge ACP events to browser clients over a dedicated WebSocket.
-- Expose minimal approval surfaces later; MVP focuses on prompt/stream/cancel.
-
-Transport strategy:
-- Primary: stdio-launched ACP agents.
-- Future: attach to TCP ACP servers for tools like GitHub Copilot CLI.
-
-Lifecycle:
-- Lazy runtime start on first use.
-- Keep alive while any agent tab is attached.
-- Idle timeout after last tab closes.
-- Destroy all runtimes on backend shutdown.
+- ACP supervisor in `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+- Built-in host-local agent definitions:
+  - Gemini CLI
+  - Codex CLI
+  - Claude Agent
+  - GitHub Copilot
+  - ACP Test Agent when `TABMINAL_ENABLE_TEST_AGENT=1`
+- Lazy runtime startup
+- Runtime reuse while tabs are active
+- Idle cleanup
+- ACP websocket fan-out to browser clients
+- Session restore for ACP runtimes that support `loadSession`
+- Per-agent saved config/env persistence
 
 ### Frontend
 
-Add a host-scoped Agent button beside the file editor toggle area.
+Implemented:
 
-Behavior:
-- Clicking Agent opens a dropdown of available agents for the active host.
-- Choosing an agent opens a new Agent tab inside the existing editor pane tab
-  strip.
-- Agent tabs coexist with file tabs.
-- Each agent tab streams conversation updates and supports prompt send/cancel.
+- Host-scoped agent dropdown from the sidebar
+- Agent tabs inside the shared workspace tab strip
+- Transcript rendering with message/tool/permission/plan history
+- Composer with send/stop, slash-command suggestions, attachments, and keyboard
+  shortcuts
+- Mode/model/thought-level/permission selectors
+- Managed terminal summaries and `Jump in`
+- Usage HUD
+- Plan panel that archives into transcript history once complete
+- Agent-specific workspace restore and focus behavior
 
-MVP UI:
-- Agent tabs render in the editor workspace.
-- Transcript area with coalesced message stream.
-- Prompt textarea + single send/stop button.
-- Mode picker, new chat action, and slash-command chips when available.
-- Status row with host, cwd, mode, and runtime/session status.
+## 3) Completed Scope
 
-## Reuse Strategy
+The following items are effectively shipped and usable.
 
-Use:
-- `@agentclientprotocol/sdk` for protocol/client implementation.
-- ACP Registry later for agent metadata discovery.
+### 3.1 Core ACP plumbing
 
-Do not directly embed:
-- Chrome ACP web client.
-- ACP UI desktop frontend.
-
-Reason:
-- They are standalone apps, not embeddable widgets.
-- Tabminal needs native integration with existing host/session/workspace state.
-
-## MVP Scope
-
-### Phase 1
-
-Status:
-- Implemented on `acp` branch and usable with real browser smoke.
-- Backend ACP supervisor, API, and WS fan-out are live.
-- Frontend agent tabs, transcript rendering, prompt send/cancel, and
-  permission resolution are live.
-- Agent tab metadata now persists on the backend and restores across backend
-  restart for ACP runtimes that support `loadSession`.
-- Agent panel interaction polish is live:
-  - duplicate agent tabs auto-number as `#1`, `#2`, ...
-  - `Enter` sends
-  - `Esc` stops active runs
-  - `Ctrl+J` and `Shift+Enter` insert newlines
-  - mode switching and new-chat flows are available in-panel
-  - tool calls and permission requests render as structured cards
-- Verified with:
-  - `npm run lint`
-  - `npm test`
-  - browser smoke against isolated local ACP test agent
-  - browser restart-restore validation against backend-persisted ACP tabs
-- Current polish fixes already applied:
-  - Codex token stream is coalesced into a single assistant message instead of
-    one message per chunk.
-  - User prompts are no longer duplicated when an ACP runtime echoes
-    `user_message_chunk` updates after local optimistic insertion.
-  - Gemini definition availability is disabled with reason
-    `API key missing` when no key is configured.
-  - Agent panel typography has been reduced to align with the existing
-    workspace/editor density.
-
-Backend:
-- ACP supervisor module.
-- Built-in agent definitions for Gemini CLI, Codex CLI adapter, Claude adapter,
-  and Copilot CLI ACP server descriptor.
-- REST endpoints:
+- ACP dependency integrated
+- Backend ACP supervisor live
+- REST endpoints live:
   - `GET /api/agents`
+  - `GET /api/agents/config`
+  - `PUT /api/agents/config/:agentId`
+  - `DELETE /api/agents/config/:agentId`
   - `POST /api/agents/tabs`
   - `POST /api/agents/tabs/:tabId/prompt`
   - `POST /api/agents/tabs/:tabId/cancel`
   - `POST /api/agents/tabs/:tabId/mode`
+  - `POST /api/agents/tabs/:tabId/config`
   - `POST /api/agents/tabs/:tabId/permissions/:permissionId`
   - `DELETE /api/agents/tabs/:tabId`
-- WebSocket endpoint for live event fan-out.
+- ACP websocket endpoint live
 
-Frontend:
-- Agent dropdown button.
-- Agent tab state model.
-- Agent transcript rendering.
-- Prompt send/stop.
-- Mode picker.
-- New chat action.
-- Slash-command starter chips.
-- Structured tool call / permission cards.
-- Host-scoped tabs in editor pane.
+### 3.2 Agent tab UX
 
-### Deferred
+- Agent tabs coexist with file tabs and pinned terminal tabs
+- Duplicate agent tabs auto-number
+- `Enter` sends
+- `Shift+Enter` and `Ctrl+J` insert newline
+- `Esc` stops active runs
+- `Ctrl+Shift+A` opens the agent menu
+- Slash-command menu opens upward as floating overlay
+- Keyboard navigation inside slash-command menu is implemented
 
-- File attachments.
-- Rich diff/resource rendering in tool outputs.
-- Terminal execution transcript UI for ACP tool calls.
-- Registry-driven install UX.
-- TCP ACP runtime support in UI.
-- Dedicated conversation history browser independent of terminal sessions.
+### 3.3 Transcript and tool rendering
 
-## Safety and Isolation
+- Coalesced assistant message streaming
+- Optimistic user message insertion
+- De-duplication when runtime echoes user chunks
+- Structured tool-call cards
+- Structured permission cards
+- Diff rendering
+- Code/resource rendering
+- Terminal output rendering inside tool cards
+- Path link rendering
+- Running-terminal activity summary
 
-- Agent runtimes inherit the host filesystem context, not browser-local state.
-- Prompt and transcript data stay isolated per host.
-- Closing an agent tab detaches from its ACP session.
-- When the last ACP session on a runtime closes, runtime enters idle cleanup.
+### 3.4 Managed terminal flow
 
-## Test Plan
+- ACP tool calls can create managed terminal sessions
+- `Jump in` switches to the real terminal session when still alive
+- Focus-stealing bug after `Jump in` has been fixed
+- Hidden pinned terminals no longer report bogus tiny sizes to the backend
 
-Backend:
-- Unit tests for supervisor lifecycle.
-- Mock ACP runtime process to test stream/cancel behavior.
-- API tests for create/send/cancel/close.
+### 3.5 Persistence and restore
 
-Frontend:
-- State/unit tests are minimal in current stack; use integration smoke.
-- Manual flow:
-  - open agent dropdown
-  - create Gemini/Codex tab
-  - send prompt
-  - receive stream
-  - cancel
-  - open second agent tab
-  - verify file editor tabs still work
-  - verify terminal tabs still work
+- Agent tab metadata persists on backend
+- Agent config persists on backend
+- Transcript/tool/permission/plan state persists
+- Restore works across backend restart for runtimes that support `loadSession`
+- Restore no longer wrongly penalizes built-in agent availability on startup
 
-Regression checks:
+### 3.6 Usage / status UI
+
+- Usage HUD implemented
+- CSS-only expanded HUD layout stabilized
+- Plan panel implemented
+- Completed plan moves into transcript history instead of permanently occupying
+  composer-adjacent UI
+- Transcript auto-scroll logic now follows the correct “only pin if already at
+  bottom” rule
+
+### 3.7 Test tooling
+
+- ACP Test Agent supports real slash-command scenarios:
+  - `/demo`
+  - `/plan`
+  - `/diff`
+  - `/permission`
+  - `/cancel`
+  - `/stale`
+  - `/order`
+  - `/fail`
+- ACP browser smoke covers current UI shape
+- ACP manager tests cover restore, prompt attachments, config, availability, and
+  slash commands
+
+## 4) Stable Contracts
+
+These should now be treated as product contracts, not experiments.
+
+- ACP agents are host-scoped.
+- Agent tabs do not require the file tree to be open.
+- Workspace tabs should remain visible if there is any file tab, agent tab, or
+  pinned terminal tab.
+- `Jump in` is a management path, not a read-only preview, while the terminal is
+  still alive.
+- Internal shell bootstrap commands such as `TABMINAL_SHELL_READY=1` must never
+  surface as user notifications.
+- ACP availability should reflect the backend runtime environment, not only the
+  developer's interactive shell.
+- On small screens, agent config selectors collapse to icon-only affordances.
+
+## 5) Remaining Work
+
+This is the actual remaining ACP backlog.
+
+### 5.1 Still open
+
+#### A) Registry-driven install/setup UX
+
+Status: not done
+
+Missing:
+
+- guided install flow for agents that are unavailable
+- first-class setup UX for installing required CLIs
+- richer host diagnostics for why a definition is unavailable
+
+Current state:
+
+- availability reasons are shown
+- some config/setup flows exist
+- but this is not yet a complete install-onboarding UX
+
+#### B) Explicit TCP ACP runtime support in the UI
+
+Status: not done
+
+Missing:
+
+- user-visible workflow for attaching to TCP ACP servers
+- transport selection UX
+- connection lifecycle UX for non-stdio ACP runtimes
+
+Current state:
+
+- architecture originally allowed for this direction
+- product currently operates around stdio-launched/local CLI definitions
+
+#### C) Dedicated conversation history browser
+
+Status: not done
+
+Missing:
+
+- independent history browser for ACP conversations
+- browsing/searching old conversations outside the current terminal/workspace
+  session context
+
+Current state:
+
+- transcript restores with the tab
+- completed plans archive into the transcript
+- but there is no standalone conversation history surface
+
+### 5.2 Nice-to-have follow-up work
+
+These are not blockers, but they are logical next ACP improvements.
+
+- stronger browser smoke coverage for touch/mobile-only ACP interactions
+- clearer visual distinction between running, attention, and completed agent
+  states at scale
+- broader multi-host ACP smoke scenarios
+- richer availability/setup diagnostics in the UI
+
+## 6) What Was Originally Deferred But Is Now Done
+
+These items were previously listed as deferred and should no longer be treated
+as open backlog:
+
+- prompt/file attachments
+- diff rendering in tool outputs
+- code/resource rendering in tool outputs
+- terminal execution transcript UI for ACP tool calls
+
+## 7) Test and Verification Status
+
+Current ACP verification surface:
+
 - `npm run lint`
 - `npm test`
-- existing multi-host session behavior
-- editor pane switching between file tabs and agent tabs
+- `npm run build`
+- browser smoke via
+  `/Users/leask/Documents/Tabminal/scripts/acp-browser-smoke.mjs`
 
-## Implementation Order
+Recommended ACP manual spot-checks when behavior changes:
 
-1. Add ACP dependency and inspect exact SDK client API.
-2. Implement backend supervisor with a mockable adapter layer.
-3. Expose API/WS endpoints with no frontend integration yet.
-4. Add frontend Agent button and agent tab model.
-5. Wire prompt streaming and cancellation.
-6. Run tests and manual smoke.
-7. Iterate on lifecycle and UI fit.
+1. Start with `TABMINAL_ENABLE_TEST_AGENT=1`
+2. Run `/demo`
+3. Verify:
+   - agent menu
+   - slash-command menu
+   - plan panel
+   - usage HUD
+   - tool call cards
+   - managed terminal
+   - `Jump in`
+   - transcript scroll behavior
+4. Run `/permission`
+5. Run `/cancel`
+6. Reload and verify restore
+
+## 8) Recommendation
+
+ACP is no longer in “MVP not landed” status.
+It is in “shipped, actively polished, with a short remaining backlog” status.
+
+Practical summary:
+
+- Core ACP product: done
+- ACP UI polish: largely done
+- ACP infra/test surface: done
+- Remaining strategic work: 3 real items
+
+That remaining scope is small enough that this file should stay as a status
+ledger, not a large speculative design doc.

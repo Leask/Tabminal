@@ -10,14 +10,14 @@ ACP agent UX, or mobile ergonomics.
 ## 1) Project Snapshot
 
 - Runtime: Node.js `>= 22`, ESM project.
-- Backend entry: `/Users/leask/Documents/Tabminal/src/server.mjs`
-- Frontend entry: `/Users/leask/Documents/Tabminal/public/app.js`
+- Backend entry: `src/server.mjs`
+- Frontend entry: `public/app.js`
 - PWA shell:
-  - `/Users/leask/Documents/Tabminal/public/index.html`
-  - `/Users/leask/Documents/Tabminal/public/sw.js`
+  - `public/index.html`
+  - `public/sw.js`
 - Native app workspace:
-  - `/Users/leask/Documents/Tabminal/apps/Apple`
-  - `/Users/leask/Documents/Tabminal/apps/ghostty-vendor`
+  - `apps/Apple`
+  - `apps/ghostty-vendor`
 
 Current product shape:
 
@@ -46,8 +46,8 @@ Important persistence files under `~/.tabminal`:
 - Do not merge runtime state across hosts.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/public/modules/session-meta.js`
+- `public/app.js`
+- `public/modules/session-meta.js`
 
 ### 2.2 Auth model
 
@@ -57,7 +57,7 @@ Relevant code:
 - Sub-hosts may require Cloudflare Access login without password change.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
   - `ServerClient.handleUnauthorized`
   - `ServerClient.handleAccessRedirect`
 
@@ -72,8 +72,8 @@ Relevant code:
 - Removing a host should also remove any stale local token keyed to that host.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
+- `public/app.js`
+- `src/persistence.mjs`
 
 ### 2.4 Host registry persistence
 
@@ -84,9 +84,9 @@ Relevant code:
 - On page load, host list restores only after main-host auth succeeds.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/src/server.mjs`
-- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
+- `public/app.js`
+- `src/server.mjs`
+- `src/persistence.mjs`
 
 ### 2.5 Deduplication and self-host skip
 
@@ -98,8 +98,8 @@ Relevant code:
   the current client assumptions.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/modules/url-auth.js`
+- `public/app.js`
 
 ### 2.6 Session creation ownership
 
@@ -109,8 +109,8 @@ Relevant code:
   - recreate one main-host session if user closes the last session
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/src/server.mjs`
+- `public/app.js`
+- `src/server.mjs`
 
 ### 2.7 Polling and heartbeat
 
@@ -119,7 +119,7 @@ Relevant code:
 - Do not weaken these without measuring UX fallout.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
 
 ### 2.8 Cloudflare Access handling
 
@@ -130,8 +130,8 @@ Relevant code:
 - Reconnect UI may open the host root in a new tab for Access login.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
+- `public/app.js`
+- `public/modules/url-auth.js`
 
 ### 2.9 Runtime version and PWA coherence
 
@@ -141,10 +141,10 @@ Relevant code:
 - Service worker is versioned the same way.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/src/server.mjs`
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/public/index.html`
-- `/Users/leask/Documents/Tabminal/public/sw.js`
+- `src/server.mjs`
+- `public/app.js`
+- `public/index.html`
+- `public/sw.js`
 
 ## 3) ACP Design Contracts
 
@@ -161,8 +161,8 @@ Relevant code:
   - ACP Test Agent when `TABMINAL_ENABLE_TEST_AGENT=1`
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
-- `/Users/leask/Documents/Tabminal/src/acp-test-agent.mjs`
+- `src/acp-manager.mjs`
+- `src/acp-test-agent.mjs`
 
 ### 3.2 ACP workspace model
 
@@ -174,8 +174,8 @@ Relevant code:
   tab, or pinned terminal tab.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/public/styles.css`
+- `public/app.js`
+- `public/styles.css`
 
 ### 3.3 Agent dropdown and toggle behavior
 
@@ -195,7 +195,7 @@ Relevant code:
 - Agent sync must never steal focus back from a session the user jumped into.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
 
 ### 3.5 Hidden terminal resize contract
 
@@ -206,7 +206,7 @@ Relevant code:
 - This prevents broken sidebar previews caused by tiny hidden-layout sizes.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
 
 ### 3.6 Shell ready noise filtering
 
@@ -214,9 +214,9 @@ Relevant code:
 - They must not produce user notifications or visible execution-completed noise.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/shell/tabminal-bashrc`
-- `/Users/leask/Documents/Tabminal/src/terminal-session.mjs`
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `shell/tabminal-bashrc`
+- `src/terminal-session.mjs`
+- `public/app.js`
 
 ### 3.7 Agent plan behavior
 
@@ -236,7 +236,7 @@ Relevant code:
   back down.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
 
 ### 3.9 Slash command menu contract
 
@@ -247,9 +247,9 @@ Relevant code:
 - Current shortcut to open agent menu is `Ctrl+Shift+A`.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/app.js`
-- `/Users/leask/Documents/Tabminal/public/styles.css`
-- `/Users/leask/Documents/Tabminal/public/index.html`
+- `public/app.js`
+- `public/styles.css`
+- `public/index.html`
 
 ### 3.10 Usage HUD contract
 
@@ -261,12 +261,12 @@ Relevant code:
   updates.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/public/styles.css`
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/styles.css`
+- `public/app.js`
 
 ## 4) ACP Status and Remaining Gaps
 
-`/Users/leask/Documents/Tabminal/ACP_PLANING.md` is partly stale.
+`ACP_PLANING.md` is partly stale.
 
 Implemented from that plan:
 
@@ -297,39 +297,39 @@ Implication:
 ## 5) File Map for Fast Onboarding
 
 Backend:
-- `/Users/leask/Documents/Tabminal/src/server.mjs`
+- `src/server.mjs`
   - API routes, WS upgrade, auth, runtime boot id
-- `/Users/leask/Documents/Tabminal/src/config.mjs`
+- `src/config.mjs`
   - merged config parser and validation
-- `/Users/leask/Documents/Tabminal/src/auth.mjs`
+- `src/auth.mjs`
   - password hashing and auth checks
-- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
+- `src/persistence.mjs`
   - sessions, cluster registry, ACP tab/config persistence
-- `/Users/leask/Documents/Tabminal/src/terminal-manager.mjs`
+- `src/terminal-manager.mjs`
   - PTY lifecycle and persistence
-- `/Users/leask/Documents/Tabminal/src/terminal-session.mjs`
+- `src/terminal-session.mjs`
   - terminal stream parsing, shell AI path, execution model
-- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+- `src/acp-manager.mjs`
   - ACP definitions, runtime supervision, ACP tab lifecycle
-- `/Users/leask/Documents/Tabminal/src/acp-test-agent.mjs`
+- `src/acp-test-agent.mjs`
   - local ACP smoke agent with slash-command fixtures
 
 Frontend:
-- `/Users/leask/Documents/Tabminal/public/app.js`
+- `public/app.js`
   - nearly all UI orchestration lives here
-- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
+- `public/modules/url-auth.js`
   - URL normalization and auth helpers
-- `/Users/leask/Documents/Tabminal/public/modules/session-meta.js`
+- `public/modules/session-meta.js`
   - host display and compact path formatting
-- `/Users/leask/Documents/Tabminal/public/styles.css`
+- `public/styles.css`
   - all current UI contracts and responsive rules
-- `/Users/leask/Documents/Tabminal/public/index.html`
+- `public/index.html`
   - shell DOM, layout bootstrapping, shortcuts modal
 
 Tests and smoke:
-- `/Users/leask/Documents/Tabminal/test/acp-manager.mjs`
+- `test/acp-manager.mjs`
   - richest ACP coverage
-- `/Users/leask/Documents/Tabminal/scripts/acp-browser-smoke.mjs`
+- `scripts/acp-browser-smoke.mjs`
   - browser ACP smoke against a real running app and real Chrome remote debug
 
 ## 6) Debug and Testing Guidance
@@ -367,7 +367,7 @@ Use these instead of inventing ad-hoc prompts when validating ACP UI.
 
 Preferred browser smoke:
 
-- `/Users/leask/Documents/Tabminal/scripts/acp-browser-smoke.mjs`
+- `scripts/acp-browser-smoke.mjs`
 
 It supports:
 
@@ -394,7 +394,7 @@ If an ACP agent appears inconsistently available:
 - Restore failures should not temporarily mark built-in definitions unavailable.
 
 Relevant code:
-- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+- `src/acp-manager.mjs`
 
 ### 6.5 Focus and session-debug tips
 
@@ -455,7 +455,7 @@ Expected behavior:
 ## 9) Deployment and Ops Notes
 
 - Local helper script:
-  - `/Users/leask/Documents/Tabminal/reploy.sh`
+  - `reploy.sh`
 - It restarts one macOS launchctl node plus several Linux `pm2` nodes via SSH.
 - It includes aggressive cleanup behavior on Linux nodes; use carefully.
 
