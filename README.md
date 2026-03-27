@@ -11,7 +11,6 @@ experience.
 
 ![Tabminal Banner](public/favicon.svg)
 
-![IMG_0918](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
 
 ## What It Does
 
@@ -26,6 +25,8 @@ experience.
   install support.
 - Terminal-native AI assistance for shell history and auto-fix flows when
   OpenAI or OpenRouter is configured.
+
+![Photo of Tabminal](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
 
 ![Tabminal Screenshot](https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5)
 
