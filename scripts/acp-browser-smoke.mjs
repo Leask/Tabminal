@@ -1284,7 +1284,7 @@ async function main() {
             toExpression(`
                 () => {
                     const input = document.querySelector('.agent-panel-input');
-                    input.value = '/re';
+                    input.value = '/';
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     return true;
                 }
@@ -1650,9 +1650,7 @@ async function main() {
                                 );
                                 const panel = document.querySelector('.agent-panel');
                                 return Boolean(active)
-                                    && (active.textContent || '').includes(
-                                        ${JSON.stringify(targetAgentDisplayLabel)}
-                                    )
+                                    && active.classList.contains('agent-editor-tab')
                                     && Boolean(panel)
                                     && getComputedStyle(panel).display !== 'none';
                             }
@@ -1978,9 +1976,7 @@ async function main() {
                                 );
                                 const panel = document.querySelector('.agent-panel');
                                 return Boolean(active)
-                                    && (active.textContent || '').includes(
-                                        ${JSON.stringify(targetAgentDisplayLabel)}
-                                    )
+                                    && active.classList.contains('agent-editor-tab')
                                     && Boolean(panel)
                                     && getComputedStyle(panel).display !== 'none';
                             }
@@ -2043,16 +2039,29 @@ async function main() {
                         const panel = document.querySelector(
                             '.agent-plan-panel'
                         );
-                        const header = panel?.querySelector(
+                        const activeHeader = panel?.querySelector(
                             '.agent-plan-header'
                         );
-                        const entries = panel?.querySelectorAll(
+                        const activeEntries = panel?.querySelectorAll(
                             '.agent-plan-entry'
                         )?.length || 0;
-                        return Boolean(panel)
+                        const history = document.querySelector(
+                            '.agent-plan-history .agent-plan-history-body'
+                        );
+                        const historyHeader = history?.querySelector(
+                            '.agent-plan-header'
+                        );
+                        const historyEntries = history?.querySelectorAll(
+                            '.agent-plan-entry'
+                        )?.length || 0;
+                        const activePlanVisible = Boolean(panel)
                             && getComputedStyle(panel).display !== 'none'
-                            && Boolean(header)
-                            && entries >= 3;
+                            && Boolean(activeHeader)
+                            && activeEntries >= 3;
+                        const archivedPlanVisible = Boolean(history)
+                            && Boolean(historyHeader)
+                            && historyEntries >= 3;
+                        return activePlanVisible || archivedPlanVisible;
                     }
                 `)
             );
