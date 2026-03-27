@@ -205,7 +205,7 @@ test("temporary HOME does not inherit host prompt command", async () => {
 
 test("managed sessions stay attachable until explicitly removed", async () => {
     const manager = new TerminalManager();
-    const cwd = "/Users/leask/Documents/Tabminal";
+    const cwd = process.cwd();
     let session = null;
     try {
         session = manager.createManagedSession({
