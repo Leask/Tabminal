@@ -595,6 +595,8 @@ class EditorManager {
         this.suppressAgentCommandMenu = false;
         this.agentEmbeddedEditors = [];
         this.agentEmbeddedTerminals = new Map();
+        this.agentTranscriptLayout = null;
+        this.agentTranscriptResizeObserver = null;
 
         this.initTerminalControls();
         this.initResizer();
@@ -924,7 +926,16 @@ class EditorManager {
         });
         this.agentTranscript.addEventListener('scroll', () => {
             this.updateAgentScrollBottomButton();
+            this.rememberAgentTranscriptLayout();
         });
+        this.agentTranscriptResizeObserver = new ResizeObserver(() => {
+            const shouldPinToBottom = this.isAgentTranscriptLayoutNearBottom(
+                this.agentTranscriptLayout,
+                36
+            );
+            this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
+        });
+        this.agentTranscriptResizeObserver.observe(this.agentTranscript);
 
         const composer = document.createElement('div');
         composer.className = 'agent-panel-composer';
@@ -1942,6 +1953,12 @@ class EditorManager {
 
     renderAgentPanel(agentTab) {
         this.disposeAgentEmbeddedEditors();
+        const previousLayout = this.captureAgentTranscriptLayout();
+        const previousScrollTop = previousLayout?.scrollTop || 0;
+        const wasNearBottom = this.isAgentTranscriptLayoutNearBottom(
+            previousLayout,
+            36
+        );
         this.agentHeader.textContent = '';
         this.agentMeta.textContent = '';
         this.renderAgentUsageHud(agentTab);
@@ -1999,13 +2016,6 @@ class EditorManager {
 
         this.renderAgentComposerAttachments(agentTab);
 
-        const previousScrollTop = this.agentTranscript.scrollTop;
-        const previousScrollHeight = this.agentTranscript.scrollHeight;
-        const previousClientHeight = this.agentTranscript.clientHeight;
-        const wasNearBottom = previousScrollHeight === 0 || (
-            previousScrollHeight
-            - (previousScrollTop + previousClientHeight)
-        ) < 36;
         this.agentTranscript.innerHTML = '';
         const timeline = getAgentTimelineItems(agentTab);
         if (timeline.length === 0) {
@@ -2043,15 +2053,16 @@ class EditorManager {
                 }
             }
         }
-        if (agentTab.scrollToBottomOnNextRender) {
+        const shouldPinToBottom = agentTab.scrollToBottomOnNextRender
+            || wasNearBottom;
+        if (shouldPinToBottom) {
             this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
             agentTab.scrollToBottomOnNextRender = false;
-        } else if (wasNearBottom) {
-            this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
         } else {
             this.agentTranscript.scrollTop = previousScrollTop;
         }
         this.updateAgentScrollBottomButton();
+        this.rememberAgentTranscriptLayout();
         this.agentTools.innerHTML = '';
         this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
@@ -2063,6 +2074,7 @@ class EditorManager {
         this.updateAgentComposerActions(agentTab);
         this.refreshAgentTimelineTimestamps();
         this.refreshAgentUsageHud();
+        this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
     }
 
     refreshAgentTimelineTimestamps() {
@@ -3208,18 +3220,41 @@ class EditorManager {
         this.agentQueue.style.display = 'flex';
     }
 
-    isAgentTranscriptNearBottom(threshold = 24) {
-        if (!this.agentTranscript) return true;
-        const remaining = this.agentTranscript.scrollHeight
-            - this.agentTranscript.clientHeight
-            - this.agentTranscript.scrollTop;
+    captureAgentTranscriptLayout() {
+        if (!this.agentTranscript) {
+            return null;
+        }
+        return {
+            scrollTop: this.agentTranscript.scrollTop,
+            scrollHeight: this.agentTranscript.scrollHeight,
+            clientHeight: this.agentTranscript.clientHeight
+        };
+    }
+
+    rememberAgentTranscriptLayout() {
+        this.agentTranscriptLayout = this.captureAgentTranscriptLayout();
+    }
+
+    isAgentTranscriptLayoutNearBottom(layout = null, threshold = 24) {
+        if (!layout) return true;
+        const remaining = layout.scrollHeight
+            - layout.clientHeight
+            - layout.scrollTop;
         return remaining <= threshold;
+    }
+
+    isAgentTranscriptNearBottom(threshold = 24) {
+        return this.isAgentTranscriptLayoutNearBottom(
+            this.captureAgentTranscriptLayout(),
+            threshold
+        );
     }
 
     scrollAgentTranscriptToBottom() {
         if (!this.agentTranscript) return;
         this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
         this.updateAgentScrollBottomButton();
+        this.rememberAgentTranscriptLayout();
     }
 
     scheduleAgentTranscriptViewportUpdate(pinToBottom = false) {
@@ -3232,6 +3267,7 @@ class EditorManager {
                     return;
                 }
                 this.updateAgentScrollBottomButton();
+                this.rememberAgentTranscriptLayout();
             });
         });
     }
@@ -3260,12 +3296,14 @@ class EditorManager {
             Math.min(this.agentCommandIndex, suggestions.length - 1)
         );
         this.agentCommandMenu.innerHTML = '';
+        let activeButton = null;
         for (const [index, command] of suggestions.entries()) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'agent-command-option';
             if (index === this.agentCommandIndex) {
                 button.classList.add('active');
+                activeButton = button;
             }
             const name = document.createElement('span');
             name.className = 'agent-command-option-name';
@@ -3287,6 +3325,13 @@ class EditorManager {
             this.agentCommandMenu.appendChild(button);
         }
         this.agentCommandMenu.style.display = 'flex';
+        if (activeButton) {
+            requestAnimationFrame(() => {
+                activeButton.scrollIntoView({
+                    block: 'nearest'
+                });
+            });
+        }
     }
 
     hideAgentCommandMenu() {

@@ -2734,6 +2734,8 @@ kbd {
 }
 
 .agent-panel-composer {
+    position: relative;
+    overflow: visible;
     padding: 10px 12px 12px;
     display: flex;
     flex-direction: column;
@@ -2837,13 +2839,23 @@ kbd {
 }
 
 .agent-command-menu {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(100% - 4px);
+    z-index: 20;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    max-height: min(320px, 40vh);
+    overflow: auto;
     padding: 6px;
     border: 1px solid rgba(131, 148, 150, 0.2);
     border-radius: 10px;
     background-color: rgba(0, 43, 54, 0.92);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    overscroll-behavior: contain;
+    scroll-padding-block: 8px;
 }
 
 .agent-command-option {
@@ -2859,6 +2871,7 @@ kbd {
     padding: 7px 9px;
     cursor: pointer;
     text-align: left;
+    scroll-margin-block: 8px;
 }
 
 .agent-command-option:hover,
