@@ -1,6 +1,6 @@
 # `t>` Tabminal
 
-> **Tab(ter)minal, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.
+> `Tab(ter)minal`, a Cloud-Native terminal and ACP agent workspace for desktop, tablet, and phone.
 
 `Tabminal` combines persistent server-side terminal sessions, a built-in
 workspace, multi-host access, and Agent Client Protocol (ACP) integrations in
