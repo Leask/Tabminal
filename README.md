@@ -28,10 +28,12 @@ experience.
 
 ![Photo of Tabminal](https://github.com/user-attachments/assets/a0cb7d8d-924c-4ba0-852e-bd0b1f2928ae)
 
-![Tabminal Screenshot](https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5)
+<img width="1439" height="1094" alt="Screenshot 2026-03-26 at 11 00 10 PM" src="https://github.com/user-attachments/assets/abcb5581-a2fb-4d2a-9070-40b32f72d059" />
 
 <details>
 <summary>More screenshots</summary>
+
+![Tabminal Screenshot](https://github.com/user-attachments/assets/608e21c3-bae2-4f16-85b7-4bd6520fd4f5)
 
 <img width="2016" height="1170" alt="Screenshot 2025-11-24 at 3 03 03 PM" src="https://github.com/user-attachments/assets/a74490be-fe97-41c6-9026-44bbf3be79f9" />
 
