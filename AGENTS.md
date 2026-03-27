@@ -1,320 +1,471 @@
 # Tabminal Agent Notes
 
-Last updated: 2026-03-23
+Last updated: 2026-03-27
 
-This file is for future AI/code agents working in this repo.
-Goal: keep context accurate, avoid reintroducing old bugs, and preserve current UX
-contracts after the multi-host refactor.
+This file is for future coding agents working in this repo.
+Keep it current, specific, and operational. The main goal is to preserve the
+current product contracts so later work does not regress multi-host behavior,
+ACP agent UX, or mobile ergonomics.
 
 ## 1) Project Snapshot
 
-- Runtime: Node.js >= 22, ESM project.
-- Backend entry: `src/server.mjs`.
-- Frontend entry: `public/app.js` (plus modules in `public/modules/`).
-- PWA shell: `public/index.html` + `public/sw.js`.
-- Native app workspace: `apps/`
-  - Apple client: `apps/Apple`
-  - Ghostty vendor tooling: `apps/ghostty-vendor`
-- Multi-host registry persistence: `~/.tabminal/cluster.json` via backend API.
+- Runtime: Node.js `>= 22`, ESM project.
+- Backend entry: `/Users/leask/Documents/Tabminal/src/server.mjs`
+- Frontend entry: `/Users/leask/Documents/Tabminal/public/app.js`
+- PWA shell:
+  - `/Users/leask/Documents/Tabminal/public/index.html`
+  - `/Users/leask/Documents/Tabminal/public/sw.js`
+- Native app workspace:
+  - `/Users/leask/Documents/Tabminal/apps/Apple`
+  - `/Users/leask/Documents/Tabminal/apps/ghostty-vendor`
 
-Core idea now:
-- One web app can connect to multiple Tabminal backends.
-- Main host controls page-level auth modal/state.
-- Sub-hosts are independent connection/auth units and can reconnect separately.
+Current product shape:
 
-## 2) Non-Negotiable Behavior Contracts
+- Persistent terminal sessions remain the core product.
+- There are now two AI surfaces:
+  - terminal-native assistant in `src/terminal-session.mjs`
+  - ACP agent workspace in `src/acp-manager.mjs` + `public/app.js`
+- One web UI can connect to multiple Tabminal hosts.
+- The workspace bar now mixes file tabs, agent tabs, and pinned terminal tabs.
+
+Important persistence files under `~/.tabminal`:
+
+- `config.json`
+- `cluster.json`
+- `agent-tabs.json`
+- `agent-config.json`
+
+## 2) Non-Negotiable Contracts
 
 ### 2.1 Host model and state isolation
 
-- UI term is `Host` (not `Server`) for user-facing labels.
+- UI term is `Host`, not `Server`, for user-facing labels.
 - Every session belongs to exactly one host.
-- Session/editor/file-tree/expanded-path state is host-isolated.
+- Session state, editor state, file tree state, ACP agent tabs, and workspace
+  tabs are host-isolated.
 - Do not merge runtime state across hosts.
 
 Relevant code:
-- `public/app.js` (`state.servers`, `state.sessions`, `makeSessionKey` usage)
-- `public/modules/session-meta.js`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/public/modules/session-meta.js`
 
 ### 2.2 Auth model
 
-- Main host (`id = 'main'`) auth controls the app login modal.
-- Only main host 401/403 should trigger global login modal.
-- Sub-host 401/403 should mark that host as reconnect/login required, not global logout.
-- Sub-host may require Cloudflare Access login without password change.
+- Main host (`id = 'main'`) controls the global login modal.
+- Only main-host `401/403` should trigger app-wide login UI.
+- Sub-host auth failures must stay local to that host.
+- Sub-hosts may require Cloudflare Access login without password change.
 
 Relevant code:
-- `public/app.js` `ServerClient.handleUnauthorized`
-- `public/app.js` `ServerClient.handleAccessRedirect`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+  - `ServerClient.handleUnauthorized`
+  - `ServerClient.handleAccessRedirect`
 
-### 2.3 Token storage contract
+### 2.3 Token storage
 
 - Main host token:
-  - persisted in browser `localStorage` key `tabminal_auth_token:main`.
+  - browser `localStorage`
+  - key: `tabminal_auth_token:main`
 - Sub-host tokens:
-  - persisted in backend registry `~/.tabminal/cluster.json`.
-  - should not persist in browser localStorage.
-- Removing a host should remove any stale local token key for that host id.
+  - persisted in backend `cluster.json`
+  - do not persist in browser `localStorage`
+- Removing a host should also remove any stale local token keyed to that host.
 
 Relevant code:
-- `public/app.js` `ServerClient.constructor`, `ServerClient.setToken`
-- `src/persistence.mjs` `loadCluster` / `saveCluster`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
 
-### 2.4 Host registry persistence contract
+### 2.4 Host registry persistence
 
-- Frontend does not own host list persistence anymore.
-- Source of truth: backend `GET/PUT /api/cluster`.
-- File format in `~/.tabminal/cluster.json`:
+- Frontend is not the source of truth for host list persistence.
+- Source of truth is backend `GET/PUT /api/cluster`.
+- File format:
   - `{ "servers": [{ id, baseUrl, host, token }, ...] }`
-- On page load, host list is restored from backend after main host auth succeeds.
+- On page load, host list restores only after main-host auth succeeds.
 
 Relevant code:
-- `public/app.js` `loadServerRegistryFromBackend`, `saveServerRegistryToBackend`
-- `src/server.mjs` `/api/cluster`
-- `src/persistence.mjs` cluster helpers
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/src/server.mjs`
+- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
 
 ### 2.5 Deduplication and self-host skip
 
 - Host uniqueness key is normalized `hostname[:port]` in lowercase.
-- Path is not part of dedupe key.
-- Registry hydration skips entries that resolve to current main node
-  (same endpoint key or same hostname) to prevent self-loop duplicates.
-- This is intentional to support sharing one cluster config across nodes.
+- Path is intentionally not part of the dedupe key.
+- Hydration skips entries that resolve to the current main node to avoid
+  self-loop duplicates.
+- Path-based multi-host routing such as `/a/*` and `/b/*` is not supported by
+  the current client assumptions.
 
 Relevant code:
-- `public/modules/url-auth.js` `getServerEndpointKeyFromUrl`
-- `public/app.js` `findServerByEndpointKey`, `hydrateServerRegistry`
-
-Important implication:
-- Path-based multi-host on one domain (like `/a/*`, `/b/*`) is not supported by current
-  client routing assumptions.
+- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
+- `/Users/leask/Documents/Tabminal/public/app.js`
 
 ### 2.6 Session creation ownership
 
-- Backend no longer auto-creates a default session/tab.
-- Frontend ensures usability:
-  - if no sessions after init, create one on main host.
-  - if user closes last session, create one on main host.
+- Backend does not auto-create a default session anymore.
+- Frontend is responsible for usability:
+  - create one main-host session if init returns none
+  - recreate one main-host session if user closes the last session
 
 Relevant code:
-- `public/app.js` `initApp`, `closeSession`
-- `src/server.mjs` (no auto-create fallback)
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/src/server.mjs`
 
-### 2.7 Polling / heartbeat behavior
+### 2.7 Polling and heartbeat
 
-- Online heartbeat sync interval: `1000ms` (frontend).
-- Reconnect retry cadence when host is down: `5000ms` throttle per host.
-- Do not remove strong polling; it is a UX requirement.
+- Frontend heartbeat cadence: `1000ms`
+- Reconnect retry throttle per host: `5000ms`
+- Do not weaken these without measuring UX fallout.
 
 Relevant code:
-- `public/app.js`
-  - `HEARTBEAT_INTERVAL_MS = 1000`
-  - `RECONNECT_RETRY_MS = 5000`
-  - `syncServer`, `ServerClient.startHeartbeat`
+- `/Users/leask/Documents/Tabminal/public/app.js`
 
 ### 2.8 Cloudflare Access handling
 
-Current behavior for sub-hosts:
-- requests use `credentials: 'include'` so Access cookies can be sent.
-- requests default to `redirect: 'manual'` on non-main hosts.
-- Access redirect is treated as reconnect reason, not generic password failure.
-- reconnect UI can trigger opening host root in a new tab for Access login.
+- Non-main host requests use `credentials: 'include'`.
+- Non-main host fetches default to `redirect: 'manual'`.
+- Access redirects should show reconnect/login state, not generic password
+  failure.
+- Reconnect UI may open the host root in a new tab for Access login.
 
 Relevant code:
-- `public/app.js`
-  - `ServerClient.fetch`
-  - `probeAccessLoginUrl`
-  - `openAccessLoginPage`
-- `public/modules/url-auth.js`
-  - `isAccessRedirectResponse`
-  - `buildAccessLoginUrl` (root origin)
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
 
-### 2.9 CORS policy in backend
-
-- Backend currently allows cross-origin by reflecting request origin when present.
-- For requests without origin, backend returns `Access-Control-Allow-Origin: *`.
-- OPTIONS is handled with 204 directly.
-- No per-origin `cors-origin` config is used now.
-
-Relevant code:
-- `src/server.mjs` top-level CORS middleware
-
-### 2.10 Runtime version and PWA cache coherence
+### 2.9 Runtime version and PWA coherence
 
 - Backend heartbeat returns runtime boot id.
-- Frontend appends `?rt=<bootId>` to URL and reloads on server restart/version change.
-- `index.html` loads `styles.css` and `app.js` using runtime key.
-- SW is registered with `?rt=<bootId>`, cache key includes that runtime id.
-- App shell (`/`, `/index.html`, `/app.js`, `/styles.css`, `/modules/*`) uses
-  network-first.
+- Frontend appends `?rt=<bootId>` and reloads on runtime change.
+- `index.html` versions `styles.css` and `app.js` with runtime key.
+- Service worker is versioned the same way.
 
 Relevant code:
-- `src/server.mjs` `/api/heartbeat` -> `runtime.bootId`
-- `public/app.js` `handlePrimaryRuntimeVersion`
-- `public/index.html` runtime loader script
-- `public/sw.js`
+- `/Users/leask/Documents/Tabminal/src/server.mjs`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/public/index.html`
+- `/Users/leask/Documents/Tabminal/public/sw.js`
 
-## 3) UX Contracts to Keep
+## 3) ACP Design Contracts
 
-### 3.1 Sidebar host controls
+### 3.1 ACP architecture shape
 
-- Per-host row: primary action button + (non-main only) remove button.
-- Remove button is overlay style (top-left), hidden by default, fades in on hover/focus.
-- Main host has no remove button.
-- Main button text:
-  - normal: `New Tab @ <Host>`
-  - reconnect: `Reconnect <Host>`
-  - access flow: `Cloudflare Login <Host>`
-- Second line includes latency text + heartbeat dot + mini heartbeat canvas.
-
-Relevant code:
-- `public/app.js` `renderServerControls`
-- `public/styles.css` `.server-row`, `.server-main-button`, `.server-delete-button`
-
-### 3.2 Host naming display
-
-Display priority for host name:
-1. configured `host` alias
-2. runtime hostname from host heartbeat
-3. URL hostname
-4. `'unknown'`
-
-Session metadata line should stay:
-- `HOST: user@<host>`
-- host text uses `.host-emphasis` style.
+- Tabminal embeds an ACP supervisor in the backend.
+- ACP agents are not implemented in-repo; Tabminal launches or attaches to
+  external ACP runtimes.
+- Built-in definitions currently include:
+  - Gemini CLI
+  - Codex CLI
+  - Claude Agent
+  - GitHub Copilot
+  - ACP Test Agent when `TABMINAL_ENABLE_TEST_AGENT=1`
 
 Relevant code:
-- `public/modules/session-meta.js`
+- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+- `/Users/leask/Documents/Tabminal/src/acp-test-agent.mjs`
 
-### 3.3 Path display
+### 3.2 ACP workspace model
 
-- PWD display in tab meta uses fish-style compact path shortening.
-- Keep this style unless a full UX redesign is explicitly requested.
-
-Relevant code:
-- `public/modules/session-meta.js` `shortenPathFishStyle`
-
-### 3.4 Small-screen rule (< 600px height)
-
-- `new-tab-item` region is capped to two-button area height and scrollable.
-- This is intentional for small-height mobile/embedded layouts.
+- Agent tabs share the same workspace strip as file tabs and pinned terminal
+  tabs.
+- Showing the agent workspace must not force-open the file tree.
+- Showing the file tree must not be required for agent tabs to exist.
+- Workspace bar should stay visible whenever there is any open file tab, agent
+  tab, or pinned terminal tab.
 
 Relevant code:
-- `public/styles.css` `@media (max-height: 600px)` on `.new-tab-item`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/public/styles.css`
 
-## 4) Known Pitfalls and Their Root Causes
+### 3.3 Agent dropdown and toggle behavior
 
-### 4.1 `SecurityError: insecure WebSocket from HTTPS page`
+- Left sidebar robot button is a toggle.
+- First click opens the host-scoped agent dropdown.
+- Clicking the same button again closes it.
+- If either file tree or agent toggle is active, the opposite control remains
+  visible; do not let one disappear while the other is lit.
 
-Cause:
-- trying `ws://` from HTTPS page.
-Current mitigation:
-- WS URL builder chooses `wss://` if page is HTTPS or host URL is HTTPS.
+### 3.4 Jump in semantics
 
-Check:
-- `public/app.js` `ServerClient.resolveWsUrl`
-- ensure host URL is HTTPS when used from secure origin.
+- `Jump in` is not a read-only preview.
+- While the managed terminal is still alive, it should switch into a real
+  controllable terminal session.
+- If the terminal has already exited, the restored session is effectively
+  history-only.
+- Agent sync must never steal focus back from a session the user jumped into.
 
-### 4.2 `TypeError: Failed to fetch` during heartbeat
+Relevant code:
+- `/Users/leask/Documents/Tabminal/public/app.js`
 
-Usually means:
-- host down, DNS issue, TLS failure, CORS block, or network unreachable.
-Expected behavior:
-- warning-level reconnect messaging, not noisy crash behavior.
+### 3.5 Hidden terminal resize contract
 
-Check:
-- browser network tab
-- host availability
-- Access auth state for that host
+- If a main terminal is hidden because it is pinned into a workspace tab and is
+  not the active visible tab, do not report resized dimensions from that hidden
+  state back to the backend.
+- Keep the previous valid size instead.
+- This prevents broken sidebar previews caused by tiny hidden-layout sizes.
 
-### 4.3 Cloudflare Access 302/login loops
+Relevant code:
+- `/Users/leask/Documents/Tabminal/public/app.js`
 
-Important:
-- CORS headers alone do not fix Access redirect login requirements.
-- Main issue is Access auth challenge during API request.
-- Current design handles this by detecting redirect and opening host root login page.
+### 3.6 Shell ready noise filtering
 
-### 4.4 Host list not restoring after refresh
+- `TABMINAL_SHELL_READY=1` and related shell bootstrap commands are internal.
+- They must not produce user notifications or visible execution-completed noise.
 
-Check in order:
-1. main host authenticated?
-2. `/api/cluster` returns expected `servers` array?
-3. entries include valid `id` and `baseUrl`?
-4. entry skipped as self-host by dedupe/hostname rule?
+Relevant code:
+- `/Users/leask/Documents/Tabminal/shell/tabminal-bashrc`
+- `/Users/leask/Documents/Tabminal/src/terminal-session.mjs`
+- `/Users/leask/Documents/Tabminal/public/app.js`
 
-### 4.5 Same domain with different path does not behave as separate hosts
+### 3.7 Agent plan behavior
 
-Current architecture dedupes by `hostname[:port]` and uses absolute `/api/*`/`/ws/*`.
-Do not assume path-prefix multiplexing works without deeper routing redesign.
+- In-progress plan lives in the fixed area between activity strip and composer.
+- Once fully completed, it should archive into transcript history and stop
+  occupying the fixed panel slot.
+- Completed plans are historical transcript content, not permanent composer UI.
+
+### 3.8 Transcript auto-scroll contract
+
+- If the user was already at the bottom, keep them pinned to bottom when:
+  - new transcript messages arrive
+  - tool-call terminal blocks grow
+  - plan/activity/queue panels change height
+  - transcript container height changes
+- If the user was not at the bottom, preserve position and do not yank them
+  back down.
+
+Relevant code:
+- `/Users/leask/Documents/Tabminal/public/app.js`
+
+### 3.9 Slash command menu contract
+
+- Slash-command menu opens upward, as a floating overlay above the composer.
+- It must not push the composer or nearby controls.
+- Keyboard navigation must keep the active item scrolled into view with some
+  padding from the edges.
+- Current shortcut to open agent menu is `Ctrl+Shift+A`.
+
+Relevant code:
+- `/Users/leask/Documents/Tabminal/public/app.js`
+- `/Users/leask/Documents/Tabminal/public/styles.css`
+- `/Users/leask/Documents/Tabminal/public/index.html`
+
+### 3.10 Usage HUD contract
+
+- Expanded usage HUD is now a CSS-driven fixed layout.
+- Do not reintroduce JS-measured width growth or time-based width drift.
+- Context line uses right-side usage text.
+- Limit rows use `% left` plus reset text.
+- The HUD should expand predictably and not resize every second as reset text
+  updates.
+
+Relevant code:
+- `/Users/leask/Documents/Tabminal/public/styles.css`
+- `/Users/leask/Documents/Tabminal/public/app.js`
+
+## 4) ACP Status and Remaining Gaps
+
+`/Users/leask/Documents/Tabminal/ACP_PLANING.md` is partly stale.
+
+Implemented from that plan:
+
+- ACP supervisor and backend APIs
+- ACP websocket fan-out
+- agent tab restore and `loadSession` restore where supported
+- slash commands
+- prompt attachments
+- structured tool cards
+- diff and code/resource rendering
+- managed terminal transcript UI
+- permission handling
+- usage HUD
+- browser smoke and ACP test agent support
+
+Still not clearly done end-to-end:
+
+- registry-driven install UX
+- explicit TCP ACP runtime support in the UI
+- dedicated conversation history browser independent of terminal sessions
+
+Implication:
+
+- Do not delete `ACP_PLANING.md` just because most of the MVP shipped.
+- If it is removed later, first copy the still-open deferred items into a new
+  canonical roadmap document.
 
 ## 5) File Map for Fast Onboarding
 
 Backend:
-- `src/server.mjs`: API routes, WS upgrade, CORS, runtime boot id, startup/shutdown.
-- `src/config.mjs`: merged config parser (defaults/home/local/CLI/env), validation.
-- `src/auth.mjs`: hash auth, lockout logic, API and WS auth checks.
-- `src/persistence.mjs`: sessions, memory, cluster registry disk persistence.
-- `src/terminal-manager.mjs`: PTY session lifecycle + persistence glue.
-- `src/terminal-session.mjs`: terminal stream parsing, history, metadata, AI context.
+- `/Users/leask/Documents/Tabminal/src/server.mjs`
+  - API routes, WS upgrade, auth, runtime boot id
+- `/Users/leask/Documents/Tabminal/src/config.mjs`
+  - merged config parser and validation
+- `/Users/leask/Documents/Tabminal/src/auth.mjs`
+  - password hashing and auth checks
+- `/Users/leask/Documents/Tabminal/src/persistence.mjs`
+  - sessions, cluster registry, ACP tab/config persistence
+- `/Users/leask/Documents/Tabminal/src/terminal-manager.mjs`
+  - PTY lifecycle and persistence
+- `/Users/leask/Documents/Tabminal/src/terminal-session.mjs`
+  - terminal stream parsing, shell AI path, execution model
+- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+  - ACP definitions, runtime supervision, ACP tab lifecycle
+- `/Users/leask/Documents/Tabminal/src/acp-test-agent.mjs`
+  - local ACP smoke agent with slash-command fixtures
 
 Frontend:
-- `public/app.js`: host/session state, sync loop, UI orchestration.
-- `public/modules/url-auth.js`: URL normalization, dedupe key, auth helpers.
-- `public/modules/session-meta.js`: host display and path shortening.
-- `public/styles.css`: sidebar/tab/host control styling and responsive rules.
-- `public/index.html`: shell DOM, runtime versioned loader, SW register.
-- `public/sw.js`: runtime-versioned caching strategy.
+- `/Users/leask/Documents/Tabminal/public/app.js`
+  - nearly all UI orchestration lives here
+- `/Users/leask/Documents/Tabminal/public/modules/url-auth.js`
+  - URL normalization and auth helpers
+- `/Users/leask/Documents/Tabminal/public/modules/session-meta.js`
+  - host display and compact path formatting
+- `/Users/leask/Documents/Tabminal/public/styles.css`
+  - all current UI contracts and responsive rules
+- `/Users/leask/Documents/Tabminal/public/index.html`
+  - shell DOM, layout bootstrapping, shortcuts modal
 
-Native apps:
-- `apps/README.md`: native app architecture and rollout plan.
-- `apps/Apple`: Apple-platform app, Swift package, CLI launch scripts.
-- `apps/ghostty-vendor`: Ghostty xcframework build and verification helpers.
+Tests and smoke:
+- `/Users/leask/Documents/Tabminal/test/acp-manager.mjs`
+  - richest ACP coverage
+- `/Users/leask/Documents/Tabminal/scripts/acp-browser-smoke.mjs`
+  - browser ACP smoke against a real running app and real Chrome remote debug
 
-## 6) Logs and Debug Guidance
+## 6) Debug and Testing Guidance
 
-Expected, low-noise warnings:
-- host unreachable / reconnect transitions.
-- invalid cluster entries skipped.
+### 6.1 Basic quality gates
 
-Avoid:
-- spamming full stack traces for normal offline scenarios.
-- debug-only console noise left enabled by default.
+Run these before release or after meaningful ACP/UI changes:
 
-Note:
-- old `cluster-debug` helper has been intentionally removed; do not reintroduce
-  unless there is a concrete observability requirement.
-
-## 7) Security and Risk Notes
-
-- Product is high-privilege by design (terminal + file write).
-- AI features may send terminal context to model providers.
-- Current policy is explicit risk acknowledgment (`--accept-terms` / config flag).
-- Choose trusted model providers and least-privilege credentials.
-
-## 8) Deployment and Ops Notes
-
-- Local helper script: `reploy.sh` (intentionally ignored by git and npm package).
-- It restarts one macOS launchctl node + several Linux pm2 nodes via SSH.
-- Script contains aggressive cleanup on Linux nodes (reset/clean fallback);
-  use carefully in shared environments.
-
-## 9) Quality Gates Before Release
-
-Recommended checks:
 1. `npm run lint`
 2. `npm test`
 3. `npm run build`
-4. quick manual smoke:
-   - main host login
-   - add host (with and without password, inheritance path)
-   - reconnect flow (normal + Access login path)
-   - delete host
-   - restart backend and confirm runtime cache refresh (`rt` flow)
 
-## 10) Change Safety Rules for Future Refactors
+### 6.2 ACP test agent
 
-- Do not move host list back to localStorage.
+Enable it with:
+
+```bash
+TABMINAL_ENABLE_TEST_AGENT=1 npm start -- --accept-terms
+```
+
+Useful slash commands in ACP Test Agent:
+
+- `/demo`: richest happy-path demo
+- `/plan`: plan and usage only
+- `/diff`: terminal, diff, code/resource payloads
+- `/permission`: permission flow
+- `/cancel`: long-running cancel flow
+- `/stale`: stale tool settlement path
+- `/order`: message ordering around tools
+- `/fail`: prompt error path
+
+Use these instead of inventing ad-hoc prompts when validating ACP UI.
+
+### 6.3 Browser smoke
+
+Preferred browser smoke:
+
+- `/Users/leask/Documents/Tabminal/scripts/acp-browser-smoke.mjs`
+
+It supports:
+
+- Chrome remote debugging target
+- ACP Test Agent slash-command flows
+- attachment coverage
+- tool/diff/code/terminal assertions
+- restore-tail validation
+
+Typical setup:
+
+1. Start a local Tabminal instance with `TABMINAL_ENABLE_TEST_AGENT=1`
+2. Run Chrome with remote debugging
+3. Point smoke at that Chrome target and Tabminal URL
+
+### 6.4 Availability/debug tips
+
+If an ACP agent appears inconsistently available:
+
+- Compare the backend runtime `PATH` with your interactive shell `PATH`.
+- Do not assume your login shell and the running `npm start` environment match.
+- Copilot and other CLIs may live in `~/.local/bin`; ACP discovery now augments
+  common user-local bin paths.
+- Restore failures should not temporarily mark built-in definitions unavailable.
+
+Relevant code:
+- `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+
+### 6.5 Focus and session-debug tips
+
+If `Jump in` appears to bounce back to the original agent workspace:
+
+- inspect agent-sync code first
+- the previous bug was backend updates restoring preferred workspace on the
+  wrong session and stealing focus
+
+If terminal preview proportions become huge:
+
+- check whether a hidden terminal is still reporting resized dimensions
+
+If you get noisy shell-ready notifications:
+
+- check for internal execution events being surfaced to the frontend
+
+## 7) Known Pitfalls
+
+### 7.1 `SecurityError: insecure WebSocket from HTTPS page`
+
+Cause:
+- trying `ws://` from an HTTPS page
+
+Mitigation:
+- websocket URL must switch to `wss://` when page or host URL is HTTPS
+
+### 7.2 `TypeError: Failed to fetch` during heartbeat
+
+Typical causes:
+- host down
+- DNS/TLS failure
+- CORS block
+- network unreachable
+- Cloudflare Access auth needed
+
+Expected behavior:
+- reconnect warning state, not noisy crash behavior
+
+### 7.3 Cloudflare Access loops
+
+- CORS headers alone do not solve auth redirects.
+- The problem is usually Access challenge during API fetch.
+- Current model is to detect redirect and open host root login page.
+
+### 7.4 Same domain with different path as multiple hosts
+
+- Not supported by current assumptions.
+- Do not patch around this casually; it needs a deeper routing redesign.
+
+## 8) Security and Risk Notes
+
+- Product is high-privilege by design.
+- AI features may send terminal or agent context to external providers.
+- `--accept-terms` is the explicit risk-ack mechanism.
+- Prefer least-privilege credentials and trusted providers.
+
+## 9) Deployment and Ops Notes
+
+- Local helper script:
+  - `/Users/leask/Documents/Tabminal/reploy.sh`
+- It restarts one macOS launchctl node plus several Linux `pm2` nodes via SSH.
+- It includes aggressive cleanup behavior on Linux nodes; use carefully.
+
+## 10) Change Safety Rules
+
+- Do not move host registry persistence back into browser-owned local state.
 - Do not make sub-host auth failures trigger global logout.
 - Do not remove `credentials: 'include'` from host fetch wrapper.
-- Do not remove reconnect backoff (`5s`) or online heartbeat cadence (`1s`).
+- Do not remove the `1s` heartbeat or `5s` reconnect throttle without evidence.
 - Do not reintroduce backend auto-create-session fallback.
-- Do not add path-based host assumptions without redesigning URL/WS routing model.
+- Do not bring back JS-driven usage HUD width measurement.
+- Do not let agent sync steal focus from a user-selected terminal session.
+- Do not let hidden terminal tabs report bogus tiny sizes to the backend.
