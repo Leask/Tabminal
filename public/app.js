@@ -1419,7 +1419,9 @@ class EditorManager {
             this.layout();
         } else {
             if (this.currentSession) {
-                requestAnimationFrame(() => this.currentSession.mainFitAddon.fit());
+                requestAnimationFrame(() => {
+                    this.currentSession.fitMainTerminalIfVisible();
+                });
             }
         }
 
@@ -1507,7 +1509,7 @@ class EditorManager {
     layout() {
         // console.log('[Editor] layout called');
         if (!this.currentSession) return;
-        this.currentSession.mainFitAddon.fit();
+        this.currentSession.fitMainTerminalIfVisible();
         if (this.editor && this.pane.style.display !== 'none') {
             const width = this.pane.clientWidth;
             const height = this.pane.clientHeight - 35; // Subtract fixed safety margin
@@ -1828,8 +1830,9 @@ class EditorManager {
         this.syncTerminalWorkspacePlacement(TERMINAL_WORKSPACE_TAB_KEY);
 
         requestAnimationFrame(() => {
-            this.currentSession.mainFitAddon.fit();
-            this.currentSession.mainTerm.focus();
+            if (this.currentSession.fitMainTerminalIfVisible()) {
+                this.currentSession.mainTerm.focus();
+            }
             this.currentSession.reportResize();
         });
     }
@@ -4173,6 +4176,9 @@ class Session {
         });
 
         this.mainTerm.onResize((size) => {
+            if (!this.isMainTerminalVisible()) {
+                return;
+            }
             this.previewTerm.resize(size.cols, size.rows);
             this.updatePreviewScale();
 
@@ -4212,8 +4218,9 @@ class Session {
         if (wasActive && terminalEl) {
             terminalEl.innerHTML = '';
             this.mainTerm.open(terminalEl);
-            this.mainFitAddon.fit();
-            this.mainTerm.focus();
+            if (this.fitMainTerminalIfVisible()) {
+                this.mainTerm.focus();
+            }
         }
     }
 
@@ -4462,8 +4469,9 @@ class Session {
                 this.mainTerm.write(message.data || '', () => {
                     this.isRestoring = false;
                     if (state.activeSessionKey === this.key) {
-                        this.mainFitAddon.fit();
-                        this.mainTerm.focus();
+                        if (this.fitMainTerminalIfVisible()) {
+                            this.mainTerm.focus();
+                        }
                         this.reportResize();
                     }
                 });
@@ -4576,6 +4584,35 @@ class Session {
         this.mainTerm.write(data);
     }
 
+    isMainTerminalVisible() {
+        if (state.activeSessionKey !== this.key) {
+            return false;
+        }
+        if (!terminalEl || !this.mainTerm?.element) {
+            return false;
+        }
+        if (!terminalEl.contains(this.mainTerm.element)) {
+            return false;
+        }
+        const viewport = terminalWrapper || terminalEl;
+        if (!viewport?.isConnected) {
+            return false;
+        }
+        const style = window.getComputedStyle(viewport);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+            return false;
+        }
+        return terminalEl.clientWidth > 0 && terminalEl.clientHeight > 0;
+    }
+
+    fitMainTerminalIfVisible() {
+        if (!this.isMainTerminalVisible()) {
+            return false;
+        }
+        this.mainFitAddon.fit();
+        return true;
+    }
+
     send(payload) {
         if (this.socket?.readyState === WebSocket.OPEN) {
             this.socket.send(JSON.stringify(payload));
@@ -4583,8 +4620,15 @@ class Session {
     }
 
     reportResize() {
+        if (!this.isMainTerminalVisible()) {
+            return;
+        }
         if (this.mainTerm.cols && this.mainTerm.rows) {
-            this.send({ type: 'resize', cols: this.mainTerm.cols, rows: this.mainTerm.rows });
+            this.send({
+                type: 'resize',
+                cols: this.mainTerm.cols,
+                rows: this.mainTerm.rows
+            });
         }
     }
 
@@ -10103,12 +10147,16 @@ async function switchToSession(sessionKey, options = {}) {
     
     // Mount new session
     session.mainTerm.open(terminalEl);
-    session.mainFitAddon.fit();
-    session.mainTerm.focus();
+    session.fitMainTerminalIfVisible();
+    if (session.isMainTerminalVisible()) {
+        session.mainTerm.focus();
+    }
     
     // Double check focus
     requestAnimationFrame(() => {
-        session.mainTerm.focus();
+        if (session.isMainTerminalVisible()) {
+            session.mainTerm.focus();
+        }
     });
     
     session.reportResize();
@@ -10161,7 +10209,7 @@ async function closeSession(sessionKey) {
 const resizeObserver = new ResizeObserver(() => {
     if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
         const session = state.sessions.get(state.activeSessionKey);
-        session.mainFitAddon.fit();
+        session.fitMainTerminalIfVisible();
         session.reportResize();
         
         if (
