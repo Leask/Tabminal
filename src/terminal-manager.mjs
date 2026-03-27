@@ -68,6 +68,59 @@ function clearBashPromptEnv(env) {
     }
 }
 
+function uniqueStringList(values) {
+    if (!Array.isArray(values)) return [];
+    return Array.from(new Set(
+        values.filter(
+            (value) => typeof value === 'string' && value.length > 0
+        )
+    ));
+}
+
+function normalizeWorkspaceState(input = {}, fallback = {}) {
+    const source = input && typeof input === 'object' ? input : {};
+    const base = fallback && typeof fallback === 'object' ? fallback : {};
+    return {
+        updatedAt: Number.isFinite(source.updatedAt)
+            ? source.updatedAt
+            : (
+                Number.isFinite(base.updatedAt)
+                    ? base.updatedAt
+                    : 0
+            ),
+        updatedBy: typeof source.updatedBy === 'string'
+            ? source.updatedBy
+            : (
+                typeof base.updatedBy === 'string'
+                    ? base.updatedBy
+                    : ''
+            ),
+        isVisible: !!source.isVisible,
+        openFiles: uniqueStringList(source.openFiles),
+        terminalDisplayMode: source.terminalDisplayMode === 'tab'
+            ? 'tab'
+            : 'auto',
+        expandedPaths: uniqueStringList(source.expandedPaths)
+    };
+}
+
+function compareWorkspaceState(left, right) {
+    const leftUpdatedAt = Number.isFinite(left?.updatedAt) ? left.updatedAt : 0;
+    const rightUpdatedAt = Number.isFinite(right?.updatedAt)
+        ? right.updatedAt
+        : 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+        return leftUpdatedAt - rightUpdatedAt;
+    }
+    const leftUpdatedBy = typeof left?.updatedBy === 'string'
+        ? left.updatedBy
+        : '';
+    const rightUpdatedBy = typeof right?.updatedBy === 'string'
+        ? right.updatedBy
+        : '';
+    return leftUpdatedBy.localeCompare(rightUpdatedBy);
+}
+
 export class TerminalManager {
     constructor() {
         this.sessions = new Map();
@@ -228,7 +281,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             removeOnExit: options.removeOnExit !== false,
             enableAiHijack: options.enableAiHijack !== false,
             enableTitlePolling: options.enableTitlePolling !== false,
-            editorState: options.editorState,
+            editorState: normalizeWorkspaceState(options.editorState),
             executions: options.executions
         });
 
@@ -271,7 +324,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             rows: restoredData?.rows,
             createdAt: restoredData?.createdAt,
             title: restoredData?.title,
-            editorState: restoredData?.editorState,
+            editorState: restoredData?.workspaceState || restoredData?.editorState,
             executions: restoredData?.executions,
             restoreSnapshot: Boolean(restoredData),
             persistent: true,
@@ -326,9 +379,17 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     updateSessionState(id, data) {
         const session = this.sessions.get(id);
         if (session) {
-            // console.log(`[Manager] Updating session ${id} state:`, JSON.stringify(data));
-            if (data.editorState) {
-                session.editorState = { ...session.editorState, ...data.editorState };
+            const nextWorkspaceState = data.workspaceState || data.editorState;
+            if (nextWorkspaceState) {
+                const normalized = normalizeWorkspaceState(
+                    nextWorkspaceState,
+                    session.editorState
+                );
+                if (
+                    compareWorkspaceState(normalized, session.editorState) > 0
+                ) {
+                    session.editorState = normalized;
+                }
             }
             if (session.persistent) {
                 this.saveSessionState(session);
@@ -418,6 +479,7 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             exitStatus: s.exitStatus || null,
             managed: s.managed || null,
             editorState: s.editorState,
+            workspaceState: s.editorState,
             executions: s.executions
         }));
     }

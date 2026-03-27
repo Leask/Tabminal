@@ -99,6 +99,7 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
+const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
 const RECENT_AGENT_USAGE_STORAGE_KEY = 'tabminal_recent_agent_usage';
 const FILE_WORKSPACE_TAB_PREFIX = 'file:';
 const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
@@ -182,6 +183,96 @@ function buildMainTerminalTheme() {
 function workspaceKeyToFilePath(key) {
     if (!isFileWorkspaceTabKey(key)) return '';
     return key.slice(FILE_WORKSPACE_TAB_PREFIX.length);
+}
+
+function getWorkspaceDeviceId() {
+    try {
+        let value = localStorage.getItem(WORKSPACE_DEVICE_ID_STORAGE_KEY) || '';
+        if (!value) {
+            value = crypto.randomUUID();
+            localStorage.setItem(WORKSPACE_DEVICE_ID_STORAGE_KEY, value);
+        }
+        return value;
+    } catch {
+        return 'ephemeral-device';
+    }
+}
+
+function uniqueStringList(values) {
+    if (!Array.isArray(values)) return [];
+    return Array.from(new Set(
+        values.filter(
+            (value) => typeof value === 'string' && value.length > 0
+        )
+    ));
+}
+
+function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
+    const source = input && typeof input === 'object' ? input : {};
+    const base = fallback && typeof fallback === 'object' ? fallback : {};
+    const updatedAt = Number.isFinite(source.updatedAt)
+        ? source.updatedAt
+        : (
+            Number.isFinite(base.updatedAt)
+                ? base.updatedAt
+                : 0
+        );
+    const updatedBy = typeof source.updatedBy === 'string'
+        ? source.updatedBy
+        : (
+            typeof base.updatedBy === 'string'
+                ? base.updatedBy
+                : ''
+        );
+    return {
+        updatedAt,
+        updatedBy,
+        isVisible: !!source.isVisible,
+        openFiles: uniqueStringList(source.openFiles),
+        terminalDisplayMode: source.terminalDisplayMode === 'tab'
+            ? 'tab'
+            : 'auto',
+        expandedPaths: uniqueStringList(source.expandedPaths)
+    };
+}
+
+function compareWorkspaceSnapshots(left, right) {
+    const leftUpdatedAt = Number.isFinite(left?.updatedAt) ? left.updatedAt : 0;
+    const rightUpdatedAt = Number.isFinite(right?.updatedAt)
+        ? right.updatedAt
+        : 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+        return leftUpdatedAt - rightUpdatedAt;
+    }
+    const leftUpdatedBy = typeof left?.updatedBy === 'string'
+        ? left.updatedBy
+        : '';
+    const rightUpdatedBy = typeof right?.updatedBy === 'string'
+        ? right.updatedBy
+        : '';
+    return leftUpdatedBy.localeCompare(rightUpdatedBy);
+}
+
+function buildWorkspaceSnapshotForSession(session, overrides = {}) {
+    return normalizeWorkspaceSnapshot({
+        ...session.sharedWorkspaceState,
+        isVisible: session.editorState.isVisible,
+        openFiles: session.editorState.openFiles,
+        terminalDisplayMode: session.sharedWorkspaceState.terminalDisplayMode,
+        expandedPaths: session.sharedWorkspaceState.expandedPaths,
+        ...overrides
+    });
+}
+
+function touchSharedWorkspace(session, overrides = {}) {
+    if (!session) return null;
+    const snapshot = buildWorkspaceSnapshotForSession(session, {
+        ...overrides,
+        updatedAt: Date.now(),
+        updatedBy: getWorkspaceDeviceId()
+    });
+    session.sharedWorkspaceState = snapshot;
+    return snapshot;
 }
 
 // #region Sidebar Toggle (Mobile)
@@ -616,7 +707,7 @@ class EditorManager {
     }
 
     isTerminalTabPinned(session = this.currentSession) {
-        return session?.workspaceState?.terminalDisplayMode === 'tab';
+        return session?.sharedWorkspaceState?.terminalDisplayMode === 'tab';
     }
 
     canToggleTerminalWorkspaceMode(session = this.currentSession) {
@@ -694,17 +785,20 @@ class EditorManager {
         );
 
         if (isCompactWorkspaceMode()) {
-            session.workspaceState.terminalDisplayMode = 'auto';
+            session.sharedWorkspaceState.terminalDisplayMode = 'auto';
             this.updateTerminalLayoutButton();
             return;
         }
 
-        if ((session.workspaceState.terminalDisplayMode || 'auto') === nextMode) {
+        if (
+            (session.sharedWorkspaceState.terminalDisplayMode || 'auto')
+            === nextMode
+        ) {
             this.updateTerminalLayoutButton();
             return;
         }
 
-        session.workspaceState.terminalDisplayMode = nextMode;
+        session.sharedWorkspaceState.terminalDisplayMode = nextMode;
         if (nextMode === 'tab') {
             session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
         } else if (
@@ -714,7 +808,7 @@ class EditorManager {
                 this.getPreferredNonTerminalWorkspaceTabKey(session);
         }
 
-        session.saveState();
+        session.saveState({ touchWorkspace: true });
         this.switchTo(session);
         this.updateEditorPaneVisibility();
         renderTabs();
@@ -1501,7 +1595,7 @@ class EditorManager {
         }
         
         this.updateEditorPaneVisibility();
-        this.currentSession.saveState();
+        this.currentSession.saveState({ touchWorkspace: true });
     }
 
     switchTo(session) {
@@ -1527,6 +1621,9 @@ class EditorManager {
         const shouldShowWorkspace = state.isVisible
             || this.hasVisibleWorkspaceTabs(session);
         if (shouldShowWorkspace) {
+            if (state.isVisible) {
+                this.refreshSessionTree(session);
+            }
             this.renderEditorTabs();
             const activeKey = this.getActiveWorkspaceTabKey(session);
             if (activeKey) {
@@ -1578,7 +1675,12 @@ class EditorManager {
                 if (file.isDirectory) div.classList.add('is-dir');
                 
                 let isExpanded = false;
-                if (file.isDirectory && session.server.expandedPaths.has(file.path)) {
+                if (
+                    file.isDirectory
+                    && session.sharedWorkspaceState.expandedPaths.includes(
+                        file.path
+                    )
+                ) {
                     isExpanded = true;
                     li.classList.add('expanded');
                 }
@@ -1598,11 +1700,17 @@ class EditorManager {
                     if (file.isDirectory) {
                         if (li.classList.contains('expanded')) {
                             li.classList.remove('expanded');
-                            session.server.expandedPaths.delete(file.path);
-                            session.server.fetch('/api/memory/expand', {
+                            session.sharedWorkspaceState.expandedPaths =
+                                session.sharedWorkspaceState.expandedPaths
+                                    .filter((path) => path !== file.path);
+                            session.saveState({ touchWorkspace: true });
+                            void session.server.fetch('/api/memory/expand', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ path: file.path, expanded: false })
+                                body: JSON.stringify({
+                                    path: file.path,
+                                    expanded: false
+                                })
                             });
                             
                             icon.innerHTML = this.getIcon(file.name, true, false);
@@ -1610,11 +1718,19 @@ class EditorManager {
                             if (childUl) childUl.remove();
                         } else {
                             li.classList.add('expanded');
-                            session.server.expandedPaths.add(file.path);
-                            session.server.fetch('/api/memory/expand', {
+                            session.sharedWorkspaceState.expandedPaths =
+                                uniqueStringList([
+                                    ...session.sharedWorkspaceState.expandedPaths,
+                                    file.path
+                                ]);
+                            session.saveState({ touchWorkspace: true });
+                            void session.server.fetch('/api/memory/expand', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ path: file.path, expanded: true })
+                                body: JSON.stringify({
+                                    path: file.path,
+                                    expanded: true
+                                })
                             });
                             
                             icon.innerHTML = this.getIcon(file.name, true, true);
@@ -1643,9 +1759,11 @@ class EditorManager {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
 
+        let touchedWorkspace = false;
         if (!state.openFiles.includes(filePath)) {
             state.openFiles.push(filePath);
             this.renderEditorTabs();
+            touchedWorkspace = true;
         }
         
         this.updateEditorPaneVisibility();
@@ -1692,7 +1810,9 @@ class EditorManager {
         }
 
         this.activateFileTab(filePath);
-        this.currentSession.saveState();
+        if (touchedWorkspace) {
+            this.currentSession.saveState({ touchWorkspace: true });
+        }
     }
 
     closeFile(filePath) {
@@ -1700,8 +1820,10 @@ class EditorManager {
         const state = this.currentSession.editorState;
 
         const index = state.openFiles.indexOf(filePath);
+        let touchedWorkspace = false;
         if (index > -1) {
             state.openFiles.splice(index, 1);
+            touchedWorkspace = true;
         }
 
         this.renderEditorTabs();
@@ -1727,7 +1849,9 @@ class EditorManager {
         }
         
         // Save state AFTER updating activeFilePath
-        this.currentSession.saveState();
+        if (touchedWorkspace) {
+            this.currentSession.saveState({ touchWorkspace: true });
+        }
     }
 
     renderEditorTabs() {
@@ -4241,33 +4365,58 @@ class Session {
         this.lastExecutionEntry = null;
         this.needsAttention = false;
         this.lastNotifiedExecutionId = '';
+        const legacyEditorState = data.editorState
+            && typeof data.editorState === 'object'
+            ? data.editorState
+            : {};
+        const sharedWorkspaceInput = data.workspaceState
+            && typeof data.workspaceState === 'object'
+            ? data.workspaceState
+            : legacyEditorState;
+        const hasExplicitExpandedPaths = Array.isArray(
+            sharedWorkspaceInput?.expandedPaths
+        );
+        this.sharedWorkspaceState = normalizeWorkspaceSnapshot(
+            {
+                ...sharedWorkspaceInput,
+                expandedPaths: hasExplicitExpandedPaths
+                    ? sharedWorkspaceInput.expandedPaths
+                    : Array.from(this.server.expandedPaths)
+            }
+        );
+        const initialActiveFilePath = (
+            typeof legacyEditorState.activeFilePath === 'string'
+            && this.sharedWorkspaceState.openFiles.includes(
+                legacyEditorState.activeFilePath
+            )
+        )
+            ? legacyEditorState.activeFilePath
+            : (this.sharedWorkspaceState.openFiles[0] || null);
 
         this.editorState = {
-            isVisible: data.editorState?.isVisible || false,
+            isVisible: this.sharedWorkspaceState.isVisible,
             root: this.cwd,
-            openFiles: data.editorState?.openFiles || [],
-            activeFilePath: data.editorState?.activeFilePath || null,
+            openFiles: [...this.sharedWorkspaceState.openFiles],
+            activeFilePath: initialActiveFilePath,
             viewStates: new Map() // Path -> ViewState
         };
         this.workspaceState = {
-            activeTabKey: data.editorState?.activeWorkspaceTabKey
-                || (data.editorState?.activeFilePath
-                    ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
+            activeTabKey: legacyEditorState.activeWorkspaceTabKey
+                || (initialActiveFilePath
+                    ? makeFileWorkspaceTabKey(initialActiveFilePath)
                     : ''),
-            lastNonTerminalTabKey: data.editorState?.activeWorkspaceTabKey
+            lastNonTerminalTabKey: legacyEditorState.activeWorkspaceTabKey
                 && !isTerminalWorkspaceTabKey(
-                    data.editorState.activeWorkspaceTabKey
+                    legacyEditorState.activeWorkspaceTabKey
                 )
-                ? data.editorState.activeWorkspaceTabKey
-                : (data.editorState?.activeFilePath
-                    ? makeFileWorkspaceTabKey(data.editorState.activeFilePath)
+                ? legacyEditorState.activeWorkspaceTabKey
+                : (initialActiveFilePath
+                    ? makeFileWorkspaceTabKey(initialActiveFilePath)
                     : ''),
-            terminalDisplayMode:
-                data.editorState?.terminalDisplayMode === 'tab'
-                    ? 'tab'
-                    : 'auto',
-            recentAgentTabKeys: Array.isArray(data.editorState?.recentAgentTabKeys)
-                ? data.editorState.recentAgentTabKeys.filter(
+            recentAgentTabKeys: Array.isArray(
+                legacyEditorState?.recentAgentTabKeys
+            )
+                ? legacyEditorState.recentAgentTabKeys.filter(
                     (key) => typeof key === 'string' && key.length > 0
                 )
                 : []
@@ -4375,8 +4524,63 @@ class Session {
         }
     }
 
+    applySharedWorkspaceSnapshot(nextWorkspaceState) {
+        const normalized = normalizeWorkspaceSnapshot(
+            nextWorkspaceState,
+            this.sharedWorkspaceState
+        );
+        const resolveFallbackActiveKey = () => {
+            if (this.editorState.activeFilePath) {
+                return makeFileWorkspaceTabKey(this.editorState.activeFilePath);
+            }
+            const agentTab = getAgentTabsForSession(this)[0];
+            if (agentTab) {
+                return agentTab.key;
+            }
+            return normalized.terminalDisplayMode === 'tab'
+                ? TERMINAL_WORKSPACE_TAB_KEY
+                : '';
+        };
+        this.sharedWorkspaceState = normalized;
+        this.editorState.isVisible = normalized.isVisible;
+        this.editorState.openFiles = [...normalized.openFiles];
+
+        if (
+            this.editorState.activeFilePath
+            && !this.editorState.openFiles.includes(
+                this.editorState.activeFilePath
+            )
+        ) {
+            this.editorState.activeFilePath = this.editorState.openFiles[0]
+                || null;
+        }
+
+        const activeKey = this.workspaceState.activeTabKey || '';
+        if (isFileWorkspaceTabKey(activeKey)) {
+            const filePath = workspaceKeyToFilePath(activeKey);
+            if (!this.editorState.openFiles.includes(filePath)) {
+                this.workspaceState.activeTabKey = resolveFallbackActiveKey();
+            }
+        } else if (
+            isTerminalWorkspaceTabKey(activeKey)
+            && normalized.terminalDisplayMode !== 'tab'
+        ) {
+            this.workspaceState.activeTabKey = resolveFallbackActiveKey();
+        }
+
+        const lastNonTerminalKey =
+            this.workspaceState.lastNonTerminalTabKey || '';
+        if (isFileWorkspaceTabKey(lastNonTerminalKey)) {
+            const filePath = workspaceKeyToFilePath(lastNonTerminalKey);
+            if (!this.editorState.openFiles.includes(filePath)) {
+                this.workspaceState.lastNonTerminalTabKey = '';
+            }
+        }
+    }
+
     update(data) {
         let changed = false;
+        let workspaceChanged = false;
         const nextManaged = normalizeManagedSessionMeta(data.managed);
         if (
             JSON.stringify(nextManaged) !== JSON.stringify(this.managed || null)
@@ -4414,8 +4618,37 @@ class Session {
             this.env = data.env;
             changed = true;
         }
-        
-        if (data.cols && data.rows && (data.cols !== this.cols || data.rows !== this.rows)) {
+
+        const nextWorkspaceState = data.workspaceState
+            && typeof data.workspaceState === 'object'
+            ? data.workspaceState
+            : (
+                data.editorState
+                && typeof data.editorState === 'object'
+                    ? data.editorState
+                    : null
+            );
+        if (
+            nextWorkspaceState
+            && compareWorkspaceSnapshots(
+                nextWorkspaceState,
+                this.sharedWorkspaceState
+            ) > 0
+        ) {
+            const previousSnapshot = JSON.stringify(this.sharedWorkspaceState);
+            this.applySharedWorkspaceSnapshot(nextWorkspaceState);
+            const nextSnapshot = JSON.stringify(this.sharedWorkspaceState);
+            if (previousSnapshot !== nextSnapshot) {
+                changed = true;
+                workspaceChanged = true;
+            }
+        }
+
+        if (
+            data.cols
+            && data.rows
+            && (data.cols !== this.cols || data.rows !== this.rows)
+        ) {
             this.cols = data.cols;
             this.rows = data.rows;
             if (this.previewTerm) {
@@ -4426,6 +4659,18 @@ class Session {
 
         if (changed) {
             this.updateTabUI();
+            if (workspaceChanged) {
+                if (this.fileTreeElement) {
+                    if (this.editorState.isVisible) {
+                        editorManager.refreshSessionTree(this);
+                    } else {
+                        this.fileTreeElement.innerHTML = '';
+                    }
+                }
+            }
+            if (workspaceChanged && state.activeSessionKey === this.key) {
+                refreshWorkspaceIfSessionActive(this);
+            }
         }
     }
 
@@ -4549,20 +4794,12 @@ class Session {
         }
     }
 
-    saveState() {
+    saveState({ touchWorkspace = false } = {}) {
+        if (!touchWorkspace) {
+            return;
+        }
         const pending = getPendingSession(this.key);
-        pending.editorState = {
-            isVisible: this.editorState.isVisible,
-            root: this.editorState.root,
-            openFiles: this.editorState.openFiles,
-            activeFilePath: this.editorState.activeFilePath,
-            activeWorkspaceTabKey: this.workspaceState.activeTabKey || '',
-            recentAgentTabKeys: Array.isArray(this.workspaceState.recentAgentTabKeys)
-                ? this.workspaceState.recentAgentTabKeys
-                : [],
-            terminalDisplayMode:
-                this.workspaceState.terminalDisplayMode || 'auto'
-        };
+        pending.workspaceState = touchSharedWorkspace(this);
     }
 
     connect() {
@@ -5525,6 +5762,32 @@ class AgentTab {
         }
     }
 
+    applyInventory(data) {
+        const previousSession = this.getLinkedSession();
+        this.runtimeId = data.runtimeId || this.runtimeId || '';
+        this.runtimeKey = data.runtimeKey || this.runtimeKey || '';
+        this.acpSessionId = data.acpSessionId || this.acpSessionId || '';
+        this.agentId = data.agentId || this.agentId || '';
+        this.agentLabel = data.agentLabel || this.agentLabel || 'Agent';
+        this.title = typeof data.title === 'string' ? data.title : this.title;
+        this.commandLabel = data.commandLabel || this.commandLabel || '';
+        this.terminalSessionId = data.terminalSessionId || this.terminalSessionId;
+        this.cwd = data.cwd || this.cwd || '';
+        this.createdAt = data.createdAt || this.createdAt || new Date().toISOString();
+        this.status = data.status || this.status || 'ready';
+        this.busy = typeof data.busy === 'boolean' ? data.busy : this.busy;
+        this.errorMessage = data.errorMessage || this.errorMessage || '';
+        this.currentModeId = data.currentModeId || this.currentModeId || '';
+        const nextSession = this.getLinkedSession();
+        previousSession?.updateTabUI();
+        if (nextSession && nextSession !== previousSession) {
+            nextSession.updateTabUI();
+        }
+        if (nextSession) {
+            refreshWorkspaceIfSessionActive(nextSession);
+        }
+    }
+
     async #waitForSettled(timeoutMs = 5000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
@@ -5673,7 +5936,7 @@ const state = {
 };
 
 const pendingChanges = {
-    sessions: new Map() // sessionKey -> { resize, editorState, fileWrites: Map<path, content> }
+    sessions: new Map() // sessionKey -> { resize, workspaceState, fileWrites: Map<path, content> }
 };
 
 if (typeof window !== 'undefined') {
@@ -5763,14 +6026,6 @@ function getAgentTabsForServer(serverId) {
     return Array.from(state.agentTabs.values()).filter(
         (tab) => tab.serverId === serverId
     );
-}
-
-function hasActiveAgentSyncNeed(serverId) {
-    return getAgentTabsForServer(serverId).some((tab) => (
-        !!tab.busy
-        || tab.status === 'restoring'
-        || tab.isDrainingQueuedPrompt
-    ));
 }
 
 function shouldSyncManagedTerminalSession(server, nextSummary, _previous = null) {
@@ -8491,9 +8746,32 @@ function dispatchSyntheticKey(target, init) {
     return event.defaultPrevented;
 }
 
+function isUiElementVisible(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden') {
+        return false;
+    }
+    return element.getClientRects().length > 0;
+}
+
 function getVirtualInputTarget() {
+    const activeSession = getActiveSession();
+    const activeWorkspaceKey = activeSession
+        ? editorManager?.getActiveWorkspaceTabKey(activeSession) || ''
+        : '';
+    if (
+        activeSession
+        && isTerminalWorkspaceTabKey(activeWorkspaceKey)
+    ) {
+        return {
+            kind: 'terminal',
+            session: activeSession
+        };
+    }
     if (
         editorManager?.editor
+        && isUiElementVisible(editorManager.monacoContainer)
         && typeof editorManager.editor.hasTextFocus === 'function'
         && editorManager.editor.hasTextFocus()
     ) {
@@ -8504,25 +8782,24 @@ function getVirtualInputTarget() {
         };
     }
     const activeElement = document.activeElement;
-    if (isTextEntryControl(activeElement)) {
+    if (isTextEntryControl(activeElement) && isUiElementVisible(activeElement)) {
         return { kind: 'text', element: activeElement };
     }
     if (
-        state.activeSessionKey
-        && state.sessions.has(state.activeSessionKey)
+        activeSession
         && terminalEl
         && activeElement
         && terminalEl.contains(activeElement)
     ) {
         return {
             kind: 'terminal',
-            session: state.sessions.get(state.activeSessionKey)
+            session: activeSession
         };
     }
-    if (state.activeSessionKey && state.sessions.has(state.activeSessionKey)) {
+    if (activeSession) {
         return {
             kind: 'terminal',
-            session: state.sessions.get(state.activeSessionKey)
+            session: activeSession
         };
     }
     return { kind: 'none' };
@@ -8694,6 +8971,57 @@ function upsertAgentTab(server, data) {
     const agentTab = new AgentTab(data, server);
     state.agentTabs.set(key, agentTab);
     return agentTab;
+}
+
+function upsertAgentInventoryTab(server, data) {
+    const key = makeAgentTabKey(server.id, data.id);
+    const existing = state.agentTabs.get(key);
+    if (existing) {
+        existing.applyInventory(data);
+        existing.connect();
+        return existing;
+    }
+    const agentTab = new AgentTab(data, server);
+    state.agentTabs.set(key, agentTab);
+    return agentTab;
+}
+
+function reconcileAgentInventory(server, inventory) {
+    if (!server || !inventory || typeof inventory !== 'object') {
+        return;
+    }
+    const restoring = !!inventory.restoring;
+    const seenKeys = new Set();
+    const touchedSessions = new Set();
+
+    for (const tabData of Array.isArray(inventory.tabs) ? inventory.tabs : []) {
+        const agentTab = upsertAgentInventoryTab(server, tabData);
+        seenKeys.add(agentTab.key);
+        const session = agentTab.getLinkedSession();
+        if (session) {
+            touchedSessions.add(session.key);
+        }
+    }
+
+    if (!restoring) {
+        for (const agentTab of getAgentTabsForServer(server.id)) {
+            if (seenKeys.has(agentTab.key)) continue;
+            const session = agentTab.getLinkedSession();
+            if (session) {
+                touchedSessions.add(session.key);
+            }
+            removeAgentTab(agentTab.key);
+        }
+    }
+
+    for (const sessionKey of touchedSessions) {
+        const session = state.sessions.get(sessionKey);
+        if (!session) continue;
+        session.updateTabUI();
+        if (state.activeSessionKey === session.key) {
+            refreshWorkspaceIfSessionActive(session);
+        }
+    }
 }
 
 function noteRecentAgentTab(session, agentTabKey) {
@@ -9098,12 +9426,17 @@ async function syncServerList() {
 async function fetchExpandedPaths(server) {
     try {
         const res = await server.fetch('/api/memory/expanded');
-        if (res.ok) {
-            const list = await res.json();
-            server.expandedPaths.clear();
-            list.forEach(path => server.expandedPaths.add(path));
+        if (!res.ok) return;
+        const list = await res.json();
+        server.expandedPaths.clear();
+        for (const path of Array.isArray(list) ? list : []) {
+            if (typeof path === 'string' && path.length > 0) {
+                server.expandedPaths.add(path);
+            }
         }
-    } catch (e) { console.error(e); }
+    } catch (error) {
+        console.error(error);
+    }
 }
 
 async function syncServer(server) {
@@ -9114,9 +9447,6 @@ async function syncServer(server) {
     const promise = (async () => {
         const now = Date.now();
         const wasReconnecting = server.connectionStatus === 'reconnecting';
-        const shouldRefreshAgents = !server.agentStateLoaded
-            || wasReconnecting
-            || hasActiveAgentSyncNeed(server.id);
         if (
             wasReconnecting
             && server.nextSyncAt
@@ -9146,8 +9476,8 @@ async function syncServer(server) {
                 sessionUpdate.resize = pending.resize;
                 hasUpdate = true;
             }
-            if (pending.editorState) {
-                sessionUpdate.editorState = pending.editorState;
+            if (pending.workspaceState) {
+                sessionUpdate.workspaceState = pending.workspaceState;
                 hasUpdate = true;
             }
             if (pending.fileWrites && pending.fileWrites.size > 0) {
@@ -9197,7 +9527,7 @@ async function syncServer(server) {
                 if (!pending) continue;
 
                 if (update.resize) delete pending.resize;
-                if (update.editorState) delete pending.editorState;
+                if (update.workspaceState) delete pending.workspaceState;
                 if (update.fileWrites) {
                     for (const file of update.fileWrites) {
                         pending.fileWrites.delete(file.path);
@@ -9228,13 +9558,7 @@ async function syncServer(server) {
 
             const sessions = Array.isArray(data) ? data : data.sessions;
             reconcileSessions(server, sessions || []);
-            if (shouldRefreshAgents) {
-                try {
-                    await syncAgentsForServer(server, { force: true });
-                } catch (error) {
-                    console.warn('Failed to sync agents:', error);
-                }
-            }
+            reconcileAgentInventory(server, data.agents);
         } catch (error) {
             if (!wasReconnecting) {
                 console.warn(

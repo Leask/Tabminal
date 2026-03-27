@@ -37,6 +37,7 @@ export const saveSession = async (id, data) => {
             createdAt: data.createdAt,
             // Editor State
             editorState: data.editorState || {},
+            workspaceState: data.editorState || {},
             executions: data.executions || []
         };
         await fs.writeFile(filePath, JSON.stringify(serializable, null, 2));

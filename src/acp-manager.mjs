@@ -3254,6 +3254,32 @@ export class AcpManager {
         };
     }
 
+    async listInventory() {
+        return {
+            restoring: this.restoring,
+            tabs: Array.from(this.tabs.values()).map((entry) => {
+                const serialized = entry.serialize();
+                return {
+                    id: serialized.id,
+                    runtimeId: serialized.runtimeId,
+                    runtimeKey: serialized.runtimeKey,
+                    acpSessionId: serialized.acpSessionId,
+                    agentId: serialized.agentId,
+                    agentLabel: serialized.agentLabel,
+                    commandLabel: serialized.commandLabel,
+                    title: serialized.title,
+                    terminalSessionId: serialized.terminalSessionId,
+                    cwd: serialized.cwd,
+                    createdAt: serialized.createdAt,
+                    status: serialized.status,
+                    busy: serialized.busy,
+                    errorMessage: serialized.errorMessage,
+                    currentModeId: serialized.currentModeId
+                };
+            })
+        };
+    }
+
     async createTab(options) {
         await this.ensureConfigsLoaded();
         const definition = this.definitions.find(

@@ -216,8 +216,11 @@ router.all('/api/heartbeat', async (ctx) => {
                         const { cols, rows } = update.resize;
                         if (cols && rows) session.resize(cols, rows);
                     }
-                    if (update.editorState) {
-                        terminalManager.updateSessionState(session.id, { editorState: update.editorState });
+                    if (update.workspaceState || update.editorState) {
+                        terminalManager.updateSessionState(session.id, {
+                            workspaceState: update.workspaceState,
+                            editorState: update.editorState
+                        });
                     }
                     if (update.fileWrites) {
                         for (const file of update.fileWrites) {
@@ -235,6 +238,7 @@ router.all('/api/heartbeat', async (ctx) => {
 
     ctx.body = {
         sessions: terminalManager.listSessions(),
+        agents: await acpManager.listInventory(),
         system: systemMonitor.getStats(),
         runtime: {
             bootId: SERVER_BOOT_ID
