@@ -14,6 +14,7 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <script>
         const COMPACT_WORKSPACE_MAX_WIDTH = 767;
+        const COMPACT_TERMINAL_TAB_MAX_WIDTH = 1408;
         // Temporarily disabled short-landscape fallback. Pixel Fold and
         // similar devices can oscillate around the keyboard-driven viewport
         // boundary, which makes compact mode flap during sidebar animation.
@@ -76,12 +77,18 @@
 
             const previousCompactWorkspaceMode =
                 window.__tabminalCompactWorkspaceMode;
+            const previousCompactTerminalTabsMode =
+                window.__tabminalCompactTerminalTabsMode;
             const compactWorkspaceMode = shouldUseCompactWorkspaceMode(
                 width,
                 height,
                 previousCompactWorkspaceMode
             );
+            const compactTerminalTabsMode =
+                width <= COMPACT_TERMINAL_TAB_MAX_WIDTH;
             window.__tabminalCompactWorkspaceMode = compactWorkspaceMode;
+            window.__tabminalCompactTerminalTabsMode =
+                compactTerminalTabsMode;
 
             if (document.body) {
                 window.scrollTo(0, 0);
@@ -112,12 +119,22 @@
             }
 
             if (
-                previousCompactWorkspaceMode !== undefined
-                && previousCompactWorkspaceMode !== compactWorkspaceMode
+                (
+                    previousCompactWorkspaceMode !== undefined
+                    && previousCompactWorkspaceMode !== compactWorkspaceMode
+                )
+                || (
+                    previousCompactTerminalTabsMode !== undefined
+                    && previousCompactTerminalTabsMode
+                        !== compactTerminalTabsMode
+                )
             ) {
                 window.dispatchEvent(
                     new CustomEvent('tabminal:layout-modechange', {
-                        detail: { compactWorkspaceMode }
+                        detail: {
+                            compactWorkspaceMode,
+                            compactTerminalTabsMode
+                        }
                     })
                 );
             }

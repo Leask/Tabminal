@@ -170,6 +170,14 @@ function isCompactWorkspaceMode() {
     return !!window.__tabminalCompactWorkspaceMode;
 }
 
+function isCompactTerminalTabsMode() {
+    return !!window.__tabminalCompactTerminalTabsMode;
+}
+
+function isForcedTerminalWorkspaceMode() {
+    return isCompactWorkspaceMode() || isCompactTerminalTabsMode();
+}
+
 function getTerminalFontSize() {
     return IS_MOBILE ? 14 : 12;
 }
@@ -718,13 +726,13 @@ class EditorManager {
     }
 
     canToggleTerminalWorkspaceMode(session = this.currentSession) {
-        return !!session && !isCompactWorkspaceMode();
+        return !!session && !isForcedTerminalWorkspaceMode();
     }
 
     hasCompactWorkspaceTabs(session = this.currentSession) {
         return !!session
             && (
-                isCompactWorkspaceMode()
+                isForcedTerminalWorkspaceMode()
                 || this.isTerminalTabPinned(session)
             );
     }
@@ -791,7 +799,7 @@ class EditorManager {
             && this.terminalWrapper.contains(activeElement)
         );
 
-        if (isCompactWorkspaceMode()) {
+        if (isForcedTerminalWorkspaceMode()) {
             session.sharedWorkspaceState.terminalDisplayMode = 'auto';
             this.updateTerminalLayoutButton();
             return;
@@ -10871,7 +10879,7 @@ window.addEventListener('tabminal:layout-modechange', () => {
         && terminalEl.contains(activeElement)
     );
 
-    if (isCompactWorkspaceMode()) {
+    if (isForcedTerminalWorkspaceMode()) {
         if (terminalHasFocus) {
             session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
             session.saveState();
