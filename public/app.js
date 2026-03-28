@@ -286,6 +286,13 @@ if (sidebarToggle && sidebar && sidebarOverlay) {
         sidebarOverlay.classList.remove('open');
     };
 
+    sidebarToggle.addEventListener('pointerdown', (event) => {
+        if (!isCompactWorkspaceMode()) {
+            return;
+        }
+        event.preventDefault();
+    });
+
     sidebarToggle.addEventListener('click', () => {
         sidebar.classList.toggle('open');
         sidebarOverlay.classList.toggle('open');

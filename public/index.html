@@ -14,50 +14,60 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <script>
         const COMPACT_WORKSPACE_MAX_WIDTH = 767;
-        const COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH = 950;
-        const COMPACT_WORKSPACE_ENTER_MAX_SHORT_HEIGHT = 500;
-        const COMPACT_WORKSPACE_EXIT_MAX_SHORT_HEIGHT = 540;
+        // Temporarily disabled short-landscape fallback. Pixel Fold and
+        // similar devices can oscillate around the keyboard-driven viewport
+        // boundary, which makes compact mode flap during sidebar animation.
+        // const COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH = 950;
+        // const COMPACT_WORKSPACE_ENTER_MAX_SHORT_HEIGHT = 500;
+        // const COMPACT_WORKSPACE_EXIT_MAX_SHORT_HEIGHT = 540;
         const SIDEBAR_LAYOUT_PAUSE_MS = 360;
         let layoutLoopPausedUntil = 0;
+        let frozenLayoutViewport = null;
+        let sidebarLayoutThawTimer = 0;
 
         function shouldUseCompactWorkspaceMode(
             width,
             height,
             previousCompactWorkspaceMode = false
         ) {
-            if (width <= COMPACT_WORKSPACE_MAX_WIDTH) {
-                return true;
-            }
-
-            const isShortLandscapeCandidate = (
-                width > height
-                && width <= COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH
-            );
-            if (!isShortLandscapeCandidate) {
-                return false;
-            }
-
-            const shortHeightThreshold = previousCompactWorkspaceMode
-                ? COMPACT_WORKSPACE_EXIT_MAX_SHORT_HEIGHT
-                : COMPACT_WORKSPACE_ENTER_MAX_SHORT_HEIGHT;
-            return height <= shortHeightThreshold;
+            // Keep the extra args to preserve the old signature for possible
+            // re-enable of the short-landscape fallback above.
+            void height;
+            void previousCompactWorkspaceMode;
+            return width <= COMPACT_WORKSPACE_MAX_WIDTH;
         }
 
-        // Mobile Layout Manager
-        function updateLayout() {
+        function readLayoutViewport() {
             const vv = window.visualViewport;
             let width = window.innerWidth;
             let height = window.innerHeight;
             let offsetTop = 0;
             let offsetLeft = 0;
 
-            // Sanity check for iPadOS PWA bug where vv.height can be negative with physical keyboard
             if (vv && vv.height > 100) {
                 width = vv.width;
                 height = vv.height;
                 offsetTop = vv.offsetTop;
                 offsetLeft = vv.offsetLeft;
             }
+
+            return {
+                width,
+                height,
+                offsetTop,
+                offsetLeft
+            };
+        }
+
+        // Mobile Layout Manager
+        function updateLayout() {
+            const layoutViewport = frozenLayoutViewport || readLayoutViewport();
+            const {
+                width,
+                height,
+                offsetTop,
+                offsetLeft
+            } = layoutViewport;
 
             document.documentElement.style.setProperty('--app-width', `${width}px`);
             document.documentElement.style.setProperty('--app-height', `${height}px`);
@@ -121,6 +131,25 @@
             );
         }
 
+        function freezeLayoutViewport() {
+            frozenLayoutViewport = readLayoutViewport();
+            if (sidebarLayoutThawTimer) {
+                clearTimeout(sidebarLayoutThawTimer);
+                sidebarLayoutThawTimer = 0;
+            }
+        }
+
+        function thawLayoutViewport() {
+            if (sidebarLayoutThawTimer) {
+                clearTimeout(sidebarLayoutThawTimer);
+            }
+            sidebarLayoutThawTimer = window.setTimeout(() => {
+                frozenLayoutViewport = null;
+                sidebarLayoutThawTimer = 0;
+                updateLayout();
+            }, SIDEBAR_LAYOUT_PAUSE_MS);
+        }
+
         window.__tabminalPauseLayoutLoop = pauseLayoutLoop;
 
         if (window.visualViewport) {
@@ -154,6 +183,11 @@
                 }
                 sidebarOpen = isOpen;
                 pauseLayoutLoop();
+                if (isOpen) {
+                    freezeLayoutViewport();
+                } else {
+                    thawLayoutViewport();
+                }
             });
             observer.observe(sidebar, {
                 attributes: true,
