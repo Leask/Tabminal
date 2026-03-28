@@ -4994,7 +4994,10 @@ class Session {
         this.runningExecutionId = '';
         this.runningCommand = '';
 
-        if (!isTerminalViewVisible(this)) {
+        if (
+            state.activeSessionKey !== this.key
+            && !isAgentManagedSession(this)
+        ) {
             this.needsAttention = true;
             if (this.lastNotifiedExecutionId !== executionId) {
                 this.lastNotifiedExecutionId = executionId;
