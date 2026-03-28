@@ -16,6 +16,8 @@
         const COMPACT_WORKSPACE_MAX_WIDTH = 767;
         const COMPACT_WORKSPACE_MAX_SHORT_HEIGHT = 500;
         const COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH = 950;
+        const SIDEBAR_LAYOUT_PAUSE_MS = 360;
+        let layoutLoopPausedUntil = 0;
 
         function shouldUseCompactWorkspaceMode(width, height) {
             return width <= COMPACT_WORKSPACE_MAX_WIDTH
@@ -94,6 +96,16 @@
             }
         }
 
+        function pauseLayoutLoop(duration = SIDEBAR_LAYOUT_PAUSE_MS) {
+            const now = performance.now();
+            layoutLoopPausedUntil = Math.max(
+                layoutLoopPausedUntil,
+                now + duration
+            );
+        }
+
+        window.__tabminalPauseLayoutLoop = pauseLayoutLoop;
+
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', updateLayout);
             window.visualViewport.addEventListener('scroll', updateLayout);
@@ -103,13 +115,34 @@
 
         // High-performance Layout Loop (60fps)
         function layoutLoop() {
-            updateLayout();
+            if (performance.now() >= layoutLoopPausedUntil) {
+                updateLayout();
+            }
             requestAnimationFrame(layoutLoop);
         }
         layoutLoop();
 
         // Initial triggers
         document.addEventListener('DOMContentLoaded', updateLayout);
+        document.addEventListener('DOMContentLoaded', () => {
+            const sidebar = document.getElementById('sidebar');
+            if (!sidebar) {
+                return;
+            }
+            let sidebarOpen = sidebar.classList.contains('open');
+            const observer = new MutationObserver(() => {
+                const isOpen = sidebar.classList.contains('open');
+                if (isOpen === sidebarOpen) {
+                    return;
+                }
+                sidebarOpen = isOpen;
+                pauseLayoutLoop();
+            });
+            observer.observe(sidebar, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
+        });
         window.addEventListener('load', updateLayout);
 
         // Enhanced Touch Interceptor with Boundary Check
