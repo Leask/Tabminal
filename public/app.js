@@ -1563,12 +1563,15 @@ class EditorManager {
         this.updateTerminalLayoutButton();
     }
 
-    toggle() {
-        if (!this.currentSession) return;
-        const state = this.currentSession.editorState;
+    toggle(session = this.currentSession) {
+        if (!session) return;
+        const isCurrentSession = this.currentSession?.key === session.key;
+        const state = session.editorState;
         state.isVisible = !state.isVisible;
         
-        const tab = document.querySelector(`.tab-item[data-session-key="${this.currentSession.key}"]`);
+        const tab = document.querySelector(
+            `.tab-item[data-session-key="${session.key}"]`
+        );
         if (tab) {
             if (state.isVisible) tab.classList.add('editor-open');
             else tab.classList.remove('editor-open');
@@ -1576,26 +1579,34 @@ class EditorManager {
         
         if (state.isVisible) {
             // Only render if empty (first open)
-            if (this.currentSession.fileTreeElement && this.currentSession.fileTreeElement.children.length === 0) {
-                this.refreshSessionTree(this.currentSession);
+            if (
+                session.fileTreeElement
+                && session.fileTreeElement.children.length === 0
+            ) {
+                this.refreshSessionTree(session);
             }
-            this.renderEditorTabs();
-            const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
-            if (activeKey) {
-                this.activateWorkspaceTab(activeKey, true);
-            }
+        } else if (session.fileTreeElement) {
+            session.fileTreeElement.innerHTML = '';
         }
 
-        if (this.hasCompactWorkspaceTabs(this.currentSession)) {
+        if (isCurrentSession) {
             this.renderEditorTabs();
-            const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
+            const activeKey = this.getActiveWorkspaceTabKey(session);
             if (activeKey) {
                 this.activateWorkspaceTab(activeKey, true);
             }
+            if (this.hasCompactWorkspaceTabs(session)) {
+                this.renderEditorTabs();
+                const compactActiveKey = this.getActiveWorkspaceTabKey(session);
+                if (compactActiveKey) {
+                    this.activateWorkspaceTab(compactActiveKey, true);
+                }
+            }
+            this.updateEditorPaneVisibility();
         }
-        
-        this.updateEditorPaneVisibility();
-        this.currentSession.saveState({ touchWorkspace: true });
+
+        session.updateTabUI();
+        session.saveState({ touchWorkspace: true });
     }
 
     switchTo(session) {
@@ -1737,7 +1748,7 @@ class EditorManager {
                             await this.renderTree(file.path, li, session);
                         }
                     } else {
-                        this.openFile(file.path);
+                        await this.openFile(file.path, session);
                     }
                 });
 
@@ -1755,9 +1766,19 @@ class EditorManager {
         }
     }
 
-    async openFile(filePath) {
-        if (!this.currentSession) return;
-        const state = this.currentSession.editorState;
+    async openFile(filePath, sessionOrRestore = this.currentSession) {
+        const session = typeof sessionOrRestore === 'boolean'
+            ? this.currentSession
+            : sessionOrRestore;
+        if (!session) return;
+        if (this.currentSession?.key !== session.key) {
+            await switchToSession(session.key);
+        }
+        const targetSession = this.currentSession?.key === session.key
+            ? this.currentSession
+            : session;
+        if (!targetSession) return;
+        const state = targetSession.editorState;
 
         let touchedWorkspace = false;
         if (!state.openFiles.includes(filePath)) {
@@ -1778,7 +1799,9 @@ class EditorManager {
 
             if (!isImage) {
                 try {
-                    const res = await this.currentSession.server.fetch(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
+                    const res = await targetSession.server.fetch(
+                        `/api/fs/read?path=${encodeURIComponent(filePath)}`
+                    );
                     if (!res.ok) throw new Error('Failed to read file');
                     const data = await res.json();
                     content = data.content;
@@ -1811,7 +1834,7 @@ class EditorManager {
 
         this.activateFileTab(filePath);
         if (touchedWorkspace) {
-            this.currentSession.saveState({ touchWorkspace: true });
+            targetSession.saveState({ touchWorkspace: true });
         }
     }
 
@@ -4725,6 +4748,7 @@ class Session {
         const tab = tabListEl.querySelector(`[data-session-key="${this.key}"]`);
         if (!tab) return;
 
+        tab.classList.toggle('editor-open', !!this.editorState?.isVisible);
         tab.classList.toggle('agent-managed-session', isAgentManagedSession(this));
         tab.classList.toggle('agent-open', getAgentTabsForSession(this).length > 0);
 
@@ -10250,11 +10274,7 @@ function createTabElement(session) {
     toggleEditorBtn.title = 'Toggle File Editor';
     toggleEditorBtn.onclick = (e) => {
         e.stopPropagation();
-        if (state.activeSessionKey !== session.key) {
-            switchToSession(session.key).then(() => editorManager.toggle());
-        } else {
-            editorManager.toggle();
-        }
+        editorManager.toggle(session);
     };
     tab.appendChild(toggleEditorBtn);
 

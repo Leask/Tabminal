@@ -9,7 +9,7 @@
   "main": "src/server.mjs",
   "scripts": {
     "start": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs",
+    "dev": "node --watch-path=src --watch-path=public src/server.mjs",
     "build": "node build.mjs",
     "test": "node --test",
     "updep": "npx npm-check-updates -u && npm install",
