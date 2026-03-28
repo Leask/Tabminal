@@ -22,6 +22,7 @@ const SOS_PM_APC_SEQUENCE_REGEX = /\u001b[\^_][\s\S]*?\u001b\\/g;
 const TWO_CHAR_ESCAPE_REGEX = /\u001b[@-Z\\-_]/g;
 const CONTROL_CHAR_REGEX = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const TITLE_POLL_INTERVAL_MS = 3000;
+const QUERY_RESPONSE_CSI_REGEX = /^\u001b\[[0-9;?]*[Rn]/;
 
 const IGNORED_COMMANDS = [
     'export PROMPT_COMMAND',
@@ -97,6 +98,75 @@ function estimateSnapshotScrollback(cols, rows, historyLimit) {
     return Math.max(safeRows, Math.min(50000, estimatedRows));
 }
 
+function consumeTerminalQueryResponse(input, start = 0) {
+    if (typeof input !== 'string' || start >= input.length) {
+        return 0;
+    }
+
+    const slice = input.slice(start);
+    const csiMatch = QUERY_RESPONSE_CSI_REGEX.exec(slice);
+    if (csiMatch) {
+        return csiMatch[0].length;
+    }
+
+    if (!slice.startsWith('\u001b]')) {
+        return 0;
+    }
+
+    const oscMatch = /^\u001b](4|10|11);/.exec(slice);
+    if (!oscMatch) {
+        return 0;
+    }
+
+    const belIndex = slice.indexOf('\u0007');
+    const stIndex = slice.indexOf('\u001b\\');
+    let endIndex = -1;
+
+    if (belIndex >= 0) {
+        endIndex = belIndex + 1;
+    }
+
+    if (stIndex >= 0) {
+        const stEnd = stIndex + 2;
+        endIndex = endIndex < 0 ? stEnd : Math.min(endIndex, stEnd);
+    }
+
+    return endIndex > 0 ? endIndex : 0;
+}
+
+function isTerminalQueryResponseInput(input) {
+    if (typeof input !== 'string' || !input.startsWith('\u001b')) {
+        return false;
+    }
+
+    let index = 0;
+    while (index < input.length) {
+        const consumed = consumeTerminalQueryResponse(input, index);
+        if (!consumed) {
+            return false;
+        }
+        index += consumed;
+    }
+
+    return index > 0;
+}
+
+function selectFallbackQueryResponder(clients, pendingClients) {
+    for (const client of clients) {
+        if (client?.readyState === WS_STATE_OPEN) {
+            return client;
+        }
+    }
+
+    for (const client of pendingClients.keys()) {
+        if (client?.readyState === WS_STATE_OPEN) {
+            return client;
+        }
+    }
+
+    return null;
+}
+
 export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
@@ -129,6 +199,7 @@ export class TerminalSession {
         this.history = '';
         this.clients = new Set();
         this.pendingClients = new Map();
+        this.queryResponseOwner = null;
         this.closed = false;
         this.exitStatus = null;
         this.exitWaiters = [];
@@ -386,9 +457,18 @@ export class TerminalSession {
     attach(ws) {
         if (!ws) throw new Error('WebSocket instance required');
         this.pendingClients.set(ws, []);
+        if (!this.queryResponseOwner) {
+            this.queryResponseOwner = ws;
+        }
         ws.once('close', () => {
             this.clients.delete(ws);
             this.pendingClients.delete(ws);
+            if (this.queryResponseOwner === ws) {
+                this.queryResponseOwner = selectFallbackQueryResponder(
+                    this.clients,
+                    this.pendingClients
+                );
+            }
         });
         ws.on('message', (raw) => this._routeIncoming(raw, ws));
         ws.on('error', () => ws.close());
@@ -473,15 +553,35 @@ export class TerminalSession {
         } catch { return; }
 
         switch (payload.type) {
-            case 'input': this._handleInput(payload.data); break;
+            case 'input': this._handleInput(payload.data, ws); break;
             case 'resize': this._handleResize(payload.cols, payload.rows); break;
+            case 'claim_terminal_control':
+                this._claimTerminalControl(ws);
+                break;
             case 'ping': this._send(ws, { type: 'pong' }); break;
         }
     }
 
-    _handleInput(data) {
+    _handleInput(data, ws) {
         if (this.closed || typeof data !== 'string') return;
+        if (
+            isTerminalQueryResponseInput(data)
+            && this.queryResponseOwner
+            && ws
+            && ws !== this.queryResponseOwner
+        ) {
+            return;
+        }
         this.write(data);
+    }
+
+    _claimTerminalControl(ws) {
+        if (!ws) {
+            return;
+        }
+        if (this.clients.has(ws) || this.pendingClients.has(ws)) {
+            this.queryResponseOwner = ws;
+        }
     }
 
     _isAiEnabled() {

@@ -18,6 +18,9 @@ function buildStartSequence(command) {
     return `\u001b]1337;CommandStartB64=${encoded}\u0007`;
 }
 const PROMPT_MARKER = '\u001b]1337;TabminalPrompt\u0007';
+const QUERY_RESPONSE_CPR = '\u001b[30;1R';
+const QUERY_RESPONSE_BG =
+    '\u001b]11;rgb:0000/2b2b/3636\u0007\u001b[30;1R';
 
 describe('TerminalSession', () => {
     let pty;
@@ -67,6 +70,87 @@ describe('TerminalSession', () => {
 
         assert.strictEqual(pty.write.mock.calls.length, 1);
         assert.deepStrictEqual(pty.write.mock.calls[0].arguments, ['ls\n']);
+    });
+
+    it('accepts terminal query responses from the initial attached client only', async () => {
+        session = new TerminalSession(pty);
+        const owner = new MockSocket();
+        const observer = new MockSocket();
+        session.attach(owner);
+        session.attach(observer);
+        await Promise.all([
+            owner.waitForMessages(3),
+            observer.waitForMessages(3)
+        ]);
+
+        owner.emit('message', JSON.stringify({
+            type: 'input',
+            data: QUERY_RESPONSE_BG
+        }));
+        observer.emit('message', JSON.stringify({
+            type: 'input',
+            data: QUERY_RESPONSE_BG
+        }));
+
+        assert.strictEqual(pty.write.mock.calls.length, 1);
+        assert.deepStrictEqual(
+            pty.write.mock.calls[0].arguments,
+            [QUERY_RESPONSE_BG]
+        );
+    });
+
+    it('lets a client claim terminal query response ownership', async () => {
+        session = new TerminalSession(pty);
+        const owner = new MockSocket();
+        const contender = new MockSocket();
+        session.attach(owner);
+        session.attach(contender);
+        await Promise.all([
+            owner.waitForMessages(3),
+            contender.waitForMessages(3)
+        ]);
+
+        contender.emit('message', JSON.stringify({
+            type: 'claim_terminal_control'
+        }));
+        owner.emit('message', JSON.stringify({
+            type: 'input',
+            data: QUERY_RESPONSE_CPR
+        }));
+        contender.emit('message', JSON.stringify({
+            type: 'input',
+            data: QUERY_RESPONSE_CPR
+        }));
+
+        assert.strictEqual(pty.write.mock.calls.length, 1);
+        assert.deepStrictEqual(
+            pty.write.mock.calls[0].arguments,
+            [QUERY_RESPONSE_CPR]
+        );
+    });
+
+    it('reassigns terminal query response ownership when the owner closes', async () => {
+        session = new TerminalSession(pty);
+        const owner = new MockSocket();
+        const fallback = new MockSocket();
+        session.attach(owner);
+        session.attach(fallback);
+        await Promise.all([
+            owner.waitForMessages(3),
+            fallback.waitForMessages(3)
+        ]);
+
+        owner.close();
+        fallback.emit('message', JSON.stringify({
+            type: 'input',
+            data: QUERY_RESPONSE_CPR
+        }));
+
+        assert.strictEqual(pty.write.mock.calls.length, 1);
+        assert.deepStrictEqual(
+            pty.write.mock.calls[0].arguments,
+            [QUERY_RESPONSE_CPR]
+        );
     });
 
     it('resizes using sanitized values only', async () => {

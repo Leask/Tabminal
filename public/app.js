@@ -4464,6 +4464,10 @@ class Session {
             editorFlex: '2 1 0%'
         };
         this.previewRelayoutScheduled = false;
+        this.lastTerminalControlClaimAt = 0;
+        this.boundTerminalClaimRoot = null;
+        this.boundTerminalClaimTextarea = null;
+        this.boundTerminalClaimHandler = null;
         this.wrapperElement = null;
         this._createTerminals();
 
@@ -4529,6 +4533,8 @@ class Session {
         const wasActive = state.activeSessionKey === this.key;
         const previewWrapper = this.wrapperElement;
 
+        this.unbindTerminalControlClaim();
+
         try {
             this.previewTerm?.dispose();
         } catch (e) {
@@ -4556,6 +4562,7 @@ class Session {
         if (wasActive && terminalEl) {
             terminalEl.innerHTML = '';
             this.mainTerm.open(terminalEl);
+            this.bindTerminalControlClaim();
             if (this.fitMainTerminalIfVisible()) {
                 this.mainTerm.focus();
             }
@@ -5067,6 +5074,79 @@ class Session {
         }
     }
 
+    claimTerminalControl(force = false) {
+        if (state.activeSessionKey !== this.key) {
+            return;
+        }
+        if (this.socket?.readyState !== WebSocket.OPEN) {
+            return;
+        }
+
+        const now = Date.now();
+        if (!force && now - this.lastTerminalControlClaimAt < 250) {
+            return;
+        }
+
+        this.lastTerminalControlClaimAt = now;
+        this.send({ type: 'claim_terminal_control' });
+    }
+
+    bindTerminalControlClaim() {
+        this.unbindTerminalControlClaim();
+
+        const root = this.mainTerm?.element;
+        if (!root) {
+            return;
+        }
+
+        const textarea = this.mainTerm.textarea
+            || root.querySelector('textarea');
+        const handler = () => this.claimTerminalControl();
+
+        root.addEventListener('mousedown', handler, true);
+        root.addEventListener('touchstart', handler, true);
+        if (textarea) {
+            textarea.addEventListener('keydown', handler, true);
+            textarea.addEventListener('paste', handler, true);
+        }
+
+        this.boundTerminalClaimRoot = root;
+        this.boundTerminalClaimTextarea = textarea;
+        this.boundTerminalClaimHandler = handler;
+    }
+
+    unbindTerminalControlClaim() {
+        const handler = this.boundTerminalClaimHandler;
+        if (!handler) {
+            return;
+        }
+
+        this.boundTerminalClaimRoot?.removeEventListener(
+            'mousedown',
+            handler,
+            true
+        );
+        this.boundTerminalClaimRoot?.removeEventListener(
+            'touchstart',
+            handler,
+            true
+        );
+        this.boundTerminalClaimTextarea?.removeEventListener(
+            'keydown',
+            handler,
+            true
+        );
+        this.boundTerminalClaimTextarea?.removeEventListener(
+            'paste',
+            handler,
+            true
+        );
+
+        this.boundTerminalClaimRoot = null;
+        this.boundTerminalClaimTextarea = null;
+        this.boundTerminalClaimHandler = null;
+    }
+
     reportResize() {
         if (!this.isMainTerminalVisible()) {
             return;
@@ -5084,6 +5164,7 @@ class Session {
         this.shouldReconnect = false;
         clearTimeout(this.retryTimer);
         this.socket?.close();
+        this.unbindTerminalControlClaim();
         
         try {
             if (this.previewTerm) this.previewTerm.dispose();
@@ -10773,6 +10854,11 @@ async function switchToSession(sessionKey, options = {}) {
         return;
     }
 
+    const previousSession = state.activeSessionKey
+        ? state.sessions.get(state.activeSessionKey)
+        : null;
+    previousSession?.unbindTerminalControlClaim();
+
     state.activeSessionKey = sessionKey;
     renderTabs();
     if (scrollTabIntoView) {
@@ -10789,6 +10875,7 @@ async function switchToSession(sessionKey, options = {}) {
     
     // Mount new session
     session.mainTerm.open(terminalEl);
+    session.bindTerminalControlClaim();
     session.fitMainTerminalIfVisible();
     if (session.isMainTerminalVisible()) {
         session.mainTerm.focus();
