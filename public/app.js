@@ -10614,12 +10614,65 @@ function renderServerControls() {
 
 // #region Notification Manager
 const notificationManager = new NotificationManager();
+const APP_NOTIFICATION_QUIET_MS = 30_000;
+const APP_NOTIFICATION_IDLE_MS = 3 * 60 * 1000;
+let appNotificationQuietUntil = Date.now() + APP_NOTIFICATION_QUIET_MS;
+let lastAppInteractionAt = Date.now();
+
+function noteAppInteraction() {
+    lastAppInteractionAt = Date.now();
+}
+
+function enterAppNotificationQuietPeriod(duration = APP_NOTIFICATION_QUIET_MS) {
+    appNotificationQuietUntil = Math.max(
+        appNotificationQuietUntil,
+        Date.now() + duration
+    );
+}
+
+function shouldNotifyConnectionStatus() {
+    if (Date.now() < appNotificationQuietUntil) {
+        return false;
+    }
+    if (document.visibilityState !== 'visible') {
+        return false;
+    }
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) {
+        return false;
+    }
+    if ((Date.now() - lastAppInteractionAt) > APP_NOTIFICATION_IDLE_MS) {
+        return false;
+    }
+    return true;
+}
+
+document.addEventListener('pointerdown', noteAppInteraction, {
+    capture: true,
+    passive: true
+});
+document.addEventListener('touchstart', noteAppInteraction, {
+    capture: true,
+    passive: true
+});
+document.addEventListener('keydown', noteAppInteraction, {
+    capture: true
+});
+window.addEventListener('focus', () => {
+    noteAppInteraction();
+    enterAppNotificationQuietPeriod();
+});
+window.addEventListener('pageshow', () => {
+    noteAppInteraction();
+    enterAppNotificationQuietPeriod();
+});
 
 document.addEventListener('click', () => {
     notificationManager.requestPermission();
 }, { once: true, capture: true });
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+        noteAppInteraction();
+        enterAppNotificationQuietPeriod();
         clearVisibleAttentionState();
     }
 });
@@ -10661,18 +10714,20 @@ function setStatus(server, status) {
     statusMemory.set(server.id, status);
     server.connectionStatus = status;
     renderServerControls();
-
-    const activeServer = getActiveServer();
-    if (!activeServer || activeServer.id !== server.id) return;
     const hostName = getDisplayHost(server);
     const target = hostName || 'host';
+    const shouldNotify = shouldNotifyConnectionStatus();
 
-    if (status === 'reconnecting') {
+    if (status === 'reconnecting' && shouldNotify) {
         alert(`Lost connection to ${target}. Reconnecting...`, {
             type: 'warning',
             title: 'Connection'
         });
-    } else if (status === 'connected' && prevStatus === 'reconnecting') {
+    } else if (
+        status === 'connected'
+        && prevStatus === 'reconnecting'
+        && shouldNotify
+    ) {
         alert(`Connection to ${target} restored.`, {
             type: 'success',
             title: 'Connection'
@@ -10682,7 +10737,7 @@ function setStatus(server, status) {
             type: 'error',
             title: 'Connection'
         });
-    } else if (status === 'connected' && !prevStatus) {
+    } else if (status === 'connected' && !prevStatus && shouldNotify) {
         alert(`Connected to ${target}.`, {
             type: 'success',
             title: 'Connection'

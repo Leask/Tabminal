@@ -14,17 +14,33 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <script>
         const COMPACT_WORKSPACE_MAX_WIDTH = 767;
-        const COMPACT_WORKSPACE_MAX_SHORT_HEIGHT = 500;
         const COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH = 950;
+        const COMPACT_WORKSPACE_ENTER_MAX_SHORT_HEIGHT = 500;
+        const COMPACT_WORKSPACE_EXIT_MAX_SHORT_HEIGHT = 540;
         const SIDEBAR_LAYOUT_PAUSE_MS = 360;
         let layoutLoopPausedUntil = 0;
 
-        function shouldUseCompactWorkspaceMode(width, height) {
-            return width <= COMPACT_WORKSPACE_MAX_WIDTH
-                || (
-                    width <= COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH
-                    && height <= COMPACT_WORKSPACE_MAX_SHORT_HEIGHT
-                );
+        function shouldUseCompactWorkspaceMode(
+            width,
+            height,
+            previousCompactWorkspaceMode = false
+        ) {
+            if (width <= COMPACT_WORKSPACE_MAX_WIDTH) {
+                return true;
+            }
+
+            const isShortLandscapeCandidate = (
+                width > height
+                && width <= COMPACT_WORKSPACE_MAX_LANDSCAPE_WIDTH
+            );
+            if (!isShortLandscapeCandidate) {
+                return false;
+            }
+
+            const shortHeightThreshold = previousCompactWorkspaceMode
+                ? COMPACT_WORKSPACE_EXIT_MAX_SHORT_HEIGHT
+                : COMPACT_WORKSPACE_ENTER_MAX_SHORT_HEIGHT;
+            return height <= shortHeightThreshold;
         }
 
         // Mobile Layout Manager
@@ -48,12 +64,13 @@
             document.documentElement.style.setProperty('--app-top', `${offsetTop}px`);
             document.documentElement.style.setProperty('--app-left', `${offsetLeft}px`);
 
-            const compactWorkspaceMode = shouldUseCompactWorkspaceMode(
-                width,
-                height
-            );
             const previousCompactWorkspaceMode =
                 window.__tabminalCompactWorkspaceMode;
+            const compactWorkspaceMode = shouldUseCompactWorkspaceMode(
+                width,
+                height,
+                previousCompactWorkspaceMode
+            );
             window.__tabminalCompactWorkspaceMode = compactWorkspaceMode;
 
             if (document.body) {
