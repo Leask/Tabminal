@@ -85,7 +85,7 @@
                 previousCompactWorkspaceMode
             );
             const compactTerminalTabsMode =
-                width <= COMPACT_TERMINAL_TAB_MAX_WIDTH;
+                width < COMPACT_TERMINAL_TAB_MAX_WIDTH;
             window.__tabminalCompactWorkspaceMode = compactWorkspaceMode;
             window.__tabminalCompactTerminalTabsMode =
                 compactTerminalTabsMode;
