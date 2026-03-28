@@ -2241,7 +2241,7 @@ kbd {
     min-width: 0;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1408px) {
     .agent-panel-commands {
         display: none !important;
     }
