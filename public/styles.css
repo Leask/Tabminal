@@ -1561,7 +1561,7 @@ kbd {
 .tab-status-icon.is-attention,
 .agent-editor-tab-icon.is-attention,
 .toggle-agent-btn.is-attention {
-    color: var(--warning-color);
+    color: #cb4b16;
 }
 
 .tab-status-icon.is-running,
