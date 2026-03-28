@@ -6,6 +6,62 @@ export class NotificationManager {
         }
     }
 
+    // BEGIN temporary iOS web-app notification dedupe workaround
+    static RECENT_NOTIFICATION_KEY = 'tabminal_recent_notifications';
+
+    static RECENT_NOTIFICATION_LIMIT = 10;
+
+    static RECENT_NOTIFICATION_TTL_MS = 30_000;
+
+    _loadRecentNotifications() {
+        try {
+            const raw = localStorage.getItem(
+                NotificationManager.RECENT_NOTIFICATION_KEY
+            );
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    }
+
+    _storeRecentNotifications(entries) {
+        try {
+            localStorage.setItem(
+                NotificationManager.RECENT_NOTIFICATION_KEY,
+                JSON.stringify(entries)
+            );
+        } catch {
+            // Ignore localStorage failures.
+        }
+    }
+
+    _shouldSuppressRecentNotification(title, body) {
+        const now = Date.now();
+        const fingerprint = `${title}\n${body}`;
+        const recent = this._loadRecentNotifications().filter((entry) => (
+            entry
+            && typeof entry.fingerprint === 'string'
+            && Number.isFinite(entry.at)
+            && (now - entry.at) < NotificationManager.RECENT_NOTIFICATION_TTL_MS
+        ));
+
+        if (recent.some((entry) => entry.fingerprint === fingerprint)) {
+            this._storeRecentNotifications(
+                recent.slice(-NotificationManager.RECENT_NOTIFICATION_LIMIT)
+            );
+            return true;
+        }
+
+        recent.push({ fingerprint, at: now });
+        this._storeRecentNotifications(
+            recent.slice(-NotificationManager.RECENT_NOTIFICATION_LIMIT)
+        );
+        return false;
+    }
+    // END temporary iOS web-app notification dedupe workaround
+
     requestPermission() {
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
@@ -20,6 +76,9 @@ export class NotificationManager {
 
         // Check permission status directly
         if (Notification.permission === 'granted') {
+            if (this._shouldSuppressRecentNotification(title, body)) {
+                return true;
+            }
             try {
                 new Notification(title, {
                     body: body,
