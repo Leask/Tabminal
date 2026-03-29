@@ -375,6 +375,11 @@ function persistRuntimeBootId(bootId) {
     }
 }
 
+function getLoadedRuntimeAssetKey() {
+    const assetKey = window.__tabminalRuntimeAssetKey;
+    return typeof assetKey === 'string' ? assetKey : '';
+}
+
 function handlePrimaryRuntimeVersion(data) {
     const runtime = data?.runtime;
     const bootIdRaw = runtime?.bootId;
@@ -382,16 +387,20 @@ function handlePrimaryRuntimeVersion(data) {
     const bootId = String(bootIdRaw);
     if (!bootId) return;
     const storedBootId = readRuntimeBootId();
+    const loadedAssetKey = getLoadedRuntimeAssetKey();
+    const needsShellReload = loadedAssetKey !== bootId;
 
     if (!primaryServerBootId) {
         primaryServerBootId = bootId;
-        if (storedBootId === bootId) {
+        if (storedBootId === bootId && !needsShellReload) {
             return;
         }
         const persisted = persistRuntimeBootId(bootId);
-        if (storedBootId && persisted && !runtimeReloadScheduled) {
+        if (persisted && needsShellReload && !runtimeReloadScheduled) {
             runtimeReloadScheduled = true;
-            console.info('[Runtime] Syncing app shell cache key with server boot id.');
+            console.info(
+                '[Runtime] Syncing app shell cache key with server boot id.'
+            );
             window.location.reload();
         }
         return;
@@ -399,6 +408,13 @@ function handlePrimaryRuntimeVersion(data) {
     if (primaryServerBootId === bootId) {
         if (storedBootId !== bootId) {
             persistRuntimeBootId(bootId);
+        }
+        if (needsShellReload && !runtimeReloadScheduled) {
+            runtimeReloadScheduled = true;
+            console.info(
+                '[Runtime] Reloading app shell to match server boot id.'
+            );
+            window.location.reload();
         }
         return;
     }
@@ -703,6 +719,7 @@ class EditorManager {
         this.agentCommandMenu = null;
         this.agentCommandSuggestions = [];
         this.agentCommandIndex = 0;
+        this.agentCommandMenuStateKey = '';
         this.agentCommandMenuToken = 0;
         this.isApplyingAgentPromptState = false;
         this.suppressAgentCommandMenu = false;
@@ -1107,6 +1124,14 @@ class EditorManager {
         });
         this.agentPrompt.addEventListener('blur', () => {
             setTimeout(() => {
+                if (
+                    document.activeElement?.classList?.contains(
+                        'xterm-helper-textarea'
+                    )
+                    && this.agentCommandSuggestions.length > 0
+                ) {
+                    return;
+                }
                 this.hideAgentCommandMenu();
             }, 120);
         });
@@ -1135,14 +1160,24 @@ class EditorManager {
                 ? state.agentTabs.get(activeTabKey)
                 : null;
 
+            if (
+                agentTab
+                && this.agentCommandSuggestions.length > 0
+                && Number.isInteger(agentTab.promptHistoryIndex)
+            ) {
+                this.exitAgentPromptHistoryBrowsing(agentTab);
+            }
+
             if (this.agentCommandSuggestions.length > 0) {
                 if (event.key === 'ArrowDown') {
                     event.preventDefault();
+                    event.stopImmediatePropagation();
                     this.moveAgentCommandSelection(1);
                     return;
                 }
                 if (event.key === 'ArrowUp') {
                     event.preventDefault();
+                    event.stopImmediatePropagation();
                     this.moveAgentCommandSelection(-1);
                     return;
                 }
@@ -1157,11 +1192,13 @@ class EditorManager {
                     )
                 ) {
                     event.preventDefault();
+                    event.stopImmediatePropagation();
                     void this.applyAgentCommandSuggestion();
                     return;
                 }
                 if (event.key === 'Escape') {
                     event.preventDefault();
+                    event.stopImmediatePropagation();
                     this.hideAgentCommandMenu();
                     return;
                 }
@@ -3341,7 +3378,21 @@ class EditorManager {
         if (this.suppressAgentCommandMenu) {
             this.hideAgentCommandMenu();
         } else {
-            this.renderAgentCommandMenu(activeAgentTab);
+            const promptValue = this.agentPrompt?.value || '';
+            const promptIntent = getAgentPromptIntent(
+                activeAgentTab,
+                promptValue
+            );
+            const nextMenuStateKey = [
+                activeAgentTab?.key || '',
+                promptIntent.kind,
+                promptValue
+            ].join('::');
+            const menuVisible = this.agentCommandMenu
+                && this.agentCommandMenu.style.display !== 'none';
+            if (!menuVisible || this.agentCommandMenuStateKey !== nextMenuStateKey) {
+                this.renderAgentCommandMenu(activeAgentTab);
+            }
         }
         if (
             activeAgentTab
@@ -3575,13 +3626,40 @@ class EditorManager {
         const token = this.agentCommandMenuToken + 1;
         this.agentCommandMenuToken = token;
         const intent = getAgentPromptIntent(agentTab, promptValue);
+        const menuStateKey = [
+            agentTab?.key || '',
+            intent.kind,
+            promptValue
+        ].join('::');
 
         if (!agentTab || intent.kind === 'none' || intent.kind === 'other') {
             this.hideAgentCommandMenu();
             return;
         }
 
+        if (Number.isInteger(agentTab.promptHistoryIndex)) {
+            this.exitAgentPromptHistoryBrowsing(agentTab);
+        }
+
         if (intent.kind === 'resume') {
+            const hasLoadedResumeSuggestions = (
+                this.agentCommandMenuStateKey === menuStateKey
+                && this.agentCommandSuggestions.length > 0
+                && !(
+                    this.agentCommandSuggestions.length === 1
+                    && this.agentCommandSuggestions[0]?.kind === 'info'
+                    && /loading previous sessions/i.test(
+                        this.agentCommandSuggestions[0]?.label || ''
+                    )
+                )
+            );
+            if (hasLoadedResumeSuggestions) {
+                this.#renderAgentCommandSuggestions(
+                    this.agentCommandSuggestions
+                );
+                return;
+            }
+            this.agentCommandMenuStateKey = menuStateKey;
             this.#renderAgentCommandSuggestions([{
                 kind: 'info',
                 label: 'Loading previous sessions…',
@@ -3619,6 +3697,7 @@ class EditorManager {
             return;
         }
 
+        this.agentCommandMenuStateKey = menuStateKey;
         this.#renderAgentCommandSuggestions(
             getAgentCommandSuggestions(agentTab, promptValue)
         );
@@ -3629,6 +3708,7 @@ class EditorManager {
         this.agentCommandMenuToken += 1;
         this.agentCommandSuggestions = [];
         this.agentCommandIndex = 0;
+        this.agentCommandMenuStateKey = '';
         this.agentCommandMenu.style.display = 'none';
         this.agentCommandMenu.innerHTML = '';
     }
@@ -3639,7 +3719,7 @@ class EditorManager {
         this.agentCommandIndex = nextIndex < 0
             ? this.agentCommandSuggestions.length - 1
             : nextIndex % this.agentCommandSuggestions.length;
-        this.renderAgentCommandMenu(getActiveAgentTab());
+        this.#renderAgentCommandSuggestions(this.agentCommandSuggestions);
     }
 
     setAgentPromptValue(value, agentTab = null, options = {}) {
@@ -6044,6 +6124,23 @@ class AgentTab {
 
     applyInventory(data) {
         const previousSession = this.getLinkedSession();
+        const previousSnapshot = JSON.stringify({
+            runtimeId: this.runtimeId || '',
+            runtimeKey: this.runtimeKey || '',
+            acpSessionId: this.acpSessionId || '',
+            agentId: this.agentId || '',
+            agentLabel: this.agentLabel || '',
+            title: this.title || '',
+            commandLabel: this.commandLabel || '',
+            terminalSessionId: this.terminalSessionId || '',
+            cwd: this.cwd || '',
+            createdAt: this.createdAt || '',
+            status: this.status || 'ready',
+            busy: !!this.busy,
+            errorMessage: this.errorMessage || '',
+            currentModeId: this.currentModeId || '',
+            sessionCapabilities: this.sessionCapabilities || null
+        });
         this.runtimeId = data.runtimeId || this.runtimeId || '';
         this.runtimeKey = data.runtimeKey || this.runtimeKey || '';
         this.acpSessionId = data.acpSessionId || this.acpSessionId || '';
@@ -6062,6 +6159,28 @@ class AgentTab {
             data.sessionCapabilities || this.sessionCapabilities
         );
         const nextSession = this.getLinkedSession();
+        const nextSnapshot = JSON.stringify({
+            runtimeId: this.runtimeId || '',
+            runtimeKey: this.runtimeKey || '',
+            acpSessionId: this.acpSessionId || '',
+            agentId: this.agentId || '',
+            agentLabel: this.agentLabel || '',
+            title: this.title || '',
+            commandLabel: this.commandLabel || '',
+            terminalSessionId: this.terminalSessionId || '',
+            cwd: this.cwd || '',
+            createdAt: this.createdAt || '',
+            status: this.status || 'ready',
+            busy: !!this.busy,
+            errorMessage: this.errorMessage || '',
+            currentModeId: this.currentModeId || '',
+            sessionCapabilities: this.sessionCapabilities || null
+        });
+        const changed = previousSnapshot !== nextSnapshot
+            || previousSession?.key !== nextSession?.key;
+        if (!changed) {
+            return false;
+        }
         previousSession?.updateTabUI();
         if (nextSession && nextSession !== previousSession) {
             nextSession.updateTabUI();
@@ -6069,6 +6188,7 @@ class AgentTab {
         if (nextSession) {
             refreshWorkspaceIfSessionActive(nextSession);
         }
+        return true;
     }
 
     async #waitForSettled(timeoutMs = 5000) {
@@ -9416,13 +9536,19 @@ function upsertAgentInventoryTab(server, data) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
     if (existing) {
-        existing.applyInventory(data);
+        const changed = existing.applyInventory(data);
         existing.connect();
-        return existing;
+        return {
+            agentTab: existing,
+            changed
+        };
     }
     const agentTab = new AgentTab(data, server);
     state.agentTabs.set(key, agentTab);
-    return agentTab;
+    return {
+        agentTab,
+        changed: true
+    };
 }
 
 function reconcileAgentInventory(server, inventory) {
@@ -9434,8 +9560,11 @@ function reconcileAgentInventory(server, inventory) {
     const touchedSessions = new Set();
 
     for (const tabData of Array.isArray(inventory.tabs) ? inventory.tabs : []) {
-        const agentTab = upsertAgentInventoryTab(server, tabData);
+        const { agentTab, changed } = upsertAgentInventoryTab(server, tabData);
         seenKeys.add(agentTab.key);
+        if (!changed) {
+            continue;
+        }
         const session = agentTab.getLinkedSession();
         if (session) {
             touchedSessions.add(session.key);
@@ -12031,6 +12160,52 @@ if (shortcutsModal) {
         }
     });
 }
+
+function handleAgentCommandMenuShortcut(event) {
+    const agentCommandMenuOpen = !!(
+        editorManager?.agentCommandMenu
+        && editorManager.agentCommandMenu.style.display !== 'none'
+        && editorManager.agentCommandSuggestions.length > 0
+    );
+    const eventFromAgentPrompt = editorManager?.agentPrompt
+        && event.target === editorManager.agentPrompt;
+    if (
+        !agentCommandMenuOpen
+        || eventFromAgentPrompt
+        || event.ctrlKey
+        || event.metaKey
+        || event.altKey
+    ) {
+        return false;
+    }
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        editorManager.hideAgentCommandMenu();
+        return true;
+    }
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        editorManager.moveAgentCommandSelection(1);
+        return true;
+    }
+    if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        editorManager.moveAgentCommandSelection(-1);
+        return true;
+    }
+    if (event.key === 'Tab' || event.key === 'Enter') {
+        event.preventDefault();
+        void editorManager.applyAgentCommandSuggestion();
+        return true;
+    }
+    return false;
+}
+
+document.addEventListener('keydown', (e) => {
+    if (handleAgentCommandMenuShortcut(e)) {
+        e.stopImmediatePropagation();
+    }
+}, true);
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
