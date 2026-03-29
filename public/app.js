@@ -1594,9 +1594,7 @@ class EditorManager {
         const hasAgentTabs = getAgentTabsForSession(this.currentSession).length > 0;
         const compact = this.hasCompactWorkspaceTabs(this.currentSession);
         const hasTabs = compact || hasOpenFiles || hasAgentTabs;
-        const shouldShow = compact
-            ? true
-            : state.isVisible || hasOpenFiles || hasAgentTabs;
+        const shouldShow = hasTabs;
 
         this.tabsContainer.style.display = hasTabs ? 'flex' : 'none';
         this.pane.style.display = shouldShow ? 'flex' : 'none';
@@ -1682,8 +1680,7 @@ class EditorManager {
         const state = session.editorState;
 
         // Only render tabs and content, file tree is persistent in sidebar
-        const shouldShowWorkspace = state.isVisible
-            || this.hasVisibleWorkspaceTabs(session);
+        const shouldShowWorkspace = this.hasVisibleWorkspaceTabs(session);
         if (shouldShowWorkspace) {
             if (state.isVisible) {
                 this.refreshSessionTree(session);
@@ -1692,8 +1689,6 @@ class EditorManager {
             const activeKey = this.getActiveWorkspaceTabKey(session);
             if (activeKey) {
                 this.activateWorkspaceTab(activeKey, true);
-            } else {
-                this.showEmptyState();
             }
         }
         
