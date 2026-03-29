@@ -7168,14 +7168,29 @@ function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
     const currentSessionId = String(agentTab?.acpSessionId || '').trim();
     return normalizeListedAgentSessions(sessions)
         .filter((session) => session.sessionId !== currentSessionId)
-        .filter((session) => {
-            if (!query) return true;
-            return [
-                session.title,
-                session.cwd,
-                session.sessionId
-            ].some((value) => String(value || '').toLowerCase().includes(query));
+        .map((session, index) => {
+            const displayName = String(
+                session.title || shortenPath(session.cwd, 36)
+            ).toLowerCase();
+            const cwd = String(session.cwd || '').toLowerCase();
+            const sessionId = String(session.sessionId || '').toLowerCase();
+            const titleMatch = !query || displayName.includes(query);
+            const otherMatch = !query || cwd.includes(query) || sessionId.includes(query);
+            return {
+                session,
+                index,
+                titleMatch,
+                matched: titleMatch || otherMatch
+            };
         })
+        .filter(({ matched }) => matched)
+        .sort((left, right) => {
+            if (left.titleMatch !== right.titleMatch) {
+                return left.titleMatch ? -1 : 1;
+            }
+            return left.index - right.index;
+        })
+        .map(({ session }) => session)
         .slice(0, 12)
         .map((session) => ({
             ...session,
