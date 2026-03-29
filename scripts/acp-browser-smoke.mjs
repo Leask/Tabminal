@@ -35,6 +35,7 @@ const expectTerminalSection = process.env.TABMINAL_EXPECT_TERMINAL_SECTION
 const expectTerminalLive = process.env.TABMINAL_EXPECT_TERMINAL_LIVE === '1';
 const expectManagedTerminalUi =
     process.env.TABMINAL_EXPECT_MANAGED_TERMINAL_UI === '1';
+const requireResumeCoverage = process.env.TABMINAL_REQUIRE_RESUME === '1';
 const expectTitlePattern = process.env.TABMINAL_EXPECT_TITLE_PATTERN || '';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
@@ -1345,6 +1346,169 @@ async function main() {
         log('command-menu', 'skipped-initially-unavailable');
     }
 
+    async function exerciseResumeFlowIfSupported() {
+        await evaluate(
+            toExpression(`
+                () => {
+                    const input = document.querySelector('.agent-panel-input');
+                    input.value = '/resume';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    return true;
+                }
+            `)
+        );
+
+        await waitFor('resume-menu-ready', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => {
+                        const options = Array.from(document.querySelectorAll(
+                            '.agent-command-option'
+                        )).map((el) => ({
+                            name: el.querySelector(
+                                '.agent-command-option-name'
+                            )?.textContent?.trim() || '',
+                            meta: el.querySelector(
+                                '.agent-command-option-meta'
+                            )?.textContent?.trim() || ''
+                        }));
+                        if (options.length === 0) {
+                            return false;
+                        }
+                        return !options.some((option) =>
+                            /loading previous sessions/i.test(option.name)
+                        );
+                    }
+                `),
+                20000,
+                250
+            );
+        });
+
+        const resumeOptions = await evaluate(
+            toExpression(`
+                () => Array.from(document.querySelectorAll(
+                    '.agent-command-option'
+                )).map((el, index) => ({
+                    index,
+                    name: el.querySelector(
+                        '.agent-command-option-name'
+                    )?.textContent?.trim() || '',
+                    meta: el.querySelector(
+                        '.agent-command-option-meta'
+                    )?.textContent?.trim() || ''
+                }))
+            `)
+        );
+        log('resume-options', JSON.stringify(resumeOptions));
+
+        const invalidResumeState = resumeOptions.length === 0
+            || resumeOptions.every((option) => (
+                /no previous sessions found/i.test(option.name)
+                || /unable to load previous sessions/i.test(option.name)
+            ));
+        if (invalidResumeState) {
+            if (requireResumeCoverage) {
+                throw new Error('Resume command is available but no history was listed');
+            }
+            log('resume-flow', 'no-history');
+            await evaluate(
+                toExpression(`
+                    () => {
+                        const input = document.querySelector('.agent-panel-input');
+                        input.value = '';
+                        input.dispatchEvent(new Event('input', {
+                            bubbles: true
+                        }));
+                        return true;
+                    }
+                `)
+            );
+            return;
+        }
+
+        const beforeResume = await evaluate(
+            toExpression(`
+                () => ({
+                    activeTabText:
+                        document.querySelector('.agent-editor-tab.active')
+                            ?.textContent?.trim() || '',
+                    tabCount: document.querySelectorAll(
+                        '.agent-editor-tab'
+                    ).length
+                })
+            `)
+        );
+
+        const selectedResume = resumeOptions.find((option) => (
+            !/already open/i.test(option.meta)
+        )) || resumeOptions.find((option) => (
+            option.name !== beforeResume.activeTabText
+        )) || resumeOptions[0];
+        log('selected-resume-option', JSON.stringify(selectedResume));
+
+        await evaluate(
+            toExpression(`
+                () => {
+                    const options = Array.from(document.querySelectorAll(
+                        '.agent-command-option'
+                    ));
+                    const target = options[${Number(selectedResume?.index ?? -1)}];
+                    target?.click();
+                    return Boolean(target);
+                }
+            `)
+        );
+
+        const expectNewResumeTab = !/already open/i.test(
+            selectedResume?.meta || ''
+        );
+
+        await waitFor(
+            expectNewResumeTab
+                ? 'resume-tab-created'
+                : 'resume-open-tab-activated',
+            async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => {
+                            const active = document.querySelector(
+                                '.agent-editor-tab.active'
+                            );
+                            const tabCount = document.querySelectorAll(
+                                '.agent-editor-tab'
+                            ).length;
+                            const messages = document.querySelectorAll(
+                                '.agent-message'
+                            ).length;
+                            if (!active || messages === 0) {
+                                return false;
+                            }
+                            const activeText = active.textContent?.trim() || '';
+                            if (${JSON.stringify(expectNewResumeTab)}) {
+                                return activeText === ${
+                                    JSON.stringify(selectedResume?.name || '')
+                                } && tabCount > ${
+                                    Number(beforeResume.tabCount || 0)
+                                };
+                            }
+                            return activeText === ${
+                                JSON.stringify(selectedResume?.name || '')
+                            };
+                        }
+                    `),
+                    30000,
+                    250
+                );
+            }
+        );
+
+        log(
+            'resume-flow',
+            expectNewResumeTab ? 'resumed-history' : 'activated-open-session'
+        );
+    }
+
     await evaluate(
         toExpression(`
             () => {
@@ -1741,6 +1905,44 @@ async function main() {
     } else {
         log('permission-options', '[]');
         log('resolved-permission', 'not-required');
+    }
+
+    const resumeCommandAvailable = await evaluate(
+        toExpression(`
+            () => {
+                const input = document.querySelector('.agent-panel-input');
+                input.value = '/resume';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return true;
+            }
+        `)
+    );
+    if (resumeCommandAvailable) {
+        await waitFor('resume-command-probe', async () => {
+            return await evaluate(
+                toExpression(`
+                    () => document.querySelectorAll(
+                        '.agent-command-option'
+                    ).length > 0
+                `),
+                15000,
+                250
+            );
+        });
+        const hasResumeCommand = await evaluate(
+            toExpression(`
+                () => Array.from(
+                    document.querySelectorAll('.agent-command-option-name')
+                ).some((el) => (el.textContent || '').trim().length > 0)
+            `)
+        );
+        if (hasResumeCommand) {
+            await exerciseResumeFlowIfSupported();
+        } else if (requireResumeCoverage) {
+            throw new Error('Resume coverage required but command menu stayed empty');
+        } else {
+            log('resume-flow', 'command-unavailable');
+        }
     }
 
     if (expectTerminalLive) {
@@ -2400,6 +2602,16 @@ async function main() {
             );
         }, 30000, 500);
 
+        const restoredActiveAgentTabText = await evaluate(
+            toExpression(`
+                () => (
+                    document.querySelector('.agent-editor-tab.active')
+                        ?.textContent?.trim() || ''
+                )
+            `)
+        );
+        log('restored-active-agent-tab', restoredActiveAgentTabText);
+
         const previousAgentTabCount = await evaluate(
             toExpression(`
                 () => document.querySelectorAll('.agent-editor-tab').length
@@ -2468,12 +2680,12 @@ async function main() {
                         '.agent-editor-tab'
                     ));
                     const target = tabs.find((tab) =>
-                        (tab.textContent || '').includes(
-                            ${JSON.stringify(expectedAgentLabel)}
-                        )
+                        (tab.textContent || '').trim() === ${
+                            JSON.stringify(restoredActiveAgentTabText)
+                        }
                     ) || tabs[0];
                     target?.click();
-                    return Boolean(target);
+                    return target?.textContent?.trim() || '';
                 }
             `)
         );
@@ -2493,9 +2705,9 @@ async function main() {
                             document.querySelectorAll('.agent-message')
                         ).map((el) => el.textContent || '');
                         return Boolean(active)
-                            && (active.textContent || '').includes(
-                                ${JSON.stringify(expectedAgentLabel)}
-                            )
+                            && (active.textContent || '').trim() === ${
+                                JSON.stringify(restoredActiveAgentTabText)
+                            }
                             && transcript.length > 0;
                     }
                 `),
