@@ -343,6 +343,52 @@ router.get('/api/agents', async (ctx) => {
     ctx.body = await acpManager.listState();
 });
 
+router.get('/api/agents/sessions', async (ctx) => {
+    const { agentId = '', cwd = '', cursor = '' } = ctx.query || {};
+    if (!agentId || typeof agentId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'agentId is required' };
+        return;
+    }
+    if (!cwd || typeof cwd !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'cwd is required' };
+        return;
+    }
+
+    try {
+        let nextCursor = typeof cursor === 'string' ? cursor : '';
+        const sessions = [];
+        const paginate = !!nextCursor;
+        for (let page = 0; page < 5; page += 1) {
+            const result = await acpManager.listSessions({
+                agentId,
+                cwd,
+                cursor: nextCursor
+            });
+            sessions.push(...(Array.isArray(result?.sessions)
+                ? result.sessions
+                : []));
+            nextCursor = typeof result?.nextCursor === 'string'
+                ? result.nextCursor
+                : '';
+            if (paginate || !nextCursor || sessions.length >= 50) {
+                break;
+            }
+        }
+        ctx.body = {
+            sessions: sessions.slice(0, 50),
+            nextCursor
+        };
+    } catch (error) {
+        const message = error?.message || 'Failed to list agent sessions';
+        ctx.status = /does not support session history/i.test(message)
+            ? 501
+            : 500;
+        ctx.body = { error: message };
+    }
+});
+
 router.get('/api/agents/config', async (ctx) => {
     ctx.body = {
         configs: await acpManager.listAgentConfigs()
@@ -411,6 +457,47 @@ router.post('/api/agents/tabs', async (ctx) => {
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to create agent tab' };
+    }
+});
+
+router.post('/api/agents/tabs/resume', async (ctx) => {
+    const { agentId, cwd, terminalSessionId, sessionId, title } =
+        ctx.request.body || {};
+    if (!agentId || typeof agentId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'agentId is required' };
+        return;
+    }
+    if (!cwd || typeof cwd !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'cwd is required' };
+        return;
+    }
+    if (!sessionId || typeof sessionId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'sessionId is required' };
+        return;
+    }
+
+    try {
+        ctx.status = 201;
+        ctx.body = await acpManager.resumeTab({
+            agentId,
+            cwd,
+            sessionId,
+            title: typeof title === 'string' ? title : '',
+            terminalSessionId: typeof terminalSessionId === 'string'
+                ? terminalSessionId
+                : ''
+        });
+    } catch (error) {
+        const message = error?.message || 'Failed to resume agent tab';
+        ctx.status = /already open/i.test(message)
+            ? 409
+            : /does not support session restore/i.test(message)
+                ? 501
+                : 500;
+        ctx.body = { error: message };
     }
 });
 

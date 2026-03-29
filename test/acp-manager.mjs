@@ -36,6 +36,14 @@ class FakeRuntime extends EventEmitter {
         this.disposed = false;
         this.idleScheduled = false;
         this.restoredTabs = [];
+        this.listRequests = [];
+        this.resumedTabs = [];
+        this.sessionCapabilities = {
+            load: true,
+            list: true,
+            resume: false,
+            fork: false
+        };
     }
 
     async createTab(meta) {
@@ -86,6 +94,7 @@ class FakeRuntime extends EventEmitter {
                     ]
                 }
             ],
+            sessionCapabilities: { ...this.sessionCapabilities },
             messages: [],
             toolCalls: [],
             permissions: []
@@ -99,7 +108,10 @@ class FakeRuntime extends EventEmitter {
     }
 
     serializeTab(tab) {
-        return { ...tab };
+        return {
+            ...tab,
+            sessionCapabilities: { ...this.sessionCapabilities }
+        };
     }
 
     async restoreTab(meta) {
@@ -150,6 +162,7 @@ class FakeRuntime extends EventEmitter {
                     ]
                 }
             ],
+            sessionCapabilities: { ...this.sessionCapabilities },
             messages: [{
                 id: 'restored-message',
                 streamKey: 'restored',
@@ -201,6 +214,77 @@ class FakeRuntime extends EventEmitter {
         }
         this.tabs.set(tab.id, tab);
         this.restoredTabs.push(tab.id);
+        return { ...tab };
+    }
+
+    async listSessions({ cwd, cursor = '' } = {}) {
+        this.listRequests.push({ cwd, cursor });
+        return {
+            sessions: [
+                {
+                    sessionId: 'hist-1',
+                    cwd: cwd || this.cwd,
+                    title: 'Previous run',
+                    updatedAt: '2026-03-27T00:00:00.000Z'
+                },
+                {
+                    sessionId: 'hist-2',
+                    cwd: cwd || this.cwd,
+                    title: 'Earlier run',
+                    updatedAt: '2026-03-26T00:00:00.000Z'
+                }
+            ],
+            nextCursor: ''
+        };
+    }
+
+    async resumeTab(meta) {
+        const tab = {
+            id: meta.id,
+            runtimeId: this.runtimeId,
+            runtimeKey: this.runtimeKey,
+            acpSessionId: meta.acpSessionId,
+            agentId: this.definition.id,
+            agentLabel: this.definition.label,
+            commandLabel: this.definition.commandLabel,
+            terminalSessionId: meta.terminalSessionId || '',
+            cwd: meta.cwd,
+            createdAt: '2026-03-28T00:00:00.000Z',
+            status: 'ready',
+            busy: false,
+            errorMessage: '',
+            currentModeId: '',
+            title: meta.title || 'Previous run',
+            availableModes: [
+                { id: 'default', name: 'Default' },
+                { id: 'review', name: 'Review' }
+            ],
+            availableCommands: [
+                { name: 'review', description: 'Review code' }
+            ],
+            configOptions: [
+                {
+                    id: 'model',
+                    name: 'Model',
+                    category: 'model',
+                    type: 'select',
+                    currentValue: 'gpt-5.4',
+                    options: [
+                        { value: 'gpt-5.4', name: 'GPT-5.4' },
+                        { value: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' }
+                    ]
+                }
+            ],
+            sessionCapabilities: { ...this.sessionCapabilities },
+            messages: [],
+            toolCalls: [],
+            permissions: [],
+            plan: [],
+            usage: null,
+            terminals: []
+        };
+        this.tabs.set(tab.id, tab);
+        this.resumedTabs.push(meta.acpSessionId);
         return { ...tab };
     }
 
@@ -483,6 +567,59 @@ describe('AcpManager', () => {
 
         await manager.closeTab(tab.id);
         assert.deepEqual(getPersistedTabs(), []);
+    });
+
+    it('exposes session history capabilities on serialized tabs', async () => {
+        const { manager } = createManager();
+        const tab = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+
+        assert.deepEqual(tab.sessionCapabilities, {
+            load: true,
+            list: true,
+            resume: false,
+            fork: false
+        });
+    });
+
+    it('lists available historical sessions for a runtime', async () => {
+        const { manager } = createManager();
+
+        const result = await manager.listSessions({
+            agentId: 'codex',
+            cwd: '/tmp/project'
+        });
+
+        assert.equal(result.sessions.length, 2);
+        assert.equal(result.sessions[0].sessionId, 'hist-1');
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.listRequests, [{
+            cwd: '/tmp/project',
+            cursor: ''
+        }]);
+        assert.equal(runtimeEntry.runtime.idleScheduled, true);
+    });
+
+    it('creates a new tab from a historical session', async () => {
+        const { manager, getPersistedTabs } = createManager();
+
+        const tab = await manager.resumeTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1',
+            sessionId: 'hist-1',
+            title: 'Previous run'
+        });
+
+        assert.equal(tab.acpSessionId, 'hist-1');
+        assert.equal(tab.terminalSessionId, 'term-1');
+        assert.equal(tab.title, 'Previous run');
+        assert.equal(getPersistedTabs().length, 1);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
     });
 
     it('restores persisted tabs when linked terminal sessions exist', async () => {

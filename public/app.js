@@ -703,6 +703,7 @@ class EditorManager {
         this.agentCommandMenu = null;
         this.agentCommandSuggestions = [];
         this.agentCommandIndex = 0;
+        this.agentCommandMenuToken = 0;
         this.isApplyingAgentPromptState = false;
         this.suppressAgentCommandMenu = false;
         this.agentEmbeddedEditors = [];
@@ -1156,7 +1157,7 @@ class EditorManager {
                     )
                 ) {
                     event.preventDefault();
-                    this.applyAgentCommandSuggestion();
+                    void this.applyAgentCommandSuggestion();
                     return;
                 }
                 if (event.key === 'Escape') {
@@ -3155,6 +3156,17 @@ class EditorManager {
         const attachments = Array.isArray(agentTab.pendingAttachments)
             ? [...agentTab.pendingAttachments]
             : [];
+        const promptIntent = getAgentPromptIntent(
+            agentTab,
+            this.agentPrompt.value || ''
+        );
+        if (promptIntent.kind === 'resume') {
+            alert('Select a previous session from the /resume menu.', {
+                type: 'warning',
+                title: getAgentBaseName(agentTab)
+            });
+            return;
+        }
         if (!text && attachments.length === 0) {
             if (canAutostartQueuedAgentPrompt(agentTab)) {
                 await drainQueuedAgentPrompt(agentTab);
@@ -3500,12 +3512,7 @@ class EditorManager {
         this.agentScrollBottomButton.style.display = shouldShow ? '' : 'none';
     }
 
-    renderAgentCommandMenu(agentTab = null) {
-        if (!this.agentCommandMenu) return;
-        const suggestions = getAgentCommandSuggestions(
-            agentTab,
-            this.agentPrompt?.value || ''
-        );
+    #renderAgentCommandSuggestions(suggestions) {
         this.agentCommandSuggestions = suggestions;
         if (suggestions.length === 0) {
             this.hideAgentCommandMenu();
@@ -3527,7 +3534,11 @@ class EditorManager {
             }
             const name = document.createElement('span');
             name.className = 'agent-command-option-name';
-            name.textContent = `/${command.name}`;
+            name.textContent = command.kind === 'resume_session'
+                ? command.displayName || command.title || command.sessionId
+                : command.kind === 'info'
+                    ? command.label || ''
+                    : `/${command.name}`;
             button.appendChild(name);
             if (command.description) {
                 const meta = document.createElement('span');
@@ -3535,12 +3546,16 @@ class EditorManager {
                 meta.textContent = command.description;
                 button.appendChild(meta);
             }
+            if (command.kind === 'info') {
+                button.disabled = true;
+            }
             button.addEventListener('mousedown', (event) => {
                 event.preventDefault();
             });
             button.addEventListener('click', () => {
+                if (command.kind === 'info') return;
                 this.agentCommandIndex = index;
-                this.applyAgentCommandSuggestion();
+                void this.applyAgentCommandSuggestion();
             });
             this.agentCommandMenu.appendChild(button);
         }
@@ -3554,8 +3569,64 @@ class EditorManager {
         }
     }
 
+    async renderAgentCommandMenu(agentTab = null) {
+        if (!this.agentCommandMenu) return;
+        const promptValue = this.agentPrompt?.value || '';
+        const token = this.agentCommandMenuToken + 1;
+        this.agentCommandMenuToken = token;
+        const intent = getAgentPromptIntent(agentTab, promptValue);
+
+        if (!agentTab || intent.kind === 'none' || intent.kind === 'other') {
+            this.hideAgentCommandMenu();
+            return;
+        }
+
+        if (intent.kind === 'resume') {
+            this.#renderAgentCommandSuggestions([{
+                kind: 'info',
+                label: 'Loading previous sessions…',
+                description: ''
+            }]);
+            try {
+                const sessions = await agentTab.listResumeSessions();
+                if (this.agentCommandMenuToken !== token) {
+                    return;
+                }
+                const suggestions = getAgentResumeSuggestions(
+                    agentTab,
+                    promptValue,
+                    sessions
+                );
+                if (suggestions.length === 0) {
+                    this.#renderAgentCommandSuggestions([{
+                        kind: 'info',
+                        label: 'No previous sessions found',
+                        description: ''
+                    }]);
+                    return;
+                }
+                this.#renderAgentCommandSuggestions(suggestions);
+            } catch (error) {
+                if (this.agentCommandMenuToken !== token) {
+                    return;
+                }
+                this.#renderAgentCommandSuggestions([{
+                    kind: 'info',
+                    label: 'Unable to load previous sessions',
+                    description: error?.message || ''
+                }]);
+            }
+            return;
+        }
+
+        this.#renderAgentCommandSuggestions(
+            getAgentCommandSuggestions(agentTab, promptValue)
+        );
+    }
+
     hideAgentCommandMenu() {
         if (!this.agentCommandMenu) return;
+        this.agentCommandMenuToken += 1;
         this.agentCommandSuggestions = [];
         this.agentCommandIndex = 0;
         this.agentCommandMenu.style.display = 'none';
@@ -3739,9 +3810,40 @@ class EditorManager {
         agentTab.promptDraft = this.agentPrompt?.value || '';
     }
 
-    applyAgentCommandSuggestion() {
+    async applyAgentCommandSuggestion() {
         const command = this.agentCommandSuggestions[this.agentCommandIndex];
         if (!command) return;
+        if (command.kind === 'info') {
+            return;
+        }
+        if (command.kind === 'resume_session') {
+            const agentTab = getActiveAgentTab();
+            if (!agentTab) return;
+            const session = agentTab.getLinkedSession();
+            if (!session) return;
+            try {
+                if (command.openTabKey) {
+                    const existingTab = state.agentTabs.get(command.openTabKey);
+                    const existingSession = existingTab?.getLinkedSession() || null;
+                    if (existingTab && existingSession) {
+                        await activateAgentTab(existingSession, existingTab, {
+                            switchSession: true
+                        });
+                    } else {
+                        await resumeAgentTabFromHistory(session, agentTab, command);
+                    }
+                } else {
+                    await resumeAgentTabFromHistory(session, agentTab, command);
+                }
+                this.hideAgentCommandMenu();
+            } catch (error) {
+                alert(error.message, {
+                    type: 'error',
+                    title: getAgentBaseName(agentTab)
+                });
+            }
+            return;
+        }
         const suffix = command.inputHint
             ? ` ${command.inputHint}`
             : ' ';
@@ -5205,6 +5307,9 @@ class AgentTab {
         this.scrollToBottomOnNextRender = true;
         this.busySyncTimer = null;
         this.planHistory = [];
+        this.resumeSessions = [];
+        this.resumeSessionsLoadedAt = 0;
+        this.resumeSessionsPromise = null;
         this.update(data);
         this.connect();
     }
@@ -5224,6 +5329,7 @@ class AgentTab {
     }
 
     update(data) {
+        const previousResumeCacheKey = `${this.agentId || ''}:${this.cwd || ''}`;
         this.runtimeId = data.runtimeId || '';
         this.runtimeKey = data.runtimeKey || '';
         this.acpSessionId = data.acpSessionId || '';
@@ -5244,9 +5350,17 @@ class AgentTab {
         this.availableCommands = Array.isArray(data.availableCommands)
             ? data.availableCommands
             : [];
+        this.sessionCapabilities = normalizeAgentSessionCapabilities(
+            data.sessionCapabilities || this.sessionCapabilities
+        );
         this.configOptions = Array.isArray(data.configOptions)
             ? data.configOptions
             : [];
+        const nextResumeCacheKey = `${this.agentId || ''}:${this.cwd || ''}`;
+        if (previousResumeCacheKey !== nextResumeCacheKey) {
+            this.resumeSessions = [];
+            this.resumeSessionsLoadedAt = 0;
+        }
         const nextPlan = Array.isArray(data.plan)
             ? data.plan.map((entry) => this.#normalizePlanEntry(entry))
             : [];
@@ -5312,6 +5426,49 @@ class AgentTab {
         }
         this.#applyPlanState(nextPlan);
         this.#syncBusyWatchdog();
+    }
+
+    async listResumeSessions({ force = false } = {}) {
+        if (!supportsAgentResumeCommand(this)) {
+            return [];
+        }
+        if (
+            !force
+            && this.resumeSessionsLoadedAt > 0
+            && (Date.now() - this.resumeSessionsLoadedAt) < 30 * 1000
+        ) {
+            return this.resumeSessions;
+        }
+        if (this.resumeSessionsPromise) {
+            return this.resumeSessionsPromise;
+        }
+
+        this.resumeSessionsPromise = (async () => {
+            const cwd = this.cwd || this.getLinkedSession()?.cwd || '';
+            const params = new URLSearchParams({
+                agentId: this.agentId,
+                cwd
+            });
+            const response = await this.server.fetch(
+                `/api/agents/sessions?${params.toString()}`
+            );
+            if (!response.ok) {
+                await throwResponseError(
+                    response,
+                    'Failed to load previous sessions'
+                );
+            }
+            const data = await response.json();
+            this.resumeSessions = normalizeListedAgentSessions(data.sessions);
+            this.resumeSessionsLoadedAt = Date.now();
+            return this.resumeSessions;
+        })();
+
+        try {
+            return await this.resumeSessionsPromise;
+        } finally {
+            this.resumeSessionsPromise = null;
+        }
     }
 
     connect() {
@@ -5901,6 +6058,9 @@ class AgentTab {
         this.busy = typeof data.busy === 'boolean' ? data.busy : this.busy;
         this.errorMessage = data.errorMessage || this.errorMessage || '';
         this.currentModeId = data.currentModeId || this.currentModeId || '';
+        this.sessionCapabilities = normalizeAgentSessionCapabilities(
+            data.sessionCapabilities || this.sessionCapabilities
+        );
         const nextSession = this.getLinkedSession();
         previousSession?.updateTabUI();
         if (nextSession && nextSession !== previousSession) {
@@ -6455,6 +6615,27 @@ function normalizeAgentConfigOptionOptions(options) {
     return flattened;
 }
 
+function normalizeAgentSessionCapabilities(sessionCapabilities) {
+    const source = (
+        sessionCapabilities && typeof sessionCapabilities === 'object'
+    )
+        ? sessionCapabilities
+        : {};
+    return {
+        load: !!source.load,
+        list: !!source.list,
+        resume: !!source.resume,
+        fork: !!source.fork
+    };
+}
+
+function supportsAgentResumeCommand(agentTab) {
+    const capabilities = normalizeAgentSessionCapabilities(
+        agentTab?.sessionCapabilities
+    );
+    return !!(capabilities.load && capabilities.list);
+}
+
 function getAgentConfigOptionById(agentTab, configId) {
     return normalizeAgentConfigOptions(agentTab?.configOptions).find(
         (option) => option.id === configId
@@ -6555,12 +6736,114 @@ function normalizeAgentCommands(commands) {
                 : '';
             if (!name) return null;
             return {
+                kind: 'command',
                 name,
                 description: command?.description || '',
                 inputHint: command?.input?.hint || ''
             };
         })
         .filter(Boolean);
+}
+
+function normalizeListedAgentSessions(sessions) {
+    if (!Array.isArray(sessions)) return [];
+    const normalized = sessions
+        .map((session, index) => {
+            const sessionId = String(session?.sessionId || '').trim();
+            const cwd = String(session?.cwd || '').trim();
+            if (!sessionId || !cwd) return null;
+            return {
+                kind: 'resume_session',
+                sortIndex: index,
+                sessionId,
+                cwd,
+                title: typeof session?.title === 'string'
+                    ? session.title
+                    : '',
+                updatedAt: typeof session?.updatedAt === 'string'
+                    ? session.updatedAt
+                    : '',
+                relativeUpdatedAt: typeof session?.relativeUpdatedAt === 'string'
+                    ? session.relativeUpdatedAt
+                    : ''
+            };
+        })
+        .filter(Boolean);
+    normalized.sort((left, right) => {
+        const leftTime = Date.parse(left.updatedAt || '') || 0;
+        const rightTime = Date.parse(right.updatedAt || '') || 0;
+        if (leftTime !== rightTime) {
+            return rightTime - leftTime;
+        }
+        return left.sortIndex - right.sortIndex;
+    });
+    return normalized;
+}
+
+function getOpenAgentSessionsForServer(serverId, agentId = '') {
+    const entries = Array.from(state.agentTabs.values())
+        .filter((tab) => (
+            tab.serverId === serverId
+            && (!agentId || tab.agentId === agentId)
+        ))
+        .map((tab) => [String(tab.acpSessionId || '').trim(), tab])
+        .filter(([sessionId]) => !!sessionId);
+    return new Map(entries);
+}
+
+function buildAgentResumeSessionMeta(sessionInfo) {
+    const parts = [];
+    const relativeUpdatedAt = String(
+        sessionInfo?.relativeUpdatedAt || ''
+    ).trim();
+    if (relativeUpdatedAt) {
+        parts.push(relativeUpdatedAt);
+    }
+    const timeLabel = getAgentMessageTimeLabel({
+        createdAt: sessionInfo?.updatedAt || ''
+    });
+    if (timeLabel && !relativeUpdatedAt) {
+        parts.push(timeLabel);
+    }
+    const cwd = String(sessionInfo?.cwd || '').trim();
+    if (cwd) {
+        parts.push(shortenPath(cwd, 48));
+    }
+    return parts.join(' · ');
+}
+
+function getAgentPromptIntent(agentTab, promptValue) {
+    const source = String(promptValue || '').replace(/^\s+/, '');
+    const firstLine = source.split('\n', 1)[0] || '';
+    if (!firstLine.startsWith('/')) {
+        return { kind: 'none', query: '', commandName: '' };
+    }
+    const body = firstLine.slice(1);
+    const [commandNameRaw = '', ...restParts] = body.split(/\s+/);
+    const commandName = commandNameRaw.toLowerCase();
+    const query = restParts.join(' ').trim();
+    if (!commandName) {
+        return { kind: 'commands', query: '', commandName: '' };
+    }
+    if (commandName === 'resume' && supportsAgentResumeCommand(agentTab)) {
+        return {
+            kind: 'resume',
+            query,
+            commandName
+        };
+    }
+    if (!/\s/.test(body)) {
+        return {
+            kind: 'commands',
+            query: commandName,
+            commandName
+        };
+    }
+    return {
+        kind: 'other',
+        query,
+        commandName
+    };
 }
 
 function bindSingleTapActivation(element, onActivate, options = {}) {
@@ -6724,17 +7007,19 @@ function selectAgentMessageText(previousText, nextText) {
 }
 
 function getAgentCommandSuggestions(agentTab, promptValue) {
-    if (!agentTab?.availableCommands) return [];
-    const source = String(promptValue || '');
-    const trimmed = source.replace(/^\s+/, '');
-    const firstLine = trimmed.split('\n', 1)[0] || '';
-    if (!firstLine.startsWith('/')) return [];
+    const intent = getAgentPromptIntent(agentTab, promptValue);
+    if (intent.kind !== 'commands') return [];
 
-    const commandToken = firstLine.slice(1);
-    if (/\s/.test(commandToken)) return [];
-
-    const query = commandToken.toLowerCase();
-    const commands = normalizeAgentCommands(agentTab.availableCommands);
+    const commands = normalizeAgentCommands(agentTab?.availableCommands);
+    if (supportsAgentResumeCommand(agentTab)) {
+        commands.unshift({
+            kind: 'command',
+            name: 'resume',
+            description: 'Continue from a previous session',
+            inputHint: ''
+        });
+    }
+    const query = String(intent.query || '').toLowerCase();
     const ranked = commands.filter((command) => {
         const name = command.name.toLowerCase();
         return !query || name.startsWith(query) || name.includes(query);
@@ -6750,6 +7035,37 @@ function getAgentCommandSuggestions(agentTab, promptValue) {
     });
 
     return ranked.slice(0, 8);
+}
+
+function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
+    const intent = getAgentPromptIntent(agentTab, promptValue);
+    if (intent.kind !== 'resume') return [];
+    const query = String(intent.query || '').toLowerCase();
+    const openSessions = getOpenAgentSessionsForServer(
+        agentTab?.serverId,
+        agentTab?.agentId
+    );
+    const currentSessionId = String(agentTab?.acpSessionId || '').trim();
+    return normalizeListedAgentSessions(sessions)
+        .filter((session) => session.sessionId !== currentSessionId)
+        .filter((session) => {
+            if (!query) return true;
+            return [
+                session.title,
+                session.cwd,
+                session.sessionId
+            ].some((value) => String(value || '').toLowerCase().includes(query));
+        })
+        .slice(0, 12)
+        .map((session) => ({
+            ...session,
+            openTabKey: openSessions.get(session.sessionId)?.key || '',
+            displayName: session.title || shortenPath(session.cwd, 36),
+            description: [
+                buildAgentResumeSessionMeta(session) || session.sessionId,
+                openSessions.has(session.sessionId) ? 'Already open' : ''
+            ].filter(Boolean).join(' · ')
+        }));
 }
 
 function getCurrentAgentModeLabel(agentTab) {
@@ -9331,16 +9647,23 @@ async function createAgentTab(session, agentId, options = {}) {
         await throwResponseError(response, 'Failed to create agent tab');
     }
     const data = await response.json();
-    const agentTab = upsertAgentTab(session.server, data);
+    return await activateAgentTab(
+        session,
+        upsertAgentTab(session.server, data)
+    );
+}
+
+async function activateAgentTab(session, agentTab, options = {}) {
+    if (!session || !agentTab) return null;
+    const shouldSwitchSession = !!options.switchSession;
+    if (shouldSwitchSession && state.activeSessionKey !== session.key) {
+        await switchToSession(session.key, { scrollTabIntoView: true });
+    }
     session.workspaceState.activeTabKey = agentTab.key;
     noteRecentAgentTab(session, agentTab.key);
     session.saveState();
     if (state.activeSessionKey === session.key) {
-        if (editorManager.currentSession?.key !== session.key) {
-            editorManager.switchTo(session);
-        }
-        editorManager.activateAgentTab(agentTab.key);
-        editorManager.updateEditorPaneVisibility();
+        restoreWorkspaceForSession(session);
         requestAnimationFrame(() => {
             editorManager.agentPrompt?.focus();
         });
@@ -9348,6 +9671,29 @@ async function createAgentTab(session, agentId, options = {}) {
         refreshWorkspaceIfSessionActive(session);
     }
     return agentTab;
+}
+
+async function resumeAgentTabFromHistory(session, agentTab, historySession) {
+    if (!session || !agentTab || !historySession?.sessionId) return null;
+    const response = await session.server.fetch('/api/agents/tabs/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            agentId: agentTab.agentId,
+            cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
+            terminalSessionId: session.id,
+            sessionId: historySession.sessionId,
+            title: historySession.title || ''
+        })
+    });
+    if (!response.ok) {
+        await throwResponseError(response, 'Failed to resume agent session');
+    }
+    const data = await response.json();
+    return await activateAgentTab(
+        session,
+        upsertAgentTab(session.server, data)
+    );
 }
 
 function getServerEndpointKey(server) {

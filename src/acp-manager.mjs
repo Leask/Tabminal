@@ -102,6 +102,66 @@ function buildAgentConfigSummary(agentId, config = {}) {
     }
 }
 
+function normalizeAgentSessionCapabilities(
+    agentCapabilities = null,
+    connection = null
+) {
+    const sessionCapabilities = (
+        agentCapabilities?.sessionCapabilities
+        && typeof agentCapabilities.sessionCapabilities === 'object'
+    )
+        ? agentCapabilities.sessionCapabilities
+        : {};
+    return {
+        load: !!(
+            agentCapabilities?.loadSession
+            && typeof connection?.loadSession === 'function'
+        ),
+        list: !!(
+            sessionCapabilities?.list
+            && typeof connection?.listSessions === 'function'
+        ),
+        resume: !!(
+            sessionCapabilities?.resume
+            && typeof connection?.unstable_resumeSession === 'function'
+        ),
+        fork: !!(
+            sessionCapabilities?.fork
+            && typeof connection?.unstable_forkSession === 'function'
+        )
+    };
+}
+
+function normalizeListedSessionInfo(session) {
+    const normalized = session && typeof session === 'object' ? session : {};
+    return {
+        sessionId: String(normalized.sessionId || '').trim(),
+        cwd: String(normalized.cwd || '').trim(),
+        title: typeof normalized.title === 'string' ? normalized.title : '',
+        updatedAt: typeof normalized.updatedAt === 'string'
+            ? normalized.updatedAt
+            : ''
+    };
+}
+
+function parseGeminiListedSessions(output) {
+    const text = String(output || '');
+    const lines = text.split(/\r?\n/);
+    const sessions = [];
+    for (const line of lines) {
+        const match = line.match(
+            /^\s*\d+\.\s+(.*?)\s+\((.*?)\)\s+\[([0-9a-f-]{8,})\]\s*$/i
+        );
+        if (!match) continue;
+        sessions.push({
+            title: match[1]?.trim() || '',
+            relativeUpdatedAt: match[2]?.trim() || '',
+            sessionId: match[3]?.trim() || ''
+        });
+    }
+    return sessions.filter((session) => session.sessionId);
+}
+
 let ghCopilotCliInstalledCache = null;
 let ghAuthTokenCache = null;
 const availabilityProbeCache = new Map();
@@ -1451,6 +1511,72 @@ class AcpRuntime extends EventEmitter {
         this.cachedModelState = null;
     }
 
+    #getSessionCapabilities() {
+        const capabilities = normalizeAgentSessionCapabilities(
+            this.agentCapabilities,
+            this.connection
+        );
+        if (
+            this.definition?.id === 'gemini'
+            && this.#supportsGeminiCliSessionListing()
+        ) {
+            capabilities.list = true;
+        }
+        return capabilities;
+    }
+
+    #supportsGeminiCliSessionListing() {
+        if (this.definition?.id !== 'gemini') return false;
+        const command = this.definition.command;
+        return Boolean(
+            command === 'gemini'
+            || (
+                command === NPX_COMMAND
+                && Array.isArray(this.definition.args)
+                && this.definition.args[0] === '@google/gemini-cli@latest'
+            )
+        );
+    }
+
+    #buildGeminiSessionListArgs() {
+        const baseArgs = Array.isArray(this.definition.args)
+            ? this.definition.args.filter((arg) => arg !== '--acp')
+            : [];
+        return [
+            ...baseArgs,
+            '--list-sessions'
+        ];
+    }
+
+    async #listSessionsViaGeminiCli() {
+        const args = this.#buildGeminiSessionListArgs();
+        const result = spawnSync(this.definition.command, args, {
+            encoding: 'utf8',
+            timeout: 5000,
+            cwd: this.cwd,
+            env: withAgentPath(this.env)
+        });
+        if (result.error) {
+            throw result.error;
+        }
+        if (result.status !== 0) {
+            const detail = [
+                result.stdout,
+                result.stderr
+            ].filter(Boolean).join('\n').trim();
+            throw new Error(
+                detail || 'Gemini session listing failed'
+            );
+        }
+        return parseGeminiListedSessions(result.stdout).map((session) => ({
+            sessionId: session.sessionId,
+            cwd: this.cwd,
+            title: session.title,
+            updatedAt: '',
+            relativeUpdatedAt: session.relativeUpdatedAt
+        }));
+    }
+
     #resolveAvailableModes(availableModes, existingModes = []) {
         if (Array.isArray(availableModes) && availableModes.length > 0) {
             this.cachedAvailableModes = availableModes;
@@ -1892,6 +2018,125 @@ class AcpRuntime extends EventEmitter {
         }
     }
 
+    async listSessions(options = {}) {
+        await this.start();
+        this.clearIdleShutdown();
+
+        const sessionCapabilities = this.#getSessionCapabilities();
+        if (
+            sessionCapabilities.list
+            && typeof this.connection?.listSessions === 'function'
+        ) {
+            try {
+                const response = await this.connection.listSessions({
+                    cwd: options.cwd || this.cwd,
+                    cursor: options.cursor || null
+                });
+                return {
+                    sessions: Array.isArray(response?.sessions)
+                        ? response.sessions
+                            .map(normalizeListedSessionInfo)
+                            .filter(
+                                (session) => session.sessionId && session.cwd
+                            )
+                        : [],
+                    nextCursor: typeof response?.nextCursor === 'string'
+                        ? response.nextCursor
+                        : ''
+                };
+            } catch (error) {
+                const message = String(error?.message || '');
+                const canFallbackToCli = this.#supportsGeminiCliSessionListing();
+                const unsupportedListMethod =
+                    /method not found/i.test(message)
+                    || /session\/list/i.test(message);
+                if (!canFallbackToCli || !unsupportedListMethod) {
+                    throw error;
+                }
+            }
+        }
+        if (this.#supportsGeminiCliSessionListing()) {
+            return {
+                sessions: await this.#listSessionsViaGeminiCli(),
+                nextCursor: ''
+            };
+        }
+        if (!sessionCapabilities.list) {
+            throw new Error(
+                `${this.definition.label} does not support session history`
+            );
+        }
+        throw new Error(`${this.definition.label} session history unavailable`);
+    }
+
+    async resumeTab(meta) {
+        await this.start();
+        this.clearIdleShutdown();
+
+        const sessionCapabilities = this.#getSessionCapabilities();
+        if (!sessionCapabilities.load) {
+            throw new Error(
+                `${this.definition.label} does not support session restore`
+            );
+        }
+        if (this.sessionToTabId.has(meta.acpSessionId)) {
+            throw new Error('Session is already open');
+        }
+
+        const tab = this.#buildTab({
+            id: meta.id,
+            acpSessionId: meta.acpSessionId,
+            terminalSessionId: meta.terminalSessionId,
+            cwd: meta.cwd,
+            createdAt: new Date().toISOString(),
+            title: meta.title || ''
+        });
+        tab.status = 'restoring';
+        tab.busy = true;
+
+        this.tabs.set(tab.id, tab);
+        this.sessionToTabId.set(tab.acpSessionId, tab.id);
+
+        try {
+            const response = await this.connection.loadSession({
+                cwd: meta.cwd,
+                sessionId: meta.acpSessionId,
+                mcpServers: []
+            });
+            const restoredSessionId = response?.sessionId || meta.acpSessionId;
+            if (restoredSessionId !== tab.acpSessionId) {
+                this.sessionToTabId.delete(tab.acpSessionId);
+                tab.acpSessionId = restoredSessionId;
+                this.sessionToTabId.set(tab.acpSessionId, tab.id);
+            }
+            if (typeof response?.title === 'string') {
+                tab.title = response.title;
+            }
+            tab.currentModeId = response?.modes?.currentModeId || '';
+            tab.availableModes = this.#resolveAvailableModes(
+                response?.modes?.availableModes,
+                tab.availableModes
+            );
+            tab.availableCommands = this.#resolveAvailableCommands(
+                response?.availableCommands,
+                tab.availableCommands
+            );
+            tab.configOptions = this.#resolveConfigOptions(
+                response?.configOptions,
+                tab.configOptions,
+                response?.models
+            );
+            tab.status = 'ready';
+            tab.busy = false;
+            tab.errorMessage = '';
+            return this.serializeTab(tab);
+        } catch (error) {
+            this.tabs.delete(tab.id);
+            this.sessionToTabId.delete(tab.acpSessionId);
+            throw error;
+        }
+    }
+
     #markTabDirty(tab) {
         if (!tab) return;
         this.emit('tab_dirty', {
@@ -1919,6 +2164,7 @@ class AcpRuntime extends EventEmitter {
             currentModeId: tab.currentModeId,
             availableModes: tab.availableModes,
             availableCommands: tab.availableCommands,
+            sessionCapabilities: this.#getSessionCapabilities(),
             configOptions: tab.configOptions,
             messages: tab.messages,
             toolCalls: Array.from(tab.toolCalls.values()),
@@ -3082,10 +3328,73 @@ export class AcpManager {
         return this.getSerializedAgentConfig(agentId);
     }
 
+    #ensureRuntimeEntry(definition, cwd) {
+        const runtimeKey = makeRuntimeKey(definition.id, cwd);
+        const runtimeStoreKey = makeRuntimeStoreKey(
+            definition.id,
+            cwd,
+            this.getAgentConfigVersion(definition.id)
+        );
+        let runtimeEntry = this.runtimes.get(runtimeStoreKey);
+        let createdRuntime = false;
+
+        if (!runtimeEntry) {
+            const runtime = this.runtimeFactory(definition, {
+                cwd,
+                idleTimeoutMs: this.idleTimeoutMs,
+                runtimeStoreKey,
+                terminalManager: this.terminalManager,
+                env: mergeDefinitionEnv(
+                    definition,
+                    this.getAgentConfig(definition.id)
+                )
+            });
+            runtimeEntry = {
+                runtime,
+                definition,
+                runtimeKey,
+                runtimeStoreKey
+            };
+            this.runtimes.set(runtimeStoreKey, runtimeEntry);
+            createdRuntime = true;
+            runtime.on('tab_dirty', () => {
+                this.schedulePersistTabs();
+            });
+            runtime.on('runtime_exit', () => {
+                if (this.disposing) return;
+                for (const [tabId, tabEntry] of this.tabs.entries()) {
+                    if (tabEntry.runtime !== runtime) continue;
+                    this.tabs.delete(tabId);
+                }
+                this.runtimes.delete(runtimeStoreKey);
+                void this.persistTabs();
+            });
+        }
+
+        return {
+            runtimeEntry,
+            createdRuntime,
+            runtimeStoreKey
+        };
+    }
+
+    async #disposeRuntimeEntry(runtimeStoreKey, runtimeEntry) {
+        if (!runtimeEntry) return;
+        this.runtimes.delete(runtimeStoreKey);
+        await runtimeEntry.runtime.dispose().catch(() => {});
+    }
+
     #applyRuntimeMetadataFallback(runtime, serialized) {
         if (!serialized || typeof serialized !== 'object') {
             return serialized;
         }
+
+        const sessionCapabilities = normalizeAgentSessionCapabilities(
+            runtime?.agentCapabilities,
+            runtime?.connection
+        );
+        const hasSessionCapabilities = serialized.sessionCapabilities
+            && typeof serialized.sessionCapabilities === 'object';
 
         let availableModes = Array.isArray(serialized.availableModes)
             ? serialized.availableModes
@@ -3105,7 +3414,13 @@ export class AcpManager {
             )
             || !(runtime?.tabs instanceof Map)
         ) {
-            return serialized;
+            if (hasSessionCapabilities) {
+                return serialized;
+            }
+            return {
+                ...serialized,
+                sessionCapabilities
+            };
         }
 
         for (const runtimeTab of runtime.tabs.values()) {
@@ -3144,6 +3459,7 @@ export class AcpManager {
             availableModes === serialized.availableModes
             && availableCommands === serialized.availableCommands
             && configOptions === serialized.configOptions
+            && hasSessionCapabilities
         ) {
             return serialized;
         }
@@ -3152,7 +3468,8 @@ export class AcpManager {
             ...serialized,
             availableModes,
             availableCommands,
-            configOptions
+            configOptions,
+            sessionCapabilities
         };
     }
 
@@ -3274,7 +3591,8 @@ export class AcpManager {
                     status: serialized.status,
                     busy: serialized.busy,
                     errorMessage: serialized.errorMessage,
-                    currentModeId: serialized.currentModeId
+                    currentModeId: serialized.currentModeId,
+                    sessionCapabilities: serialized.sessionCapabilities
                 };
             })
         };
@@ -3294,46 +3612,8 @@ export class AcpManager {
         }
 
         const cwd = path.resolve(options.cwd || process.cwd());
-        const runtimeKey = makeRuntimeKey(definition.id, cwd);
-        const runtimeStoreKey = makeRuntimeStoreKey(
-            definition.id,
-            cwd,
-            this.getAgentConfigVersion(definition.id)
-        );
-        let runtimeEntry = this.runtimes.get(runtimeStoreKey);
-        let createdRuntime = false;
-        if (!runtimeEntry) {
-            const runtime = this.runtimeFactory(definition, {
-                cwd,
-                idleTimeoutMs: this.idleTimeoutMs,
-                runtimeStoreKey,
-                terminalManager: this.terminalManager,
-                env: mergeDefinitionEnv(
-                    definition,
-                    this.getAgentConfig(definition.id)
-                )
-            });
-            runtimeEntry = {
-                runtime,
-                definition,
-                runtimeKey,
-                runtimeStoreKey
-            };
-            this.runtimes.set(runtimeStoreKey, runtimeEntry);
-            createdRuntime = true;
-            runtime.on('tab_dirty', () => {
-                this.schedulePersistTabs();
-            });
-            runtime.on('runtime_exit', () => {
-                if (this.disposing) return;
-                for (const [tabId, tabEntry] of this.tabs.entries()) {
-                    if (tabEntry.runtime !== runtime) continue;
-                    this.tabs.delete(tabId);
-                }
-                this.runtimes.delete(runtimeStoreKey);
-                void this.persistTabs();
-            });
-        }
+        const { runtimeEntry, createdRuntime, runtimeStoreKey } =
+            this.#ensureRuntimeEntry(definition, cwd);
 
         const tabId = crypto.randomUUID();
         try {
@@ -3368,11 +3648,108 @@ export class AcpManager {
             const shouldDisposeRuntime = createdRuntime
                 || runtimeEntry.runtime.tabs.size === 0;
             if (shouldDisposeRuntime) {
-                this.runtimes.delete(runtimeStoreKey);
-                await runtimeEntry.runtime.dispose().catch(() => {});
+                await this.#disposeRuntimeEntry(runtimeStoreKey, runtimeEntry);
             }
             this.#recordDefinitionStartupFailure(definition, error);
             throw new Error(formatAgentStartupError(definition, error));
+        }
+    }
+
+    async listSessions(options) {
+        await this.ensureConfigsLoaded();
+        const definition = this.definitions.find(
+            (entry) => entry.id === options.agentId
+        );
+        if (!definition) {
+            throw new Error('Unknown agent');
+        }
+        const availability = this.getDefinitionAvailability(definition);
+        if (!availability.available) {
+            throw new Error(availability.reason || 'Agent unavailable');
+        }
+
+        const cwd = path.resolve(options.cwd || process.cwd());
+        const { runtimeEntry, createdRuntime, runtimeStoreKey } =
+            this.#ensureRuntimeEntry(definition, cwd);
+
+        try {
+            const result = await runtimeEntry.runtime.listSessions({
+                cwd,
+                cursor: typeof options.cursor === 'string' ? options.cursor : ''
+            });
+            this.#clearDefinitionAvailabilityOverride(definition.id);
+            if (runtimeEntry.runtime.tabs.size === 0) {
+                runtimeEntry.runtime.scheduleIdleShutdown(async () => {
+                    if (runtimeEntry.runtime.tabs.size > 0) return;
+                    await this.#disposeRuntimeEntry(
+                        runtimeStoreKey,
+                        runtimeEntry
+                    );
+                });
+            }
+            return result;
+        } catch (error) {
+            if (createdRuntime && runtimeEntry.runtime.tabs.size === 0) {
+                await this.#disposeRuntimeEntry(runtimeStoreKey, runtimeEntry);
+            }
+            throw error;
+        }
+    }
+
+    async resumeTab(options) {
+        await this.ensureConfigsLoaded();
+        const definition = this.definitions.find(
+            (entry) => entry.id === options.agentId
+        );
+        if (!definition) {
+            throw new Error('Unknown agent');
+        }
+        const availability = this.getDefinitionAvailability(definition);
+        if (!availability.available) {
+            throw new Error(availability.reason || 'Agent unavailable');
+        }
+
+        const cwd = path.resolve(options.cwd || process.cwd());
+        const { runtimeEntry, createdRuntime, runtimeStoreKey } =
+            this.#ensureRuntimeEntry(definition, cwd);
+        const tabId = crypto.randomUUID();
+
+        try {
+            const rawSerialized = await runtimeEntry.runtime.resumeTab({
+                id: tabId,
+                acpSessionId: options.sessionId,
+                cwd,
+                terminalSessionId: options.terminalSessionId || '',
+                title: options.title || ''
+            });
+            const serialized = this.#applyRuntimeMetadataFallback(
+                runtimeEntry.runtime,
+                rawSerialized
+            );
+            const tabEntry = {
+                runtime: runtimeEntry.runtime,
+                serialize: () => {
+                    const tab = runtimeEntry.runtime.tabs.get(tabId);
+                    const nextSerialized = tab
+                        ? runtimeEntry.runtime.serializeTab(tab)
+                        : serialized;
+                    return this.#applyRuntimeMetadataFallback(
+                        runtimeEntry.runtime,
+                        nextSerialized
+                    );
+                }
+            };
+            this.tabs.set(tabId, tabEntry);
+            this.#clearDefinitionAvailabilityOverride(definition.id);
+            await this.persistTabs();
+            return tabEntry.serialize();
+        } catch (error) {
+            const shouldDisposeRuntime = createdRuntime
+                || runtimeEntry.runtime.tabs.size === 0;
+            if (shouldDisposeRuntime) {
+                await this.#disposeRuntimeEntry(runtimeStoreKey, runtimeEntry);
+            }
+            throw error;
         }
     }
 
@@ -3398,7 +3775,6 @@ export class AcpManager {
                 continue;
             }
 
-            const agentConfig = this.getAgentConfig(definition.id);
             const availability = this.getDefinitionAvailability(definition);
             if (!availability.available) {
                 changed = true;
@@ -3406,41 +3782,7 @@ export class AcpManager {
             }
 
             const cwd = path.resolve(meta.cwd || process.cwd());
-            const runtimeKey = makeRuntimeKey(definition.id, cwd);
-            const runtimeStoreKey = makeRuntimeStoreKey(
-                definition.id,
-                cwd,
-                this.getAgentConfigVersion(definition.id)
-            );
-            let runtimeEntry = this.runtimes.get(runtimeStoreKey);
-            if (!runtimeEntry) {
-                const runtime = this.runtimeFactory(definition, {
-                    cwd,
-                    idleTimeoutMs: this.idleTimeoutMs,
-                    runtimeStoreKey,
-                    terminalManager: this.terminalManager,
-                    env: mergeDefinitionEnv(definition, agentConfig)
-                });
-                runtimeEntry = {
-                    runtime,
-                    definition,
-                    runtimeKey,
-                    runtimeStoreKey
-                };
-                this.runtimes.set(runtimeStoreKey, runtimeEntry);
-                runtime.on('tab_dirty', () => {
-                    this.schedulePersistTabs();
-                });
-                runtime.on('runtime_exit', () => {
-                    if (this.disposing) return;
-                    for (const [tabId, tabEntry] of this.tabs.entries()) {
-                        if (tabEntry.runtime !== runtime) continue;
-                        this.tabs.delete(tabId);
-                    }
-                    this.runtimes.delete(runtimeStoreKey);
-                    void this.persistTabs();
-                });
-            }
+            const { runtimeEntry } = this.#ensureRuntimeEntry(definition, cwd);
 
             try {
                 const rawSerialized = await runtimeEntry.runtime.restoreTab({
