@@ -1156,6 +1156,37 @@ body {
     background-color: rgba(255, 255, 255, 0.05);
 }
 
+.modal-content button.danger-button {
+    background-color: #dc322f;
+}
+
+.modal-content button.danger-button:hover {
+    background-color: #c1272d;
+}
+
+.confirm-modal-content {
+    max-width: 420px;
+    text-align: left;
+}
+
+.confirm-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+}
+
+.confirm-modal-note {
+    margin: 0.5rem 0 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+
+.confirm-modal-actions button {
+    width: auto;
+    min-width: 120px;
+}
+
 .agent-setup-content {
     max-width: 520px;
     text-align: left;
@@ -1508,7 +1539,8 @@ kbd {
     min-width: 0;
 }
 
-.file-tree-rename-btn {
+.file-tree-rename-btn,
+.file-tree-delete-btn {
     display: none;
     border: 1px solid rgba(38, 139, 210, 0.28);
     border-radius: 999px;
@@ -1523,13 +1555,23 @@ kbd {
 
 .file-tree-item:hover .file-tree-rename-btn,
 .file-tree-item.selected .file-tree-rename-btn,
-.file-tree-item:focus-within .file-tree-rename-btn {
+.file-tree-item:focus-within .file-tree-rename-btn,
+.file-tree-item:hover .file-tree-delete-btn,
+.file-tree-item.selected .file-tree-delete-btn,
+.file-tree-item:focus-within .file-tree-delete-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
 }
 
-.file-tree-rename-btn:disabled {
+.file-tree-delete-btn {
+    border-color: rgba(220, 50, 47, 0.28);
+    background: rgba(220, 50, 47, 0.12);
+    color: #dc322f;
+}
+
+.file-tree-rename-btn:disabled,
+.file-tree-delete-btn:disabled {
     display: none;
 }
 

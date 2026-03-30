@@ -90,6 +90,12 @@ const agentSetupCopilotToken = document.getElementById(
 const agentSetupCopilotNote = document.getElementById(
     'agent-setup-copilot-note'
 );
+const confirmModal = document.getElementById('confirm-modal');
+const confirmModalTitle = document.getElementById('confirm-modal-title');
+const confirmModalMessage = document.getElementById('confirm-modal-message');
+const confirmModalNote = document.getElementById('confirm-modal-note');
+const confirmModalCancel = document.getElementById('confirm-modal-cancel');
+const confirmModalConfirm = document.getElementById('confirm-modal-confirm');
 const terminalWrapper = document.getElementById('terminal-wrapper');
 const editorPane = document.getElementById('editor-pane');
 // #endregion
@@ -120,6 +126,7 @@ const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="
 const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
 const RENAME_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m12 20 7-7"></path><path d="M16 6.5a1.8 1.8 0 1 1 2.5 2.5L8 19.5 4 20l.5-4L16 6.5Z"></path></svg>';
+const DELETE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M6 7l1 12h10l1-12"></path><path d="M9 7V4h6v3"></path></svg>';
 const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
     + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
     + 'monospace';
@@ -1583,6 +1590,53 @@ class EditorManager {
         return changed;
     }
 
+    pathMatchesTarget(pathValue, targetPath, isDirectory) {
+        if (typeof pathValue !== 'string' || pathValue.length === 0) {
+            return false;
+        }
+        if (pathValue === targetPath) {
+            return true;
+        }
+        return !!(
+            isDirectory
+            && pathValue.startsWith(`${targetPath}/`)
+        );
+    }
+
+    removeDeletedModelStorePaths(server, targetPath, isDirectory) {
+        if (!server?.modelStore) return false;
+        let changed = false;
+        for (const [path, entry] of [...server.modelStore.entries()]) {
+            if (!this.pathMatchesTarget(path, targetPath, isDirectory)) {
+                continue;
+            }
+            changed = true;
+            try {
+                entry?.model?.dispose?.();
+            } catch {
+                // Ignore stale model disposal failures.
+            }
+            server.modelStore.delete(path);
+        }
+        return changed;
+    }
+
+    removeDeletedPendingFileWrites(sessionKey, targetPath, isDirectory) {
+        const pending = pendingChanges.sessions.get(sessionKey);
+        if (!pending?.fileWrites || pending.fileWrites.size === 0) {
+            return false;
+        }
+        let changed = false;
+        for (const path of [...pending.fileWrites.keys()]) {
+            if (!this.pathMatchesTarget(path, targetPath, isDirectory)) {
+                continue;
+            }
+            changed = true;
+            pending.fileWrites.delete(path);
+        }
+        return changed;
+    }
+
     applyRenamedPathToSession(session, oldPath, newPath, isDirectory) {
         let workspaceChanged = false;
         let visualChanged = false;
@@ -1723,6 +1777,134 @@ class EditorManager {
         };
     }
 
+    applyDeletedPathToSession(session, targetPath, isDirectory) {
+        let workspaceChanged = false;
+        let visualChanged = false;
+
+        const filterList = (values) => values.filter(
+            (value) => !this.pathMatchesTarget(value, targetPath, isDirectory)
+        );
+
+        const nextOpenFiles = filterList(session.editorState.openFiles);
+        if (
+            JSON.stringify(nextOpenFiles)
+            !== JSON.stringify(session.editorState.openFiles)
+        ) {
+            session.editorState.openFiles = nextOpenFiles;
+            session.sharedWorkspaceState.openFiles = [...nextOpenFiles];
+            workspaceChanged = true;
+            visualChanged = true;
+        }
+
+        const nextExpandedPaths = filterList(
+            session.sharedWorkspaceState.expandedPaths
+        );
+        if (
+            JSON.stringify(nextExpandedPaths)
+            !== JSON.stringify(session.sharedWorkspaceState.expandedPaths)
+        ) {
+            session.sharedWorkspaceState.expandedPaths = nextExpandedPaths;
+            workspaceChanged = true;
+        }
+
+        if (
+            this.pathMatchesTarget(
+                session.editorState.activeFilePath,
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.editorState.activeFilePath = nextOpenFiles[0] || null;
+            visualChanged = true;
+        }
+
+        if (session.editorState.viewStates.size > 0) {
+            const nextViewStates = new Map();
+            let changed = false;
+            for (const [path, viewState] of session.editorState.viewStates) {
+                if (this.pathMatchesTarget(path, targetPath, isDirectory)) {
+                    changed = true;
+                    continue;
+                }
+                nextViewStates.set(path, viewState);
+            }
+            if (changed) {
+                session.editorState.viewStates = nextViewStates;
+            }
+        }
+
+        if (
+            this.pathMatchesTarget(
+                session.selectedTreePath,
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.selectedTreePath = '';
+            visualChanged = true;
+        }
+
+        if (
+            this.pathMatchesTarget(
+                session.treeEditingPath,
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.treeEditingPath = '';
+        }
+
+        if (
+            this.pathMatchesTarget(
+                session.pendingTreeFocusPath,
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.pendingTreeFocusPath = '';
+        }
+
+        if (
+            this.pathMatchesTarget(
+                session.pendingTreeRenameFocusPath,
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.pendingTreeRenameFocusPath = '';
+        }
+
+        const activeTabKey = session.workspaceState.activeTabKey || '';
+        if (
+            isFileWorkspaceTabKey(activeTabKey)
+            && this.pathMatchesTarget(
+                workspaceKeyToFilePath(activeTabKey),
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.workspaceState.activeTabKey = '';
+            visualChanged = true;
+        }
+
+        const lastNonTerminal = session.workspaceState.lastNonTerminalTabKey || '';
+        if (
+            isFileWorkspaceTabKey(lastNonTerminal)
+            && this.pathMatchesTarget(
+                workspaceKeyToFilePath(lastNonTerminal),
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.workspaceState.lastNonTerminalTabKey = '';
+        }
+
+        return {
+            workspaceChanged,
+            visualChanged
+        };
+    }
+
     focusTreePath(session, path) {
         if (!session?.fileTreeElement || !path) return;
         requestAnimationFrame(() => {
@@ -1805,6 +1987,64 @@ class EditorManager {
         if (isTerminalWorkspaceTabKey(activeKey)) {
             this.activateTerminalTab(true);
         }
+    }
+
+    handleDeletedPaths(server, targetPath, isDirectory) {
+        this.removeDeletedModelStorePaths(server, targetPath, isDirectory);
+
+        let currentSessionAffected = false;
+        for (const session of state.sessions.values()) {
+            if (session.serverId !== server.id) continue;
+
+            const { workspaceChanged, visualChanged } =
+                this.applyDeletedPathToSession(
+                    session,
+                    targetPath,
+                    isDirectory
+                );
+            const pendingChanged = this.removeDeletedPendingFileWrites(
+                session.key,
+                targetPath,
+                isDirectory
+            );
+
+            if (workspaceChanged || pendingChanged) {
+                session.saveState({ touchWorkspace: true });
+            }
+
+            if (visualChanged && session.key === state.activeSessionKey) {
+                currentSessionAffected = true;
+            }
+
+            if (session.editorState.isVisible) {
+                this.requestSessionTreeRefresh(session);
+            }
+        }
+
+        if (!currentSessionAffected || !this.currentSession) {
+            return;
+        }
+
+        this.renderEditorTabs();
+        this.updateEditorPaneVisibility();
+        const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
+        if (isFileWorkspaceTabKey(activeKey)) {
+            this.activateFileTab(
+                workspaceKeyToFilePath(activeKey),
+                true,
+                { focusEditor: false }
+            );
+            return;
+        }
+        if (isAgentWorkspaceTabKey(activeKey)) {
+            this.activateAgentTab(activeKey, true);
+            return;
+        }
+        if (isTerminalWorkspaceTabKey(activeKey)) {
+            this.activateTerminalTab(true);
+            return;
+        }
+        this.showEmptyState();
     }
 
     async loadIconMap() {
@@ -2068,6 +2308,36 @@ class EditorManager {
         return true;
     }
 
+    async deleteSelectedTreeEntry(session) {
+        if (!session) return false;
+        const selectedPath = this.getDomSelectedTreePath(session)
+            || session.selectedTreePath
+            || '';
+        if (!selectedPath) return false;
+
+        const item = session.fileTreeElement?.querySelector(
+            `li[data-path="${CSS.escape(selectedPath)}"]`
+        );
+        const row = item?.querySelector('.file-tree-item');
+        const nameEl = row?.querySelector('.file-tree-name');
+        if (
+            !item
+            || !row
+            || !nameEl
+            || item.dataset.deleteable !== '1'
+        ) {
+            return false;
+        }
+
+        await this.deleteTreeEntry(session, {
+            path: selectedPath,
+            name: nameEl.textContent || '',
+            isDirectory: item.dataset.isDirectory === '1',
+            deleteable: true
+        });
+        return true;
+    }
+
     cancelTreeRename(session) {
         if (!session || !session.treeEditingPath) return;
         session.treeEditingPath = '';
@@ -2086,6 +2356,58 @@ class EditorManager {
         session.treeRenameSubmitting = false;
         session.pendingTreeRenameFocusPath = file.path;
         this.requestSessionTreeRefresh(session, { force: true });
+    }
+
+    async deleteTreeEntry(session, file) {
+        if (!session || !file?.deleteable) {
+            return;
+        }
+        const confirmed = await showConfirmModal({
+            title: file.isDirectory
+                ? '⚠️ Delete Folder'
+                : '⚠️ Delete File',
+            message: file.isDirectory
+                ? `Delete folder "${file.name}" and all of its contents?`
+                : `Delete file "${file.name}"?`,
+            note: 'ℹ️ Deleted items do not go to the Trash.',
+            confirmLabel: 'Delete',
+            danger: true,
+            returnFocus: session.fileTreeElement
+        });
+        if (!confirmed) {
+            session.fileTreeElement?.focus({ preventScroll: true });
+            return;
+        }
+
+        try {
+            const response = await session.server.fetch('/api/fs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: file.path
+                })
+            });
+            if (!response.ok) {
+                await throwResponseError(response, 'Failed to delete path');
+            }
+            const payload = await response.json();
+            session.selectedTreePath = '';
+            session.pendingTreeFocusPath = '';
+            session.pendingTreeRenameFocusPath = '';
+            session.treeEditingPath = '';
+            this.handleDeletedPaths(
+                session.server,
+                payload.path || file.path,
+                !!payload.isDirectory
+            );
+            this.requestSessionTreeRefresh(session);
+            session.fileTreeElement?.focus({ preventScroll: true });
+        } catch (error) {
+            alert(error.message || 'Failed to delete path', {
+                type: 'error',
+                title: 'Files'
+            });
+        }
     }
 
     async commitTreeRename(session, file, nextName) {
@@ -2161,6 +2483,7 @@ class EditorManager {
         li.dataset.path = file.path;
         li.dataset.isDirectory = file.isDirectory ? '1' : '0';
         li.dataset.renameable = file.renameable ? '1' : '0';
+        li.dataset.deleteable = file.deleteable ? '1' : '0';
 
         let row = Array.from(li.children).find(
             (child) => child.classList?.contains('file-tree-item')
@@ -2188,6 +2511,17 @@ class EditorManager {
             renameButton.setAttribute('aria-label', `Rename ${file.name}`);
             renameButton.innerHTML = RENAME_ICON_SVG;
             row.appendChild(renameButton);
+        }
+
+        let deleteButton = row.querySelector('.file-tree-delete-btn');
+        if (!deleteButton) {
+            deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'file-tree-delete-btn';
+            deleteButton.title = 'Delete';
+            deleteButton.setAttribute('aria-label', `Delete ${file.name}`);
+            deleteButton.innerHTML = DELETE_ICON_SVG;
+            row.appendChild(deleteButton);
         }
 
         let name = row.querySelector('.file-tree-name');
@@ -2231,6 +2565,7 @@ class EditorManager {
         name.textContent = file.name;
         name.style.display = isEditing ? 'none' : '';
         renameButton.style.display = isEditing ? 'none' : '';
+        deleteButton.style.display = isEditing ? 'none' : '';
         renameButton.hidden = !file.renameable;
         renameButton.disabled = !file.renameable;
         renameButton.title = `Rename ${file.name}`;
@@ -2242,6 +2577,19 @@ class EditorManager {
         renameButton.onclick = (event) => {
             event.stopPropagation();
             this.beginTreeRename(session, file);
+        };
+
+        deleteButton.hidden = !file.deleteable;
+        deleteButton.disabled = !file.deleteable;
+        deleteButton.title = `Delete ${file.name}`;
+        deleteButton.setAttribute('aria-label', `Delete ${file.name}`);
+        deleteButton.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        deleteButton.onclick = (event) => {
+            event.stopPropagation();
+            void this.deleteTreeEntry(session, file);
         };
 
         if (renameInput) {
@@ -2296,6 +2644,9 @@ class EditorManager {
         row.onclick = async (e) => {
             e.stopPropagation();
             if (e.target.closest('.file-tree-rename-btn')) {
+                return;
+            }
+            if (e.target.closest('.file-tree-delete-btn')) {
                 return;
             }
             if (e.target.closest('.file-tree-rename-input')) {
@@ -2363,6 +2714,7 @@ class EditorManager {
         row.onmousedown = (event) => {
             if (
                 event.target.closest('.file-tree-rename-btn')
+                || event.target.closest('.file-tree-delete-btn')
                 || event.target.closest('.file-tree-rename-input')
             ) {
                 return;
@@ -11749,6 +12101,21 @@ function createTabElement(session) {
             editorManager.focusTreePath(session, session.selectedTreePath);
             return;
         }
+        if (
+            !session.treeEditingPath
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && (
+                event.key === 'Delete'
+                || event.key === 'Backspace'
+            )
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            void editorManager.deleteSelectedTreeEntry(session);
+            return;
+        }
         if (event.key === 'ArrowDown') {
             event.preventDefault();
             event.stopPropagation();
@@ -11986,6 +12353,104 @@ function openServerModal(mode, server = null) {
     addServerModal.style.display = 'flex';
     addServerUrlInput.focus();
     return true;
+}
+
+const confirmModalState = {
+    resolve: null,
+    returnFocus: null,
+    preferredFocus: 'confirm'
+};
+
+function isConfirmModalOpen() {
+    return !!confirmModal && confirmModal.style.display !== 'none';
+}
+
+function getConfirmModalPreferredButton() {
+    if (!confirmModalCancel || !confirmModalConfirm) {
+        return null;
+    }
+    return confirmModalState.preferredFocus === 'cancel'
+        ? confirmModalCancel
+        : confirmModalConfirm;
+}
+
+function settleConfirmModal(result) {
+    if (!confirmModal) return;
+    confirmModal.style.display = 'none';
+    const resolve = confirmModalState.resolve;
+    const returnFocus = confirmModalState.returnFocus;
+    confirmModalState.resolve = null;
+    confirmModalState.returnFocus = null;
+    confirmModalState.preferredFocus = 'confirm';
+    if (returnFocus instanceof HTMLElement) {
+        requestAnimationFrame(() => {
+            try {
+                returnFocus.focus({ preventScroll: true });
+            } catch {
+                // Ignore focus restoration failures.
+            }
+        });
+    }
+    resolve?.(result);
+}
+
+function showConfirmModal({
+    title = 'Confirm',
+    message = '',
+    note = '',
+    confirmLabel = 'Confirm',
+    danger = false,
+    returnFocus = null
+} = {}) {
+    if (
+        !confirmModal
+        || !confirmModalTitle
+        || !confirmModalMessage
+        || !confirmModalNote
+        || !confirmModalConfirm
+        || !confirmModalCancel
+    ) {
+        return Promise.resolve(false);
+    }
+    if (confirmModalState.resolve) {
+        settleConfirmModal(false);
+    }
+    confirmModalTitle.textContent = title;
+    confirmModalMessage.textContent = message;
+    confirmModalNote.textContent = note;
+    confirmModalNote.style.display = note ? '' : 'none';
+    confirmModalConfirm.textContent = confirmLabel;
+    confirmModalConfirm.classList.toggle('danger-button', danger);
+    confirmModal.style.display = 'flex';
+    confirmModalState.returnFocus = returnFocus;
+    confirmModalState.preferredFocus = 'confirm';
+    requestAnimationFrame(() => {
+        getConfirmModalPreferredButton()?.focus({ preventScroll: true });
+    });
+    return new Promise((resolve) => {
+        confirmModalState.resolve = resolve;
+    });
+}
+
+function moveConfirmModalFocus(delta) {
+    if (!confirmModalCancel || !confirmModalConfirm || !delta) {
+        return;
+    }
+    const buttons = [confirmModalCancel, confirmModalConfirm];
+    const currentIndex = buttons.findIndex(
+        (button) => button === document.activeElement
+    );
+    const baseIndex = currentIndex === -1
+        ? 1
+        : currentIndex;
+    const nextIndex = Math.max(0, Math.min(
+        buttons.length - 1,
+        baseIndex + delta
+    ));
+    confirmModalState.preferredFocus = nextIndex === 0
+        ? 'cancel'
+        : 'confirm';
+    buttons[nextIndex].focus({ preventScroll: true });
 }
 
 function renderServerControls() {
@@ -12555,6 +13020,84 @@ if (
     console.warn('[Tabminal] Legacy sidebar detected, enabling fallback new-tab button.');
     legacyNewTabButton.addEventListener('click', () => {
         createNewSession(getMainServer());
+    });
+}
+
+if (
+    confirmModal
+    && confirmModalCancel
+    && confirmModalConfirm
+) {
+    const focusPreferredConfirmButton = () => {
+        requestAnimationFrame(() => {
+            if (!isConfirmModalOpen()) return;
+            const activeElement = document.activeElement;
+            if (activeElement && confirmModal.contains(activeElement)) {
+                return;
+            }
+            getConfirmModalPreferredButton()?.focus({ preventScroll: true });
+        });
+    };
+
+    confirmModalCancel.addEventListener('focus', () => {
+        confirmModalState.preferredFocus = 'cancel';
+    });
+
+    confirmModalConfirm.addEventListener('focus', () => {
+        confirmModalState.preferredFocus = 'confirm';
+    });
+
+    confirmModalCancel.addEventListener('click', () => {
+        settleConfirmModal(false);
+    });
+
+    confirmModalConfirm.addEventListener('click', () => {
+        settleConfirmModal(true);
+    });
+
+    confirmModal.addEventListener('click', (event) => {
+        if (event.target === confirmModal) {
+            settleConfirmModal(false);
+        }
+    });
+
+    confirmModal.addEventListener('focusout', () => {
+        focusPreferredConfirmButton();
+    });
+
+    confirmModal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            settleConfirmModal(false);
+            return;
+        }
+        if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            event.stopPropagation();
+            moveConfirmModalFocus(-1);
+            return;
+        }
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            event.stopPropagation();
+            moveConfirmModalFocus(1);
+            return;
+        }
+        if (event.key === 'Tab') {
+            event.preventDefault();
+            event.stopPropagation();
+            moveConfirmModalFocus(event.shiftKey ? -1 : 1);
+            return;
+        }
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            event.stopPropagation();
+            if (document.activeElement === confirmModalCancel) {
+                settleConfirmModal(false);
+                return;
+            }
+            settleConfirmModal(true);
+        }
     });
 }
 

@@ -41,7 +41,8 @@ export const setupFsRoutes = (router) => {
                         name: dirent.name,
                         isDirectory: dirent.isDirectory(),
                         path: path.join(dirPath, dirent.name),
-                        renameable
+                        renameable,
+                        deleteable: renameable
                     };
                 });
 
@@ -103,6 +104,33 @@ export const setupFsRoutes = (router) => {
         } catch (err) {
             console.error('FS Rename Error:', err);
             ctx.status = err?.code === 'EEXIST' ? 409 : 500;
+            ctx.body = { error: err.message };
+        }
+    });
+
+    router.post('/api/fs/delete', async (ctx) => {
+        const targetPath = ctx.request.body?.path;
+        if (typeof targetPath !== 'string' || targetPath.length === 0) {
+            ctx.status = 400;
+            ctx.body = { error: 'Path required' };
+            return;
+        }
+
+        try {
+            const fullTargetPath = resolvePath(baseDir, targetPath);
+            const stats = await fs.stat(fullTargetPath);
+            await fs.rm(fullTargetPath, {
+                recursive: stats.isDirectory(),
+                force: false
+            });
+
+            ctx.body = {
+                path: targetPath,
+                isDirectory: stats.isDirectory()
+            };
+        } catch (err) {
+            console.error('FS Delete Error:', err);
+            ctx.status = 500;
             ctx.body = { error: err.message };
         }
     });
