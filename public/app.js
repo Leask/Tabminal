@@ -111,6 +111,14 @@ const RECENT_AGENT_USAGE_STORAGE_KEY = 'tabminal_recent_agent_usage';
 const FILE_WORKSPACE_TAB_PREFIX = 'file:';
 const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
 const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
+const SUPPORTED_IMAGE_EXTENSIONS = new Set([
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'svg',
+    'webp'
+]);
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
@@ -177,6 +185,18 @@ function isFileWorkspaceTabKey(key) {
 
 function isCompactWorkspaceMode() {
     return !!window.__tabminalCompactWorkspaceMode;
+}
+
+function isSupportedImagePath(filePath) {
+    if (typeof filePath !== 'string') {
+        return false;
+    }
+    const dotIndex = filePath.lastIndexOf('.');
+    if (dotIndex === -1) {
+        return false;
+    }
+    const ext = filePath.slice(dotIndex + 1).toLowerCase();
+    return SUPPORTED_IMAGE_EXTENSIONS.has(ext);
 }
 
 function isCompactTerminalTabsMode() {
@@ -3017,20 +3037,10 @@ class EditorManager {
             : session;
         if (!targetSession) return;
         const state = targetSession.editorState;
-
-        let touchedWorkspace = false;
-        if (!state.openFiles.includes(filePath)) {
-            state.openFiles.push(filePath);
-            this.renderEditorTabs();
-            touchedWorkspace = true;
-        }
-        
-        this.updateEditorPaneVisibility();
+        const wasOpen = state.openFiles.includes(filePath);
+        const isImage = isSupportedImagePath(filePath);
 
         if (!this.getModel(filePath)) {
-            const ext = filePath.split('.').pop().toLowerCase();
-            const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext);
-            
             let model = null;
             let content = null;
             let readonly = false;
@@ -3040,7 +3050,20 @@ class EditorManager {
                     const res = await targetSession.server.fetch(
                         `/api/fs/read?path=${encodeURIComponent(filePath)}`
                     );
-                    if (!res.ok) throw new Error('Failed to read file');
+                    if (res.status === 415) {
+                        await showConfirmModal({
+                            title: 'Unsupported File Type',
+                            message: 'This file type is not supported yet.',
+                            note: 'Only text files and supported images can be opened right now.',
+                            confirmLabel: 'OK',
+                            hideCancel: true,
+                            returnFocus: document.activeElement
+                        });
+                        return;
+                    }
+                    if (!res.ok) {
+                        throw new Error('Failed to read file');
+                    }
                     const data = await res.json();
                     content = data.content;
                     readonly = data.readonly;
@@ -3069,6 +3092,15 @@ class EditorManager {
                 readonly: readonly
             });
         }
+
+        let touchedWorkspace = false;
+        if (!wasOpen) {
+            state.openFiles.push(filePath);
+            this.renderEditorTabs();
+            touchedWorkspace = true;
+        }
+        
+        this.updateEditorPaneVisibility();
 
         this.activateFileTab(filePath, false, options);
         if (touchedWorkspace) {
@@ -12358,16 +12390,31 @@ function openServerModal(mode, server = null) {
 const confirmModalState = {
     resolve: null,
     returnFocus: null,
-    preferredFocus: 'confirm'
+    preferredFocus: 'confirm',
+    hideCancel: false
 };
 
 function isConfirmModalOpen() {
     return !!confirmModal && confirmModal.style.display !== 'none';
 }
 
+function getVisibleConfirmModalButtons() {
+    const buttons = [];
+    if (confirmModalCancel && !confirmModalState.hideCancel) {
+        buttons.push(confirmModalCancel);
+    }
+    if (confirmModalConfirm) {
+        buttons.push(confirmModalConfirm);
+    }
+    return buttons;
+}
+
 function getConfirmModalPreferredButton() {
-    if (!confirmModalCancel || !confirmModalConfirm) {
+    if (!confirmModalConfirm) {
         return null;
+    }
+    if (confirmModalState.hideCancel || !confirmModalCancel) {
+        return confirmModalConfirm;
     }
     return confirmModalState.preferredFocus === 'cancel'
         ? confirmModalCancel
@@ -12382,6 +12429,7 @@ function settleConfirmModal(result) {
     confirmModalState.resolve = null;
     confirmModalState.returnFocus = null;
     confirmModalState.preferredFocus = 'confirm';
+    confirmModalState.hideCancel = false;
     if (returnFocus instanceof HTMLElement) {
         requestAnimationFrame(() => {
             try {
@@ -12400,6 +12448,7 @@ function showConfirmModal({
     note = '',
     confirmLabel = 'Confirm',
     danger = false,
+    hideCancel = false,
     returnFocus = null
 } = {}) {
     if (
@@ -12419,10 +12468,12 @@ function showConfirmModal({
     confirmModalMessage.textContent = message;
     confirmModalNote.textContent = note;
     confirmModalNote.style.display = note ? '' : 'none';
+    confirmModalCancel.style.display = hideCancel ? 'none' : '';
     confirmModalConfirm.textContent = confirmLabel;
     confirmModalConfirm.classList.toggle('danger-button', danger);
     confirmModal.style.display = 'flex';
     confirmModalState.returnFocus = returnFocus;
+    confirmModalState.hideCancel = hideCancel;
     confirmModalState.preferredFocus = 'confirm';
     requestAnimationFrame(() => {
         getConfirmModalPreferredButton()?.focus({ preventScroll: true });
@@ -12433,15 +12484,19 @@ function showConfirmModal({
 }
 
 function moveConfirmModalFocus(delta) {
-    if (!confirmModalCancel || !confirmModalConfirm || !delta) {
+    const buttons = getVisibleConfirmModalButtons();
+    if (!buttons.length || !delta) {
         return;
     }
-    const buttons = [confirmModalCancel, confirmModalConfirm];
+    if (buttons.length === 1) {
+        buttons[0].focus({ preventScroll: true });
+        return;
+    }
     const currentIndex = buttons.findIndex(
         (button) => button === document.activeElement
     );
     const baseIndex = currentIndex === -1
-        ? 1
+        ? buttons.length - 1
         : currentIndex;
     const nextIndex = Math.max(0, Math.min(
         buttons.length - 1,

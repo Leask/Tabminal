@@ -3,6 +3,48 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
+const IMAGE_MIME_TYPES = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp'
+};
+
+export function isSupportedTextBuffer(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+        return true;
+    }
+
+    let suspiciousControlBytes = 0;
+    for (const byte of buffer) {
+        if (byte === 0x00) {
+            return false;
+        }
+        if (
+            byte < 0x20
+            && byte !== 0x09
+            && byte !== 0x0a
+            && byte !== 0x0d
+        ) {
+            suspiciousControlBytes += 1;
+        }
+    }
+
+    if (suspiciousControlBytes > Math.max(1, buffer.length * 0.01)) {
+        return false;
+    }
+
+    try {
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        decoder.decode(buffer);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 // Helper to safely resolve path
 const resolvePath = (baseDir, targetPath) => {
     return path.resolve(baseDir, targetPath);
@@ -148,13 +190,30 @@ export const setupFsRoutes = (router) => {
             const fullPath = resolvePath(baseDir, filePath);
             const stats = await fs.stat(fullPath);
 
+            if (!stats.isFile()) {
+                ctx.status = 400;
+                ctx.body = { error: 'Not a file' };
+                return;
+            }
+
             if (stats.size > 1024 * 1024 * 5) { // 5MB limit for now
                 ctx.status = 400;
                 ctx.body = { error: 'File too large' };
                 return;
             }
 
-            const content = await fs.readFile(fullPath, 'utf-8');
+            const contentBuffer = await fs.readFile(fullPath);
+            if (!isSupportedTextBuffer(contentBuffer)) {
+                ctx.status = 415;
+                ctx.body = {
+                    error: 'Unsupported file type',
+                    code: 'unsupported-file-type'
+                };
+                return;
+            }
+
+            const decoder = new TextDecoder('utf-8', { fatal: true });
+            const content = decoder.decode(contentBuffer);
             
             let readonly = false;
             try {
@@ -182,19 +241,10 @@ export const setupFsRoutes = (router) => {
 
         try {
             const fullPath = resolvePath(baseDir, filePath);
-            // Basic mime type handling could be added here
             const ext = path.extname(fullPath).toLowerCase();
-            const mimeTypes = {
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.gif': 'image/gif',
-                '.svg': 'image/svg+xml',
-                '.webp': 'image/webp'
-            };
 
-            if (mimeTypes[ext]) {
-                ctx.type = mimeTypes[ext];
+            if (IMAGE_MIME_TYPES[ext]) {
+                ctx.type = IMAGE_MIME_TYPES[ext];
                 ctx.body = await fs.readFile(fullPath);
             } else {
                 ctx.status = 400;
