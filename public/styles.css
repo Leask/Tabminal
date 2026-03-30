@@ -1751,6 +1751,7 @@ kbd {
     position: relative;
     overflow: hidden;
     min-width: 0;
+    min-height: 0;
 }
 
 .terminal-tab-host {
@@ -3365,6 +3366,145 @@ kbd {
     max-height: 95%;
     object-fit: contain;
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.pdf-preview-container {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    background:
+        linear-gradient(180deg, rgba(7, 54, 66, 0.98), rgba(0, 36, 46, 0.98));
+}
+
+.pdf-preview-status {
+    padding: 14px 18px;
+    color: var(--text-muted);
+    min-height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.pdf-preview-status.is-empty {
+    display: none;
+}
+
+.pdf-preview-status-primary,
+.pdf-preview-status-secondary {
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.pdf-preview-status-primary {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.pdf-preview-status-secondary {
+    color: rgba(229, 237, 239, 0.68);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
+}
+
+.pdf-preview-pages {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    padding: 16px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y pinch-zoom;
+}
+
+.pdf-preview-page {
+    width: 100%;
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+}
+
+.pdf-preview-sheet {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+}
+
+.pdf-preview-page canvas {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    background: #ffffff;
+    box-shadow:
+        0 12px 32px rgba(0, 0, 0, 0.28),
+        0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.pdf-preview-page .textLayer {
+    position: absolute;
+    text-align: initial;
+    inset: 0;
+    overflow: clip;
+    opacity: 1;
+    line-height: 1;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    caret-color: CanvasText;
+    z-index: 1;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.pdf-preview-page .textLayer:is(.highlighting) {
+    touch-action: none;
+}
+
+.pdf-preview-page .textLayer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0 0;
+}
+
+.pdf-preview-page .textLayer {
+    --min-font-size: 1;
+    --text-scale-factor:
+        calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-preview-page .textLayer > :not(.markedContent),
+.pdf-preview-page .textLayer .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform:
+        rotate(var(--rotate))
+        scaleX(var(--scale-x))
+        scale(var(--min-font-size-inv));
+}
+
+.pdf-preview-page .textLayer .markedContent {
+    display: contents;
+}
+
+.pdf-preview-page .textLayer span[role="img"] {
+    user-select: none;
+    cursor: default;
 }
 
 .empty-editor-state {

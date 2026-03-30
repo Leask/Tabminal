@@ -119,6 +119,12 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
     'svg',
     'webp'
 ]);
+const SUPPORTED_PDF_EXTENSIONS = new Set([
+    'pdf'
+]);
+const PDFJS_VERSION = '5.6.205';
+const PDFJS_MODULE_URL = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.mjs`;
+const PDFJS_WORKER_URL = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
@@ -161,6 +167,7 @@ const agentSetupState = {
 };
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
+let pdfJsLibPromise = null;
 // #endregion
 
 function makeFileWorkspaceTabKey(filePath) {
@@ -199,6 +206,29 @@ function isSupportedImagePath(filePath) {
     }
     const ext = filePath.slice(dotIndex + 1).toLowerCase();
     return SUPPORTED_IMAGE_EXTENSIONS.has(ext);
+}
+
+function isSupportedPdfPath(filePath) {
+    if (typeof filePath !== 'string') {
+        return false;
+    }
+    const dotIndex = filePath.lastIndexOf('.');
+    if (dotIndex === -1) {
+        return false;
+    }
+    const ext = filePath.slice(dotIndex + 1).toLowerCase();
+    return SUPPORTED_PDF_EXTENSIONS.has(ext);
+}
+
+async function loadPdfJs() {
+    if (!pdfJsLibPromise) {
+        pdfJsLibPromise = import(PDFJS_MODULE_URL)
+            .then((pdfjsLib) => {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+                return pdfjsLib;
+            });
+    }
+    return await pdfJsLibPromise;
 }
 
 function isCompactTerminalTabsMode() {
@@ -709,6 +739,17 @@ class EditorManager {
         this.monacoContainer = document.getElementById('monaco-container');
         this.imagePreviewContainer = document.getElementById('image-preview-container');
         this.imagePreview = document.getElementById('image-preview');
+        this.pdfPreviewContainer = document.getElementById(
+            'pdf-preview-container'
+        );
+        this.pdfPreviewStatus = document.getElementById('pdf-preview-status');
+        this.pdfPreviewStatusPrimary = document.getElementById(
+            'pdf-preview-status-primary'
+        );
+        this.pdfPreviewStatusSecondary = document.getElementById(
+            'pdf-preview-status-secondary'
+        );
+        this.pdfPreviewPages = document.getElementById('pdf-preview-pages');
         this.emptyState = document.getElementById('empty-editor-state');
         this.terminalWrapper = terminalWrapper;
         this.terminalOriginalParent = terminalWrapper?.parentElement || null;
@@ -758,6 +799,16 @@ class EditorManager {
         this.agentEmbeddedEditors = [];
         this.agentEmbeddedTerminals = new Map();
         this.agentTranscriptLayout = null;
+        this.pdfPreviewState = {
+            path: '',
+            sessionKey: '',
+            renderToken: 0,
+            document: null,
+            loadingTask: null,
+            metadata: '',
+            renderedWidth: 0,
+            relayoutTimer: 0
+        };
         this.agentTranscriptResizeObserver = null;
 
         this.initTerminalControls();
@@ -2405,7 +2456,7 @@ class EditorManager {
                 isDirectory: !!payload.isDirectory,
                 renameable: true
             });
-        } catch (error) {
+        } catch (_error) {
             alert(error.message || 'Failed to create path', {
                 type: 'error',
                 title: 'Files'
@@ -2477,7 +2528,7 @@ class EditorManager {
             );
             this.requestSessionTreeRefresh(session);
             session.fileTreeElement?.focus({ preventScroll: true });
-        } catch (error) {
+        } catch (_error) {
             alert(error.message || 'Failed to delete path', {
                 type: 'error',
                 title: 'Files'
@@ -3005,6 +3056,327 @@ class EditorManager {
         });
     }
 
+    clearPdfPreview(preserveDocument = false) {
+        const state = this.pdfPreviewState;
+        state.renderToken += 1;
+        clearTimeout(state.relayoutTimer);
+        state.relayoutTimer = 0;
+        if (!preserveDocument) {
+            const documentRef = state.document;
+            state.document = null;
+            state.loadingTask = null;
+            state.path = '';
+            state.sessionKey = '';
+            state.metadata = '';
+            state.renderedWidth = 0;
+            if (documentRef && typeof documentRef.destroy === 'function') {
+                Promise.resolve(documentRef.destroy()).catch(() => {});
+            }
+        }
+        if (this.pdfPreviewPages) {
+            this.pdfPreviewPages.innerHTML = '';
+        }
+        this.setPdfPreviewStatus('', '');
+    }
+
+    hidePdfPreview() {
+        this.pdfPreviewContainer.style.display = 'none';
+    }
+
+    getPdfPreviewUrl(filePath, session = this.currentSession) {
+        if (!session) return '';
+        return session.server.resolveUrl(
+            `/api/fs/raw?path=${encodeURIComponent(filePath)}`
+            + `&token=${session.server.token}`
+        );
+    }
+
+    getPdfPreviewTargetWidth() {
+        if (!this.pdfPreviewPages) {
+            return 0;
+        }
+        const width = this.pdfPreviewPages.clientWidth - 36;
+        return Math.max(240, Math.floor(Math.min(width, 960)));
+    }
+
+    setPdfPreviewStatus(primary = '', secondary = '') {
+        const nextPrimary = String(primary || '').trim();
+        const nextSecondary = String(secondary || '').trim();
+        if (this.pdfPreviewStatusPrimary) {
+            this.pdfPreviewStatusPrimary.textContent = nextPrimary;
+        }
+        if (this.pdfPreviewStatusSecondary) {
+            this.pdfPreviewStatusSecondary.textContent = nextSecondary;
+            this.pdfPreviewStatusSecondary.title = nextSecondary;
+        }
+        if (this.pdfPreviewStatus) {
+            this.pdfPreviewStatus.classList.toggle(
+                'is-empty',
+                !nextPrimary && !nextSecondary
+            );
+        }
+    }
+
+    formatPdfByteSize(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+            return '';
+        }
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let value = bytes;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex += 1;
+        }
+        const decimals = value >= 100 || unitIndex === 0 ? 0 : 1;
+        return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+    }
+
+    describePdfPageSize(viewport) {
+        if (!viewport) {
+            return '';
+        }
+        const width = Math.min(viewport.width, viewport.height);
+        const height = Math.max(viewport.width, viewport.height);
+        const near = (targetWidth, targetHeight) => (
+            Math.abs(width - targetWidth) < 2
+            && Math.abs(height - targetHeight) < 2
+        );
+        if (near(595.276, 841.89)) return 'A4';
+        if (near(612, 792)) return 'Letter';
+        return '';
+    }
+
+    async loadPdfMetadata(documentRef) {
+        const parts = [];
+        try {
+            const meta = await documentRef.getMetadata();
+            const version = String(meta?.info?.PDFFormatVersion || '').trim();
+            parts.push(version ? `PDF ${version}` : 'PDF');
+        } catch {
+            parts.push('PDF');
+        }
+
+        try {
+            const firstPage = await documentRef.getPage(1);
+            const pageSize = this.describePdfPageSize(
+                firstPage.getViewport({ scale: 1 })
+            );
+            if (pageSize) {
+                parts.push(pageSize);
+            }
+        } catch {
+            // Ignore optional page-size metadata failures.
+        }
+
+        try {
+            const downloadInfo = await documentRef.getDownloadInfo();
+            const byteSize = this.formatPdfByteSize(downloadInfo?.length);
+            if (byteSize) {
+                parts.push(byteSize);
+            }
+        } catch {
+            // Ignore optional size metadata failures.
+        }
+
+        return parts.join(' · ');
+    }
+
+    schedulePdfPreviewRelayout() {
+        const state = this.pdfPreviewState;
+        if (
+            !this.pdfPreviewContainer
+            || this.pdfPreviewContainer.style.display === 'none'
+            || !state.document
+            || !state.path
+        ) {
+            return;
+        }
+        clearTimeout(state.relayoutTimer);
+        state.relayoutTimer = window.setTimeout(() => {
+            const nextWidth = this.getPdfPreviewTargetWidth();
+            if (
+                nextWidth > 0
+                && Math.abs(nextWidth - state.renderedWidth) > 24
+            ) {
+                void this.renderPdfPreview(state.path);
+            }
+        }, 120);
+    }
+
+    async loadPdfDocument(filePath, session, renderToken) {
+        const state = this.pdfPreviewState;
+        const url = this.getPdfPreviewUrl(filePath, session);
+        const pdfjsLib = await loadPdfJs();
+        if (state.renderToken !== renderToken) {
+            return null;
+        }
+
+        let loadingTask = pdfjsLib.getDocument({
+            url
+        });
+        state.loadingTask = loadingTask;
+        try {
+            return await loadingTask.promise;
+        } catch (_error) {
+            if (state.renderToken !== renderToken) {
+                return null;
+            }
+            loadingTask = pdfjsLib.getDocument({
+                url,
+                disableWorker: true
+            });
+            state.loadingTask = loadingTask;
+            return await loadingTask.promise;
+        }
+    }
+
+    async renderPdfPreview(filePath) {
+        const session = this.currentSession;
+        if (!session || !filePath) {
+            return;
+        }
+        const state = this.pdfPreviewState;
+        const renderToken = state.renderToken + 1;
+        const targetSessionKey = session.key;
+        const nextWidth = this.getPdfPreviewTargetWidth();
+        if (nextWidth <= 0) {
+            requestAnimationFrame(() => {
+                if (
+                    this.currentSession?.key === targetSessionKey
+                    && this.currentSession?.editorState.activeFilePath === filePath
+                ) {
+                    void this.renderPdfPreview(filePath);
+                }
+            });
+            return;
+        }
+
+        if (
+            state.path !== filePath
+            || state.sessionKey !== targetSessionKey
+        ) {
+            this.clearPdfPreview();
+        } else {
+            this.clearPdfPreview(true);
+        }
+        state.renderToken = renderToken;
+        state.path = filePath;
+        state.sessionKey = targetSessionKey;
+        this.setPdfPreviewStatus('Loading PDF…', '');
+
+        try {
+            let documentRef = state.document;
+            if (!documentRef) {
+                documentRef = await this.loadPdfDocument(
+                    filePath,
+                    session,
+                    renderToken
+                );
+                if (!documentRef || state.renderToken !== renderToken) {
+                    return;
+                }
+                state.document = documentRef;
+                state.metadata = await this.loadPdfMetadata(documentRef);
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+            }
+
+            state.renderedWidth = nextWidth;
+            if (this.pdfPreviewPages) {
+                this.pdfPreviewPages.innerHTML = '';
+            }
+            const pageCount = documentRef.numPages;
+            this.setPdfPreviewStatus(
+                `${pageCount} page${pageCount === 1 ? '' : 's'}`,
+                state.metadata || 'PDF'
+            );
+
+            for (let pageNumber = 1; pageNumber <= documentRef.numPages; pageNumber += 1) {
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+                const page = await documentRef.getPage(pageNumber);
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+                const baseViewport = page.getViewport({ scale: 1 });
+                const scale = nextWidth / baseViewport.width;
+                const viewport = page.getViewport({ scale });
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d', {
+                    alpha: false
+                });
+                if (!context) {
+                    throw new Error('Failed to create PDF canvas context');
+                }
+                const outputScale = Math.max(1, window.devicePixelRatio || 1);
+                canvas.width = Math.ceil(viewport.width * outputScale);
+                canvas.height = Math.ceil(viewport.height * outputScale);
+                canvas.style.width = `${Math.ceil(viewport.width)}px`;
+                canvas.style.height = `${Math.ceil(viewport.height)}px`;
+                context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+                const textLayer = document.createElement('div');
+                textLayer.className = 'textLayer';
+                const sheet = document.createElement('div');
+                sheet.className = 'pdf-preview-sheet';
+                sheet.style.width = `${Math.ceil(viewport.width)}px`;
+                sheet.style.height = `${Math.ceil(viewport.height)}px`;
+                sheet.style.setProperty('--user-unit', '1');
+                sheet.style.setProperty('--scale-factor', String(scale));
+                sheet.style.setProperty(
+                    '--total-scale-factor',
+                    String(scale)
+                );
+                sheet.style.setProperty('--scale-round-x', '1px');
+                sheet.style.setProperty('--scale-round-y', '1px');
+                await page.render({
+                    canvasContext: context,
+                    viewport
+                }).promise;
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+                const textContent = await page.getTextContent();
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+                const textLayerBuilder = new pdfjsLib.TextLayer({
+                    textContentSource: textContent,
+                    container: textLayer,
+                    viewport
+                });
+                await textLayerBuilder.render();
+                if (state.renderToken !== renderToken) {
+                    return;
+                }
+                const wrapper = document.createElement('div');
+                wrapper.className = 'pdf-preview-page';
+                wrapper.dataset.pageNumber = String(pageNumber);
+                sheet.appendChild(canvas);
+                sheet.appendChild(textLayer);
+                wrapper.appendChild(sheet);
+                this.pdfPreviewPages?.appendChild(wrapper);
+            }
+        } catch (error) {
+            console.error('Failed to render PDF preview:', error);
+            if (state.renderToken !== renderToken) {
+                return;
+            }
+            this.clearPdfPreview();
+            this.hidePdfPreview();
+            alert(
+                `Failed to load PDF: ${filePath.split('/').pop()}`,
+                {
+                    type: 'error',
+                    title: 'PDF Preview Error'
+                }
+            );
+            this.closeFile(filePath);
+        }
+    }
+
     updateEditorPaneVisibility() {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
@@ -3137,6 +3509,7 @@ class EditorManager {
                 this.editor.layout();
             }
         }
+        this.schedulePdfPreviewRelayout();
     }
 
     async renderTree(
@@ -3209,13 +3582,14 @@ class EditorManager {
         const state = targetSession.editorState;
         const wasOpen = state.openFiles.includes(filePath);
         const isImage = isSupportedImagePath(filePath);
+        const isPdf = isSupportedPdfPath(filePath);
 
         if (!this.getModel(filePath)) {
             let model = null;
             let content = null;
             let readonly = false;
 
-            if (!isImage) {
+            if (!isImage && !isPdf) {
                 try {
                     const res = await targetSession.server.fetch(
                         `/api/fs/read?path=${encodeURIComponent(filePath)}`
@@ -3224,7 +3598,7 @@ class EditorManager {
                         await showConfirmModal({
                             title: 'Unsupported File Type',
                             message: 'This file type is not supported yet.',
-                            note: 'Only text files and supported images can be opened right now.',
+                            note: 'Only text files, supported images, and PDFs can be opened right now.',
                             confirmLabel: 'OK',
                             hideCancel: true,
                             returnFocus: document.activeElement
@@ -3256,7 +3630,7 @@ class EditorManager {
             }
 
             this.setModel(filePath, {
-                type: isImage ? 'image' : 'text',
+                type: isImage ? 'image' : isPdf ? 'pdf' : 'text',
                 model: model,
                 content: content,
                 readonly: readonly
@@ -3467,6 +3841,7 @@ class EditorManager {
         this.currentSession.updateTabUI();
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
+        this.hidePdfPreview();
         this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'none';
         this.syncTerminalWorkspacePlacement(TERMINAL_WORKSPACE_TAB_KEY);
@@ -3512,6 +3887,7 @@ class EditorManager {
             this.agentContainer.style.display = 'none';
             this.monacoContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'flex';
+            this.hidePdfPreview();
             
             this.imagePreview.onerror = () => {
                 alert(`Failed to load image: ${filePath.split('/').pop()}`, { type: 'error', title: 'Error' });
@@ -3522,9 +3898,16 @@ class EditorManager {
             this.imagePreview.src = this.currentSession.server.resolveUrl(
                 `/api/fs/raw?path=${encodeURIComponent(filePath)}&token=${this.currentSession.server.token}`
             );
+        } else if (file.type === 'pdf') {
+            this.agentContainer.style.display = 'none';
+            this.monacoContainer.style.display = 'none';
+            this.imagePreviewContainer.style.display = 'none';
+            this.pdfPreviewContainer.style.display = 'flex';
+            void this.renderPdfPreview(filePath);
         } else {
             this.agentContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'none';
+            this.hidePdfPreview();
             this.monacoContainer.style.display = 'block';
             
             if (!file.model && file.content !== null && this.monacoInstance) {
@@ -3587,6 +3970,7 @@ class EditorManager {
         this.syncTerminalWorkspacePlacement(agentTabKey);
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
+        this.hidePdfPreview();
         this.emptyState.style.display = 'none';
         this.agentContainer.style.display = 'flex';
         this.renderAgentPanel(agentTab);
@@ -5327,6 +5711,7 @@ class EditorManager {
     showEmptyState() {
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
+        this.hidePdfPreview();
         this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'flex';
         this.syncTerminalWorkspacePlacement('');

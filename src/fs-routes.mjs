@@ -12,6 +12,11 @@ const IMAGE_MIME_TYPES = {
     '.webp': 'image/webp'
 };
 
+const RAW_MIME_TYPES = {
+    ...IMAGE_MIME_TYPES,
+    '.pdf': 'application/pdf'
+};
+
 export function isSupportedTextBuffer(buffer) {
     if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
         return true;
@@ -368,7 +373,7 @@ export const setupFsRoutes = (router) => {
         }
     });
 
-    // Raw file access (for images)
+    // Raw file access (for previews like images and PDFs)
     router.get('/api/fs/raw', async (ctx) => {
         const filePath = ctx.query.path;
         if (!filePath) {
@@ -380,8 +385,8 @@ export const setupFsRoutes = (router) => {
             const fullPath = resolvePath(baseDir, filePath);
             const ext = path.extname(fullPath).toLowerCase();
 
-            if (IMAGE_MIME_TYPES[ext]) {
-                ctx.type = IMAGE_MIME_TYPES[ext];
+            if (RAW_MIME_TYPES[ext]) {
+                ctx.type = RAW_MIME_TYPES[ext];
                 ctx.body = await fs.readFile(fullPath);
             } else {
                 ctx.status = 400;

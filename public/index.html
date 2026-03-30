@@ -229,6 +229,8 @@
                     target.classList.contains('file-tree') ||
                     target.classList.contains('tab-file-tree') ||
                     target.classList.contains('editor-content') ||
+                    target.classList.contains('pdf-preview-container') ||
+                    target.classList.contains('pdf-preview-pages') ||
                     target.classList.contains('agent-panel-transcript') ||
                     target.classList.contains('agent-panel-input') ||
                     target.classList.contains('xterm-viewport') ||
@@ -326,6 +328,19 @@
                         <div id="monaco-container" class="monaco-container"></div>
                         <div id="image-preview-container" class="image-preview-container" style="display: none;">
                             <img id="image-preview" src="" alt="Preview">
+                        </div>
+                        <div id="pdf-preview-container" class="pdf-preview-container" style="display: none;">
+                        <div id="pdf-preview-status" class="pdf-preview-status">
+                            <span
+                                id="pdf-preview-status-primary"
+                                class="pdf-preview-status-primary"
+                            ></span>
+                            <span
+                                id="pdf-preview-status-secondary"
+                                class="pdf-preview-status-secondary"
+                            ></span>
+                        </div>
+                        <div id="pdf-preview-pages" class="pdf-preview-pages"></div>
                         </div>
                         <div id="empty-editor-state" class="empty-editor-state">
                             Select a file to view
