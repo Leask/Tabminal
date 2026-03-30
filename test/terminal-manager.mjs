@@ -12,6 +12,7 @@ function createWorkspaceState(overrides = {}) {
         terminalDisplayMode: 'auto',
         expandedPaths: [],
         markdownSplitPath: '',
+        activeWorkspaceTabKey: '',
         ...overrides
     };
 }
@@ -46,7 +47,8 @@ describe('TerminalManager workspace sync', () => {
                 openFiles: ['/tmp/newer.js'],
                 terminalDisplayMode: 'tab',
                 expandedPaths: ['/tmp/src'],
-                markdownSplitPath: '/tmp/newer.js'
+                markdownSplitPath: '/tmp/newer.js',
+                activeWorkspaceTabKey: 'file:/tmp/newer.js'
             })
         });
 
@@ -59,6 +61,10 @@ describe('TerminalManager workspace sync', () => {
         assert.equal(
             session.editorState.markdownSplitPath,
             '/tmp/newer.js'
+        );
+        assert.equal(
+            session.editorState.activeWorkspaceTabKey,
+            'file:/tmp/newer.js'
         );
     });
 
@@ -130,7 +136,8 @@ describe('TerminalManager workspace sync', () => {
                 updatedAt: 10,
                 updatedBy: 'device-a',
                 openFiles: ['/tmp/readme.md'],
-                markdownSplitPath: '/tmp/readme.md'
+                markdownSplitPath: '/tmp/readme.md',
+                activeWorkspaceTabKey: 'preview:/tmp/readme.md'
             }),
             persistent: false
         };
@@ -141,13 +148,18 @@ describe('TerminalManager workspace sync', () => {
                 updatedAt: 11,
                 updatedBy: 'device-b',
                 openFiles: ['/tmp/readme.md'],
-                markdownSplitPath: '/tmp/readme.md'
+                markdownSplitPath: '/tmp/readme.md',
+                activeWorkspaceTabKey: 'preview:/tmp/readme.md'
             })
         });
 
         assert.equal(
             session.editorState.markdownSplitPath,
             '/tmp/readme.md'
+        );
+        assert.equal(
+            session.editorState.activeWorkspaceTabKey,
+            'preview:/tmp/readme.md'
         );
     });
 });

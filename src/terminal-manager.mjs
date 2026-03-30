@@ -80,6 +80,13 @@ function uniqueStringList(values) {
 function normalizeWorkspaceState(input = {}, fallback = {}) {
     const source = input && typeof input === 'object' ? input : {};
     const base = fallback && typeof fallback === 'object' ? fallback : {};
+    const activeWorkspaceTabKey = typeof source.activeWorkspaceTabKey === 'string'
+        ? source.activeWorkspaceTabKey
+        : (
+            typeof base.activeWorkspaceTabKey === 'string'
+                ? base.activeWorkspaceTabKey
+                : ''
+        );
     const markdownSplitPath = typeof source.markdownSplitPath === 'string'
         ? source.markdownSplitPath
         : (
@@ -108,7 +115,8 @@ function normalizeWorkspaceState(input = {}, fallback = {}) {
             ? 'tab'
             : 'auto',
         expandedPaths: uniqueStringList(source.expandedPaths),
-        markdownSplitPath
+        markdownSplitPath,
+        activeWorkspaceTabKey
     };
 }
 

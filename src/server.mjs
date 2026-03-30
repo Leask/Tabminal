@@ -174,6 +174,22 @@ router.get('/healthz', (ctx) => {
     ctx.body = { status: 'ok' };
 });
 
+app.use(async (ctx, next) => {
+    if (ctx.method === 'GET' && ctx.path === '/api/version') {
+        ctx.set(
+            'Cache-Control',
+            'no-store, no-cache, must-revalidate, proxy-revalidate'
+        );
+        ctx.set('Pragma', 'no-cache');
+        ctx.set('Expires', '0');
+        ctx.body = {
+            bootId: SERVER_BOOT_ID
+        };
+        return;
+    }
+    await next();
+});
+
 // Serve static files (public) BEFORE auth middleware
 app.use(serve(publicDir));
 

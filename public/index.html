@@ -277,18 +277,82 @@
             }
 
             const runtimeStorageKey = 'tabminal_runtime_boot_id';
-            let runtimeBootId = '';
-            try {
-                runtimeBootId = localStorage.getItem(runtimeStorageKey) || '';
-            } catch {
-                runtimeBootId = '';
-            }
-            const runtimeAssetKey = runtimeBootId || `cold-${Date.now()}`;
-            window.__tabminalRuntimeAssetKey = runtimeAssetKey;
-            const link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = `./styles.css?v=${encodeURIComponent(runtimeAssetKey)}`;
-            document.head.appendChild(link);
+            const versionApiUrl = './api/version';
+            const runtimeVersionTimeoutMs = 3000;
+            const readStoredRuntimeBootId = () => {
+                try {
+                    return localStorage.getItem(runtimeStorageKey) || '';
+                } catch {
+                    return '';
+                }
+            };
+            const persistRuntimeBootId = (bootId) => {
+                try {
+                    localStorage.setItem(runtimeStorageKey, bootId);
+                } catch {
+                    // Ignore storage failures and continue with in-memory key.
+                }
+            };
+            const getStartupFallbackAssetKey = () => {
+                return readStoredRuntimeBootId() || `cold-${Date.now()}`;
+            };
+            window.__tabminalRuntimeAssetKey = getStartupFallbackAssetKey();
+
+            window.__tabminalResolveRuntimeVersion = (() => {
+                let promise = null;
+                return () => {
+                    if (promise) {
+                        return promise;
+                    }
+                    promise = (async () => {
+                        const controller = (
+                            typeof AbortController === 'function'
+                                ? new AbortController()
+                                : null
+                        );
+                        const timeoutId = window.setTimeout(() => {
+                            if (controller) {
+                                controller.abort();
+                            }
+                        }, runtimeVersionTimeoutMs);
+                        try {
+                            const response = await fetch(versionApiUrl, {
+                                method: 'GET',
+                                cache: 'no-store',
+                                credentials: 'same-origin',
+                                headers: {
+                                    'accept': 'application/json'
+                                },
+                                signal: controller?.signal
+                            });
+                            if (!response.ok) {
+                                throw new Error(`version ${response.status}`);
+                            }
+                            const data = await response.json();
+                            const bootId = String(data?.bootId || '').trim();
+                            if (!bootId) {
+                                throw new Error('missing runtime version boot id');
+                            }
+                            window.__tabminalRuntimeAssetKey = bootId;
+                            persistRuntimeBootId(bootId);
+                            return {
+                                bootId,
+                                source: 'api'
+                            };
+                        } catch (_err) {
+                            const bootId = getStartupFallbackAssetKey();
+                            window.__tabminalRuntimeAssetKey = bootId;
+                            return {
+                                bootId,
+                                source: 'fallback'
+                            };
+                        } finally {
+                            window.clearTimeout(timeoutId);
+                        }
+                    })();
+                    return promise;
+                };
+            })();
         })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
@@ -590,25 +654,29 @@
     </div>
     <script>
         function getRuntimeAssetKey() {
-            const runtimeStorageKey = 'tabminal_runtime_boot_id';
-            try {
-                const bootId = localStorage.getItem(runtimeStorageKey) || '';
-                if (bootId) {
-                    return bootId;
-                }
-            } catch {
-                // Fall through to cold key.
-            }
-            if (window.__tabminalRuntimeAssetKey) {
-                return window.__tabminalRuntimeAssetKey;
+            const assetKey = window.__tabminalRuntimeAssetKey;
+            if (typeof assetKey === 'string' && assetKey) {
+                return assetKey;
             }
             const coldKey = `cold-${Date.now()}`;
             window.__tabminalRuntimeAssetKey = coldKey;
             return coldKey;
         }
 
-        (function() {
-            const runtimeBootId = getRuntimeAssetKey();
+        (async function() {
+            const runtimeVersion = (
+                window.__tabminalResolveRuntimeVersion
+                    ? await window.__tabminalResolveRuntimeVersion()
+                    : getRuntimeAssetKey()
+            );
+            const runtimeBootId = typeof runtimeVersion === 'string'
+                ? runtimeVersion
+                : (runtimeVersion?.bootId || getRuntimeAssetKey());
+            window.__tabminalRuntimeAssetKey = runtimeBootId;
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = `./styles.css?v=${encodeURIComponent(runtimeBootId)}`;
+            document.head.appendChild(link);
             const script = document.createElement('script');
             script.type = 'module';
             script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
@@ -617,16 +685,25 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                const runtimeBootId = getRuntimeAssetKey();
-                navigator.serviceWorker.register(
-                    `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
-                )
-                    .then(registration => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('ServiceWorker registration failed: ', err);
-                    });
+                (async () => {
+                    const runtimeVersion = (
+                        window.__tabminalResolveRuntimeVersion
+                            ? await window.__tabminalResolveRuntimeVersion()
+                            : getRuntimeAssetKey()
+                    );
+                    const runtimeBootId = typeof runtimeVersion === 'string'
+                        ? runtimeVersion
+                        : (runtimeVersion?.bootId || getRuntimeAssetKey());
+                    navigator.serviceWorker.register(
+                        `/sw.js?rt=${encodeURIComponent(runtimeBootId)}`
+                    )
+                        .then(registration => {
+                            console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        })
+                        .catch(err => {
+                            console.log('ServiceWorker registration failed: ', err);
+                        });
+                })();
             });
         }
     </script>

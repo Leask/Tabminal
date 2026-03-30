@@ -1725,6 +1725,43 @@ kbd {
     color: rgba(229, 237, 239, 0.76);
 }
 
+.editor-tab.is-split {
+    border-top-color: rgba(38, 139, 210, 0.55);
+}
+
+.editor-tab .tab-action-btn {
+    margin-left: 8px;
+    color: rgba(229, 237, 239, 0.72);
+    border-radius: 6px;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 20px;
+    opacity: 0.78;
+    cursor: pointer;
+}
+
+.editor-tab:hover .tab-action-btn,
+.editor-tab.active .tab-action-btn {
+    opacity: 1;
+}
+
+.editor-tab .tab-action-btn:hover {
+    background-color: rgba(38, 139, 210, 0.16);
+    color: var(--text-highlight);
+}
+
+.markdown-split-btn,
+.markdown-unsplit-btn {
+    margin-left: auto;
+}
+
+.markdown-unsplit-btn + .close-btn {
+    margin-left: 6px;
+}
+
 .editor-tab .close-btn {
     margin-left: auto;
     font-size: 14px;
@@ -1766,6 +1803,17 @@ kbd {
     overflow: hidden;
     min-width: 0;
     min-height: 0;
+}
+
+.editor-content.markdown-split-active {
+    position: absolute;
+    inset: 36px 0 0;
+    flex: 1 1 0%;
+    height: auto;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
 }
 
 .terminal-tab-host {
@@ -3358,6 +3406,16 @@ kbd {
     min-width: 0;
 }
 
+.editor-content.markdown-split-active > .monaco-container {
+    position: relative;
+    flex: 1 1 0;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid rgba(148, 163, 184, 0.14);
+}
+
 .image-preview-container {
     width: 100%;
     height: 100%;
@@ -3404,6 +3462,15 @@ kbd {
         linear-gradient(180deg, rgba(7, 54, 66, 0.98), rgba(0, 36, 46, 0.98));
 }
 
+.editor-content.markdown-split-active > .markdown-preview-container {
+    position: relative;
+    inset: auto;
+    flex: 1 1 0;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
 .markdown-preview-scroll {
     flex: 1;
     overflow: auto;
@@ -3425,6 +3492,24 @@ kbd {
     border: 1px solid rgba(229, 237, 239, 0.08);
     border-radius: 12px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.editor-content.markdown-split-active
+    > .markdown-preview-container
+    .markdown-preview-scroll {
+    padding: 14px;
+}
+
+.editor-content.markdown-split-active
+    > .markdown-preview-container
+    .markdown-preview-sheet.markdown-body {
+    width: min(100%, 860px);
+    padding: 22px 24px 28px;
+    border-radius: 0;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    box-shadow: none;
 }
 
 .markdown-preview-sheet.markdown-body img {

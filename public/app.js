@@ -484,6 +484,13 @@ function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
     )
         ? markdownSplitPathSource
         : '';
+    const activeWorkspaceTabKey = typeof source.activeWorkspaceTabKey === 'string'
+        ? source.activeWorkspaceTabKey
+        : (
+            typeof base.activeWorkspaceTabKey === 'string'
+                ? base.activeWorkspaceTabKey
+                : ''
+        );
     return {
         updatedAt,
         updatedBy,
@@ -493,7 +500,8 @@ function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
             ? 'tab'
             : 'auto',
         expandedPaths: uniqueStringList(source.expandedPaths),
-        markdownSplitPath
+        markdownSplitPath,
+        activeWorkspaceTabKey
     };
 }
 
@@ -522,6 +530,7 @@ function buildWorkspaceSnapshotForSession(session, overrides = {}) {
         terminalDisplayMode: session.sharedWorkspaceState.terminalDisplayMode,
         expandedPaths: session.sharedWorkspaceState.expandedPaths,
         markdownSplitPath: session.workspaceState.markdownSplitPath,
+        activeWorkspaceTabKey: session.workspaceState.activeTabKey,
         ...overrides
     });
 }
@@ -5083,7 +5092,7 @@ class EditorManager {
             TERMINAL_WORKSPACE_TAB_KEY;
         this.currentSession.needsAttention = false;
         if (!isRestore) {
-            this.currentSession.saveState();
+            this.currentSession.saveState({ touchWorkspace: true });
         }
         this.renderEditorTabs();
         this.currentSession.updateTabUI();
@@ -5122,7 +5131,7 @@ class EditorManager {
             makeMarkdownPreviewWorkspaceTabKey(filePath);
         this.currentSession.workspaceState.lastNonTerminalTabKey =
             makeMarkdownPreviewWorkspaceTabKey(filePath);
-        this.currentSession.saveState();
+        this.currentSession.saveState({ touchWorkspace: true });
         const file = this.getModel(filePath);
 
         this.renderEditorTabs();
@@ -5172,7 +5181,7 @@ class EditorManager {
         this.currentSession.workspaceState.activeTabKey = makeFileWorkspaceTabKey(filePath);
         this.currentSession.workspaceState.lastNonTerminalTabKey =
             makeFileWorkspaceTabKey(filePath);
-        this.currentSession.saveState();
+        this.currentSession.saveState({ touchWorkspace: true });
         const file = this.getModel(filePath);
         
         this.renderEditorTabs();
@@ -5306,7 +5315,7 @@ class EditorManager {
         this.currentSession.workspaceState.lastNonTerminalTabKey = agentTabKey;
         noteRecentAgentTab(this.currentSession, agentTabKey);
         agentTab.needsAttention = false;
-        this.currentSession.saveState();
+        this.currentSession.saveState({ touchWorkspace: true });
         this.renderEditorTabs();
         this.currentSession.updateTabUI();
         this.syncTerminalWorkspacePlacement(agentTabKey);
@@ -7723,13 +7732,31 @@ class Session {
                     : Array.from(this.server.expandedPaths)
             }
         );
-        const initialActiveFilePath = (
-            typeof legacyEditorState.activeFilePath === 'string'
-            && this.sharedWorkspaceState.openFiles.includes(
-                legacyEditorState.activeFilePath
+        const sharedActiveWorkspaceTabKey = typeof (
+            this.sharedWorkspaceState.activeWorkspaceTabKey
+        ) === 'string'
+            ? this.sharedWorkspaceState.activeWorkspaceTabKey
+            : '';
+        const initialActiveWorkspaceTabKey = (
+            isFileWorkspaceTabKey(sharedActiveWorkspaceTabKey)
+            && !this.sharedWorkspaceState.openFiles.includes(
+                workspaceKeyToFilePath(sharedActiveWorkspaceTabKey)
             )
         )
-            ? legacyEditorState.activeFilePath
+            ? ''
+            : sharedActiveWorkspaceTabKey;
+        const preferredActiveFilePath = isFileWorkspaceTabKey(
+            initialActiveWorkspaceTabKey
+        )
+            ? workspaceKeyToFilePath(initialActiveWorkspaceTabKey)
+            : legacyEditorState.activeFilePath;
+        const initialActiveFilePath = (
+            typeof preferredActiveFilePath === 'string'
+            && this.sharedWorkspaceState.openFiles.includes(
+                preferredActiveFilePath
+            )
+        )
+            ? preferredActiveFilePath
             : (this.sharedWorkspaceState.openFiles[0] || null);
 
         this.editorState = {
@@ -7740,15 +7767,15 @@ class Session {
             viewStates: new Map() // Path -> ViewState
         };
         this.workspaceState = {
-            activeTabKey: legacyEditorState.activeWorkspaceTabKey
+            activeTabKey: initialActiveWorkspaceTabKey
                 || (initialActiveFilePath
                     ? makeFileWorkspaceTabKey(initialActiveFilePath)
                     : ''),
-            lastNonTerminalTabKey: legacyEditorState.activeWorkspaceTabKey
+            lastNonTerminalTabKey: initialActiveWorkspaceTabKey
                 && !isTerminalWorkspaceTabKey(
-                    legacyEditorState.activeWorkspaceTabKey
+                    initialActiveWorkspaceTabKey
                 )
-                ? legacyEditorState.activeWorkspaceTabKey
+                ? initialActiveWorkspaceTabKey
                 : (initialActiveFilePath
                     ? makeFileWorkspaceTabKey(initialActiveFilePath)
                     : ''),
@@ -12900,7 +12927,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
             && state.agentTabs.has(activeKey)
         ) {
             noteRecentAgentTab(session, activeKey);
-            session.saveState();
+            session.saveState({ touchWorkspace: true });
         }
     }
 
@@ -12934,7 +12961,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
                 getAgentTabsForSession(preferredSession)[0]?.key || ''
             );
         }
-        preferredSession.saveState();
+        preferredSession.saveState({ touchWorkspace: true });
         if (state.activeSessionKey === preferredSession.key) {
             restoreWorkspaceForSession(preferredSession);
         } else {
@@ -12973,7 +13000,7 @@ async function activateAgentTab(session, agentTab, options = {}) {
     }
     session.workspaceState.activeTabKey = agentTab.key;
     noteRecentAgentTab(session, agentTab.key);
-    session.saveState();
+    session.saveState({ touchWorkspace: true });
     if (state.activeSessionKey === session.key) {
         restoreWorkspaceForSession(session);
         requestAnimationFrame(() => {
@@ -14871,19 +14898,19 @@ window.addEventListener('tabminal:layout-modechange', () => {
         && terminalEl.contains(activeElement)
     );
 
-    if (isForcedTerminalWorkspaceMode()) {
-        if (terminalHasFocus) {
-            session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
-            session.saveState();
+        if (isForcedTerminalWorkspaceMode()) {
+            if (terminalHasFocus) {
+                session.workspaceState.activeTabKey = TERMINAL_WORKSPACE_TAB_KEY;
+                session.saveState({ touchWorkspace: true });
+            }
+        } else if (
+            !editorManager.isTerminalTabPinned(session)
+            && isTerminalWorkspaceTabKey(session.workspaceState?.activeTabKey || '')
+        ) {
+            session.workspaceState.activeTabKey =
+                editorManager.getPreferredNonTerminalWorkspaceTabKey(session);
+            session.saveState({ touchWorkspace: true });
         }
-    } else if (
-        !editorManager.isTerminalTabPinned(session)
-        && isTerminalWorkspaceTabKey(session.workspaceState?.activeTabKey || '')
-    ) {
-        session.workspaceState.activeTabKey =
-            editorManager.getPreferredNonTerminalWorkspaceTabKey(session);
-        session.saveState();
-    }
 
     editorManager.switchTo(session);
     editorManager.updateEditorPaneVisibility();

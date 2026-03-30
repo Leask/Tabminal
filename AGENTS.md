@@ -135,7 +135,12 @@ Relevant code:
 
 ### 2.9 Runtime version and PWA coherence
 
+- Backend exposes unauthenticated `GET /api/version` for bootstrap versioning.
 - Backend heartbeat returns runtime boot id.
+- `index.html` must fetch `/api/version` before choosing app-shell asset
+  versions.
+- Version bootstrap currently uses a `3s` timeout; timeout/error may fall back
+  to the last stored boot id, then to a cold key.
 - Frontend appends `?rt=<bootId>` and reloads on runtime change.
 - `index.html` versions `styles.css` and `app.js` with runtime key.
 - Service worker is versioned the same way.
