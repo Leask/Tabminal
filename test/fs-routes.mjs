@@ -104,6 +104,26 @@ describe('FS rename target validation', () => {
 });
 
 describe('FS text snapshot versioning', () => {
+    it('treats missing files as a 404 file-not-found error', async () => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        try {
+            const filePath = path.join(tempDir, 'missing.txt');
+
+            await assert.rejects(
+                readTextFileSnapshot(filePath),
+                (error) => (
+                    error?.status === 404
+                    && error?.code === 'file-not-found'
+                    && error?.message === 'File not found'
+                )
+            );
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     it('returns a stable content hash version', async () => {
         const tempDir = await fs.mkdtemp(
             path.join(os.tmpdir(), 'tabminal-fs-routes-')

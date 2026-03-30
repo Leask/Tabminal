@@ -57,6 +57,31 @@ function createFsRouteError(message, status) {
     return error;
 }
 
+function normalizeFsRouteError(error, fallbackMessage = 'File system error') {
+    if (error?.status) {
+        return error;
+    }
+
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+        const notFoundError = createFsRouteError('File not found', 404);
+        notFoundError.code = 'file-not-found';
+        return notFoundError;
+    }
+
+    if (error?.code === 'EISDIR') {
+        return createFsRouteError('Not a file', 400);
+    }
+
+    const normalizedError = createFsRouteError(
+        error?.message || fallbackMessage,
+        500
+    );
+    if (error?.code) {
+        normalizedError.code = error.code;
+    }
+    return normalizedError;
+}
+
 export function buildTextFileVersion(buffer) {
     return crypto
         .createHash('sha256')
@@ -75,33 +100,37 @@ async function canWriteExistingFile(targetPath) {
 }
 
 export async function readTextFileSnapshot(fullPath) {
-    const stats = await fs.stat(fullPath);
+    try {
+        const stats = await fs.stat(fullPath);
 
-    if (!stats.isFile()) {
-        throw createFsRouteError('Not a file', 400);
+        if (!stats.isFile()) {
+            throw createFsRouteError('Not a file', 400);
+        }
+
+        if (stats.size > 1024 * 1024 * 5) {
+            throw createFsRouteError('File too large', 400);
+        }
+
+        const contentBuffer = await fs.readFile(fullPath);
+        if (!isSupportedTextBuffer(contentBuffer)) {
+            const error = createFsRouteError('Unsupported file type', 415);
+            error.code = 'unsupported-file-type';
+            throw error;
+        }
+
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const content = decoder.decode(contentBuffer);
+
+        return {
+            content,
+            readonly: !(await canWriteExistingFile(fullPath)),
+            version: buildTextFileVersion(contentBuffer),
+            size: stats.size,
+            mtimeMs: stats.mtimeMs
+        };
+    } catch (error) {
+        throw normalizeFsRouteError(error, 'Unable to read file');
     }
-
-    if (stats.size > 1024 * 1024 * 5) {
-        throw createFsRouteError('File too large', 400);
-    }
-
-    const contentBuffer = await fs.readFile(fullPath);
-    if (!isSupportedTextBuffer(contentBuffer)) {
-        const error = createFsRouteError('Unsupported file type', 415);
-        error.code = 'unsupported-file-type';
-        throw error;
-    }
-
-    const decoder = new TextDecoder('utf-8', { fatal: true });
-    const content = decoder.decode(contentBuffer);
-
-    return {
-        content,
-        readonly: !(await canWriteExistingFile(fullPath)),
-        version: buildTextFileVersion(contentBuffer),
-        size: stats.size,
-        mtimeMs: stats.mtimeMs
-    };
 }
 
 export async function writeTextFileSnapshot(
@@ -408,7 +437,9 @@ export const setupFsRoutes = (router) => {
             const fullPath = resolvePath(baseDir, filePath);
             ctx.body = await readTextFileSnapshot(fullPath);
         } catch (err) {
-            console.error('FS Read Error:', err);
+            if ((err?.status || 500) >= 500) {
+                console.error('FS Read Error:', err);
+            }
             ctx.status = err?.status || 500;
             ctx.body = {
                 error: err.message,
@@ -435,7 +466,9 @@ export const setupFsRoutes = (router) => {
                 mtimeMs: snapshot.mtimeMs
             };
         } catch (err) {
-            console.error('FS Info Error:', err);
+            if ((err?.status || 500) >= 500) {
+                console.error('FS Info Error:', err);
+            }
             ctx.status = err?.status || 500;
             ctx.body = {
                 error: err.message,

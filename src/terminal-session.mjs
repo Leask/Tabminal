@@ -167,6 +167,22 @@ function selectFallbackQueryResponder(clients, pendingClients) {
     return null;
 }
 
+function isIgnorablePtyResizeError(error) {
+    if (!error) {
+        return false;
+    }
+
+    if (error.code === 'EBADF') {
+        return true;
+    }
+
+    const message = String(error.message || '');
+    return (
+        /ioctl\(2\) failed/i.test(message)
+        || /bad file descriptor/i.test(message)
+    );
+}
+
 export class TerminalSession {
     constructor(pty, options = {}) {
         this.pty = pty;
@@ -488,7 +504,14 @@ export class TerminalSession {
 
     resize(cols, rows) {
         if (this.closed) return;
-        this.pty.resize(cols, rows);
+        try {
+            this.pty.resize(cols, rows);
+        } catch (error) {
+            if (isIgnorablePtyResizeError(error)) {
+                return;
+            }
+            throw error;
+        }
         this._queueSnapshotMutation(() => {
             this.snapshotTerminal.resize(cols, rows);
         });

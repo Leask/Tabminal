@@ -175,6 +175,19 @@ describe('TerminalSession', () => {
         assert.deepStrictEqual(pty.resize.mock.calls[0].arguments, [200, 40]);
     });
 
+    it('ignores stale pty resize failures instead of throwing', () => {
+        pty.resize = mock.fn(() => {
+            const error = new Error('ioctl(2) failed');
+            error.code = 'EBADF';
+            throw error;
+        });
+        session = new TerminalSession(pty);
+
+        assert.doesNotThrow(() => {
+            session.resize(120, 40);
+        });
+    });
+
     it('stops accepting input after the pty exits', async () => {
         session = new TerminalSession(pty);
         const client = new MockSocket();

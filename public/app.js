@@ -1032,6 +1032,11 @@ class EditorManager {
         this.fileConflictDialogKey = '';
         this.suppressFileWriteCapture = false;
         this.agentTranscriptResizeObserver = null;
+        this.treeDirectoryFetches = new Map();
+        this.treeRefreshInFlight = false;
+        this.treeRefreshRerunRequested = false;
+        this.treeRefreshBatchQueued = false;
+        this.pendingForcedTreeRefreshSessions = new Set();
 
         this.initTerminalControls();
         this.initResizer();
@@ -3071,24 +3076,7 @@ class EditorManager {
     }
 
     refreshSessionTree(session) {
-        if (!session || !session.fileTreeElement) return;
-        session.fileTreeRenderToken = (session.fileTreeRenderToken || 0) + 1;
-        const renderToken = session.fileTreeRenderToken;
-        const scrollTop = session.fileTreeElement.scrollTop;
-        void this.renderTree(
-            session.cwd,
-            session.fileTreeElement,
-            session,
-            renderToken
-        ).finally(() => {
-            if (
-                session.fileTreeElement
-                && session.fileTreeRenderToken === renderToken
-            ) {
-                session.fileTreeElement.scrollTop = scrollTop;
-            }
-        });
-        this.updateTreeAutoRefresh();
+        this.requestSessionTreeRefresh(session);
     }
 
     isSessionTreeVisible(session) {
@@ -3100,28 +3088,185 @@ class EditorManager {
     }
 
     refreshVisibleSessionTrees() {
-        for (const session of state.sessions.values()) {
-            if (this.canRefreshSessionTree(session)) {
-                this.requestSessionTreeRefresh(session);
-            }
-        }
+        this.requestVisibleTreeRefresh();
     }
 
     requestSessionTreeRefresh(session, { force = false } = {}) {
+        if (!session?.fileTreeElement) {
+            this.updateTreeAutoRefresh();
+            return;
+        }
         if (!force && !this.canRefreshSessionTree(session)) {
             this.updateTreeAutoRefresh();
             return;
         }
-        if (session.fileTreeRefreshQueued) return;
-        session.fileTreeRefreshQueued = true;
+        if (force) {
+            this.pendingForcedTreeRefreshSessions.add(session.key);
+        }
+        this.scheduleTreeRefreshBatch();
+    }
+
+    requestVisibleTreeRefresh() {
+        this.scheduleTreeRefreshBatch();
+    }
+
+    scheduleTreeRefreshBatch() {
+        if (this.treeRefreshBatchQueued) {
+            return;
+        }
+        this.treeRefreshBatchQueued = true;
         requestAnimationFrame(() => {
-            session.fileTreeRefreshQueued = false;
-            if (force || this.canRefreshSessionTree(session)) {
-                this.refreshSessionTree(session);
-            } else {
-                this.updateTreeAutoRefresh();
-            }
+            this.treeRefreshBatchQueued = false;
+            void this.flushTreeRefreshBatch();
         });
+    }
+
+    getTreeRefreshRequestKey(server, dirPath) {
+        return `${server?.id || 'main'}:${dirPath}`;
+    }
+
+    getSessionTreeRefreshPaths(session) {
+        if (!session?.cwd) {
+            return [];
+        }
+        return uniqueStringList([
+            session.cwd,
+            ...(session.sharedWorkspaceState?.expandedPaths || [])
+        ]);
+    }
+
+    collectTreeRefreshSessions() {
+        const sessions = [];
+        for (const session of state.sessions.values()) {
+            if (this.canRefreshSessionTree(session)) {
+                sessions.push(session);
+                continue;
+            }
+            if (
+                this.pendingForcedTreeRefreshSessions.has(session.key)
+                && this.isSessionTreeVisible(session)
+            ) {
+                sessions.push(session);
+            }
+        }
+        return sessions;
+    }
+
+    async fetchTreeDirectoryListing(server, dirPath) {
+        const key = this.getTreeRefreshRequestKey(server, dirPath);
+        const existing = this.treeDirectoryFetches.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const request = (async () => {
+            const response = await server.fetch(
+                `/api/fs/list?path=${encodeURIComponent(dirPath)}`
+            );
+            if (!response.ok) {
+                throw new Error(`Failed to list path: ${dirPath}`);
+            }
+            const payload = await response.json();
+            return {
+                files: Array.isArray(payload)
+                    ? payload
+                    : Array.isArray(payload?.items)
+                        ? payload.items
+                        : [],
+                creatable: Array.isArray(payload)
+                    ? false
+                    : !!payload?.creatable
+            };
+        })().finally(() => {
+            this.treeDirectoryFetches.delete(key);
+        });
+
+        this.treeDirectoryFetches.set(key, request);
+        return request;
+    }
+
+    async flushTreeRefreshBatch() {
+        if (this.treeRefreshInFlight) {
+            this.treeRefreshRerunRequested = true;
+            return;
+        }
+
+        const sessions = this.collectTreeRefreshSessions();
+        this.pendingForcedTreeRefreshSessions.clear();
+        if (sessions.length === 0) {
+            this.updateTreeAutoRefresh();
+            return;
+        }
+
+        this.treeRefreshInFlight = true;
+        const renderPlans = sessions.map((session) => {
+            session.fileTreeRenderToken = (session.fileTreeRenderToken || 0) + 1;
+            return {
+                session,
+                renderToken: session.fileTreeRenderToken,
+                scrollTop: session.fileTreeElement?.scrollTop || 0
+            };
+        });
+
+        const requestEntries = new Map();
+        for (const { session } of renderPlans) {
+            for (const dirPath of this.getSessionTreeRefreshPaths(session)) {
+                requestEntries.set(
+                    this.getTreeRefreshRequestKey(session.server, dirPath),
+                    {
+                        server: session.server,
+                        dirPath
+                    }
+                );
+            }
+        }
+
+        const directorySnapshots = new Map();
+        await Promise.all(
+            Array.from(requestEntries.entries()).map(
+                async ([key, entry]) => {
+                    try {
+                        directorySnapshots.set(
+                            key,
+                            await this.fetchTreeDirectoryListing(
+                                entry.server,
+                                entry.dirPath
+                            )
+                        );
+                    } catch (error) {
+                        console.error(
+                            'Failed to fetch tree directory:',
+                            entry.dirPath,
+                            error
+                        );
+                    }
+                }
+            )
+        );
+
+        for (const plan of renderPlans) {
+            const { session, renderToken, scrollTop } = plan;
+            if (!session.fileTreeElement) {
+                continue;
+            }
+            this.renderTreeFromSnapshots(
+                session.cwd,
+                session.fileTreeElement,
+                session,
+                directorySnapshots,
+                renderToken
+            );
+            if (session.fileTreeRenderToken === renderToken) {
+                session.fileTreeElement.scrollTop = scrollTop;
+            }
+        }
+
+        this.treeRefreshInFlight = false;
+        this.updateTreeAutoRefresh();
+        if (this.treeRefreshRerunRequested) {
+            this.treeRefreshRerunRequested = false;
+            this.scheduleTreeRefreshBatch();
+        }
     }
 
     updateTreeAutoRefresh() {
@@ -3131,7 +3276,7 @@ class EditorManager {
                 (session) => this.canRefreshSessionTree(session)
             )
         );
-        if (shouldRun && !this.treeRefreshTimer) {
+            if (shouldRun && !this.treeRefreshTimer) {
             this.treeRefreshTimer = window.setInterval(() => {
                 if (document.visibilityState !== 'visible') {
                     this.updateTreeAutoRefresh();
@@ -3144,7 +3289,7 @@ class EditorManager {
                     this.updateTreeAutoRefresh();
                     return;
                 }
-                this.refreshVisibleSessionTrees();
+                this.requestVisibleTreeRefresh();
             }, FILE_TREE_REFRESH_INTERVAL_MS);
             return;
         }
@@ -3585,7 +3730,7 @@ class EditorManager {
         list.appendChild(row);
     }
 
-    updateTreeItem(li, file, session, renderToken) {
+    updateTreeItem(li, file, session) {
         li.dataset.path = file.path;
         li.dataset.isDirectory = file.isDirectory ? '1' : '0';
         li.dataset.renameable = file.renameable ? '1' : '0';
@@ -3803,7 +3948,7 @@ class EditorManager {
                 });
 
                 icon.innerHTML = this.getIcon(file.name, true, true);
-                await this.renderTree(file.path, li, session, renderToken);
+                this.requestSessionTreeRefresh(session);
                 this.updateTreeAutoRefresh();
                 session.fileTreeElement?.focus({ preventScroll: true });
                 return;
@@ -3847,7 +3992,7 @@ class EditorManager {
         }
     }
 
-    reconcileTreeList(list, dirPath, files, creatable, session, renderToken) {
+    reconcileTreeList(list, dirPath, files, creatable, session) {
         const existingItems = new Map();
         Array.from(list.children).forEach((child) => {
             if (child.tagName === 'LI' && child.dataset.path) {
@@ -3863,7 +4008,7 @@ class EditorManager {
             } else {
                 existingItems.delete(file.path);
             }
-            this.updateTreeItem(li, file, session, renderToken);
+            this.updateTreeItem(li, file, session);
             orderedItems.push(li);
         }
 
@@ -4644,54 +4789,53 @@ class EditorManager {
         this.schedulePdfPreviewRelayout();
     }
 
-    async renderTree(
+    renderTreeFromSnapshots(
         dirPath,
         container,
         session,
+        directorySnapshots,
         renderToken = session?.fileTreeRenderToken || 0
     ) {
-        try {
-            const res = await session.server.fetch(
-                `/api/fs/list?path=${encodeURIComponent(dirPath)}`
-            );
-            if (!res.ok) return;
-            const payload = await res.json();
-            const files = Array.isArray(payload)
-                ? payload
-                : Array.isArray(payload?.items)
-                    ? payload.items
-                    : [];
-            const creatable = Array.isArray(payload)
-                ? false
-                : !!payload?.creatable;
-            if ((session.fileTreeRenderToken || 0) !== renderToken) return;
+        const listing = directorySnapshots.get(
+            this.getTreeRefreshRequestKey(session.server, dirPath)
+        );
+        if (!listing) {
+            return;
+        }
+        if ((session.fileTreeRenderToken || 0) !== renderToken) {
+            return;
+        }
 
-            const list = this.ensureTreeList(container);
-            this.reconcileTreeList(
-                list,
-                dirPath,
-                files,
-                creatable,
-                session,
-                renderToken
-            );
-            if ((session.fileTreeRenderToken || 0) !== renderToken) return;
+        const list = this.ensureTreeList(container);
+        this.reconcileTreeList(
+            list,
+            dirPath,
+            listing.files,
+            listing.creatable,
+            session
+        );
+        if ((session.fileTreeRenderToken || 0) !== renderToken) {
+            return;
+        }
 
-            for (const file of files) {
-                if (
-                    file.isDirectory
-                    && this.getTreeItemExpanded(file.path, session)
-                ) {
-                    const item = Array.from(list.children).find(
-                        (child) => child.dataset.path === file.path
+        for (const file of listing.files) {
+            if (
+                file.isDirectory
+                && this.getTreeItemExpanded(file.path, session)
+            ) {
+                const item = Array.from(list.children).find(
+                    (child) => child.dataset.path === file.path
+                );
+                if (item) {
+                    this.renderTreeFromSnapshots(
+                        file.path,
+                        item,
+                        session,
+                        directorySnapshots,
+                        renderToken
                     );
-                    if (item) {
-                        void this.renderTree(file.path, item, session, renderToken);
-                    }
                 }
             }
-        } catch (err) {
-            console.error('Failed to render tree:', err);
         }
     }
 
