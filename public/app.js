@@ -8699,6 +8699,25 @@ function getActiveServer() {
     return getActiveSession()?.server || getMainServer();
 }
 
+function getDocumentTitle() {
+    const server = getActiveServer();
+    if (!server) {
+        return 'Tabminal';
+    }
+    const host = String(getDisplayHost(server) || '').trim();
+    if (!host || host.toLowerCase() === 'unknown') {
+        return 'Tabminal';
+    }
+    return `Tabminal: ${host}`;
+}
+
+function updateDocumentTitle() {
+    const nextTitle = getDocumentTitle();
+    if (document.title !== nextTitle) {
+        document.title = nextTitle;
+    }
+}
+
 function getSessionsForServer(serverId) {
     return Array.from(state.sessions.values()).filter(
         session => session.serverId === serverId
@@ -13066,6 +13085,7 @@ function removeSession(key) {
 
 // #region UI Logic
 function renderTabs() {
+    updateDocumentTitle();
     if (!tabListEl) return;
 
     const newTabItem = document.getElementById('new-tab-item');
@@ -13613,6 +13633,7 @@ function moveConfirmModalFocus(delta) {
 }
 
 function renderServerControls() {
+    updateDocumentTitle();
     if (!serverControlsEl) return;
     serverControlsEl.innerHTML = '';
 
