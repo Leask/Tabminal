@@ -161,6 +161,8 @@ const DELETE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke=
 const NEW_FOLDER_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4l2 2h6a2.5 2.5 0 0 1 2.5 2.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z"></path><path d="M12 10.5v5"></path><path d="M9.5 13h5"></path></svg>';
 const NEW_FILE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4V20.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z"></path><path d="M14 3.5V8h4"></path><path d="M12 11v6"></path><path d="M9 14h6"></path></svg>';
 const MARKDOWN_PREVIEW_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5h18"></path><path d="M3 9.5h18"></path><path d="M5 5.5V18a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V5.5"></path><path d="M9 13h6"></path><path d="M9 16h4"></path></svg>';
+const MARKDOWN_SPLIT_ENABLE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M12 5v14"></path></svg>';
+const MARKDOWN_SPLIT_DISABLE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M12 5v14"></path><path d="m9.25 8.5 5.5 7"></path></svg>';
 const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
     + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
     + 'monospace';
@@ -356,6 +358,10 @@ function isCompactTerminalTabsMode() {
     return !!window.__tabminalCompactTerminalTabsMode;
 }
 
+function canUseMarkdownSplitTabsMode() {
+    return !isForcedTerminalWorkspaceMode();
+}
+
 function isForcedTerminalWorkspaceMode() {
     return isCompactWorkspaceMode() || isCompactTerminalTabsMode();
 }
@@ -458,15 +464,36 @@ function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
                 ? base.updatedBy
                 : ''
         );
+    const openFiles = uniqueStringList(source.openFiles);
+    const fallbackOpenFiles = uniqueStringList(base.openFiles);
+    const markdownSplitPathSource =
+        typeof source.markdownSplitPath === 'string'
+            ? source.markdownSplitPath
+            : (
+                typeof base.markdownSplitPath === 'string'
+                    ? base.markdownSplitPath
+                    : ''
+            );
+    const markdownSplitPath = (
+        markdownSplitPathSource
+        && isSupportedMarkdownPath(markdownSplitPathSource)
+        && (
+            openFiles.includes(markdownSplitPathSource)
+            || fallbackOpenFiles.includes(markdownSplitPathSource)
+        )
+    )
+        ? markdownSplitPathSource
+        : '';
     return {
         updatedAt,
         updatedBy,
         isVisible: !!source.isVisible,
-        openFiles: uniqueStringList(source.openFiles),
+        openFiles,
         terminalDisplayMode: source.terminalDisplayMode === 'tab'
             ? 'tab'
             : 'auto',
-        expandedPaths: uniqueStringList(source.expandedPaths)
+        expandedPaths: uniqueStringList(source.expandedPaths),
+        markdownSplitPath
     };
 }
 
@@ -494,6 +521,7 @@ function buildWorkspaceSnapshotForSession(session, overrides = {}) {
         openFiles: session.editorState.openFiles,
         terminalDisplayMode: session.sharedWorkspaceState.terminalDisplayMode,
         expandedPaths: session.sharedWorkspaceState.expandedPaths,
+        markdownSplitPath: session.workspaceState.markdownSplitPath,
         ...overrides
     });
 }
@@ -1073,6 +1101,131 @@ class EditorManager {
                 String(link.dataset.markdownLocalHash || '')
             );
         });
+    }
+
+    getMarkdownSplitPath(session = this.currentSession) {
+        if (!session?.workspaceState) {
+            return '';
+        }
+        return typeof session.workspaceState.markdownSplitPath === 'string'
+            ? session.workspaceState.markdownSplitPath
+            : '';
+    }
+
+    isMarkdownSplitViewEnabled(
+        session = this.currentSession,
+        filePath = session?.editorState?.activeFilePath || ''
+    ) {
+        return !!(
+            session
+            && canUseMarkdownSplitTabsMode()
+            && filePath
+            && this.getMarkdownSplitPath(session) === filePath
+            && isSupportedMarkdownPath(filePath)
+        );
+    }
+
+    setMarkdownSplitView(
+        filePath,
+        enabled,
+        session = this.currentSession
+    ) {
+        if (!session?.workspaceState || !isSupportedMarkdownPath(filePath)) {
+            return;
+        }
+        const nextMarkdownSplitPath = (
+            enabled
+            && canUseMarkdownSplitTabsMode()
+        )
+            ? filePath
+            : '';
+        if (session.workspaceState.markdownSplitPath === nextMarkdownSplitPath) {
+            return;
+        }
+        session.workspaceState.markdownSplitPath = nextMarkdownSplitPath;
+        session.saveState({ touchWorkspace: true });
+        if (session.key !== this.currentSession?.key) {
+            return;
+        }
+        this.renderEditorTabs();
+        const activeKey = this.getActiveWorkspaceTabKey(session);
+        if (
+            activeKey === makeFileWorkspaceTabKey(filePath)
+            || activeKey === makeMarkdownPreviewWorkspaceTabKey(filePath)
+        ) {
+            this.activateWorkspaceTab(activeKey, true);
+        }
+        this.layout();
+    }
+
+    syncMarkdownSplitSupport(session = this.currentSession) {
+        if (!session?.workspaceState) {
+            return;
+        }
+        const markdownSplitPath = this.getMarkdownSplitPath(session);
+        if (
+            markdownSplitPath
+            && (
+                !isSupportedMarkdownPath(markdownSplitPath)
+                || !session.editorState.openFiles.includes(markdownSplitPath)
+            )
+        ) {
+            session.workspaceState.markdownSplitPath = '';
+        }
+    }
+
+    showMarkdownSplitView(filePath, options = {}) {
+        const session = options.session || this.currentSession;
+        const focusEditor = options.focusEditor !== false;
+        if (!session || !filePath) {
+            return false;
+        }
+        const file = this.getModel(filePath, session);
+        if (!file || file.type !== 'text') {
+            return false;
+        }
+        if (!this.editor || !this.monacoContainer || !this.contentContainer) {
+            return false;
+        }
+
+        this.contentContainer.classList.add('markdown-split-active');
+        this.agentContainer.style.display = 'none';
+        this.imagePreviewContainer.style.display = 'none';
+        this.hidePdfPreview();
+        this.monacoContainer.style.display = 'block';
+        this.markdownPreviewContainer.style.display = 'flex';
+        this.emptyState.style.display = 'none';
+
+        if (!file.model && file.content !== null && this.monacoInstance) {
+            file.model = this.monacoInstance.editor.createModel(
+                file.content,
+                undefined,
+                this.monacoInstance.Uri.file(filePath)
+            );
+        }
+
+        if (file.model) {
+            this.editor.setModel(file.model);
+            this.editor.updateOptions({ readOnly: !!file.readonly });
+            const savedViewState = session.editorState.viewStates.get(filePath);
+            if (savedViewState) {
+                this.editor.restoreViewState(savedViewState);
+            }
+        }
+
+        void this.renderMarkdownPreview(filePath, {
+            session,
+            show: true
+        });
+
+        requestAnimationFrame(() => {
+            this.layout();
+            if (focusEditor && this.editor) {
+                this.editor.focus();
+            }
+        });
+
+        return true;
     }
 
     updateTerminalLayoutButton() {
@@ -2461,6 +2614,17 @@ class EditorManager {
             visualChanged = true;
         }
 
+        const nextMarkdownSplitPath = this.remapTreePath(
+            this.getMarkdownSplitPath(session),
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextMarkdownSplitPath !== this.getMarkdownSplitPath(session)) {
+            session.workspaceState.markdownSplitPath = nextMarkdownSplitPath;
+            visualChanged = true;
+        }
+
         const nextActiveTabKey = this.remapWorkspaceTabKey(
             session.workspaceState.activeTabKey,
             oldPath,
@@ -2586,6 +2750,17 @@ class EditorManager {
             )
         ) {
             session.editorState.activeFilePath = nextOpenFiles[0] || null;
+            visualChanged = true;
+        }
+
+        if (
+            this.pathMatchesTarget(
+                this.getMarkdownSplitPath(session),
+                targetPath,
+                isDirectory
+            )
+        ) {
+            session.workspaceState.markdownSplitPath = '';
             visualChanged = true;
         }
 
@@ -3791,6 +3966,9 @@ class EditorManager {
     }
 
     hideMarkdownPreview() {
+        if (this.contentContainer) {
+            this.contentContainer.classList.remove('markdown-split-active');
+        }
         if (this.markdownPreviewContainer) {
             this.markdownPreviewContainer.style.display = 'none';
         }
@@ -3903,8 +4081,10 @@ class EditorManager {
             ) {
                 return;
             }
-            const shouldShow = isMarkdownPreviewWorkspaceTabKey(
-                this.getActiveWorkspaceTabKey(session)
+            const activeKey = this.getActiveWorkspaceTabKey(session);
+            const shouldShow = (
+                isMarkdownPreviewWorkspaceTabKey(activeKey)
+                || this.isMarkdownSplitViewEnabled(session, filePath)
             );
             void this.renderMarkdownPreview(filePath, {
                 session,
@@ -4400,6 +4580,7 @@ class EditorManager {
         }
 
         this.currentSession = session;
+        this.syncMarkdownSplitSupport(session);
         if (!session) {
             this.pane.style.display = 'none';
             this.resizer.style.display = 'none';
@@ -4437,10 +4618,13 @@ class EditorManager {
     layout() {
         // console.log('[Editor] layout called');
         if (!this.currentSession) return;
+        this.syncMarkdownSplitSupport(this.currentSession);
         this.currentSession.fitMainTerminalIfVisible();
         if (this.editor && this.pane.style.display !== 'none') {
-            const width = this.pane.clientWidth;
-            const height = this.pane.clientHeight - 35; // Subtract fixed safety margin
+            const width = this.monacoContainer?.clientWidth
+                || this.pane.clientWidth;
+            const height = this.monacoContainer?.clientHeight
+                || (this.pane.clientHeight - 35);
             
             if (width > 0 && height > 0) {
                 this.editor.layout({ width, height });
@@ -4610,6 +4794,9 @@ class EditorManager {
     closeFile(filePath) {
         if (!this.currentSession) return;
         const state = this.currentSession.editorState;
+        if (this.getMarkdownSplitPath(this.currentSession) === filePath) {
+            this.currentSession.workspaceState.markdownSplitPath = '';
+        }
 
         const index = state.openFiles.indexOf(filePath);
         let touchedWorkspace = false;
@@ -4648,8 +4835,10 @@ class EditorManager {
 
     renderEditorTabs() {
         if (!this.currentSession) return;
+        this.syncMarkdownSplitSupport(this.currentSession);
         const state = this.currentSession.editorState;
         const activeWorkspaceTabKey = this.getActiveWorkspaceTabKey();
+        const splitPath = this.getMarkdownSplitPath(this.currentSession);
 
         this.tabsContainer.innerHTML = '';
         if (this.hasCompactWorkspaceTabs(this.currentSession)) {
@@ -4678,13 +4867,27 @@ class EditorManager {
         }
 
         for (const path of state.openFiles) {
+            const splitEnabled = this.isMarkdownSplitViewEnabled(
+                this.currentSession,
+                path
+            );
             const tab = document.createElement('div');
             tab.className = 'editor-tab';
-            if (makeFileWorkspaceTabKey(path) === activeWorkspaceTabKey) {
+            if (
+                makeFileWorkspaceTabKey(path) === activeWorkspaceTabKey
+                || (
+                    splitEnabled
+                    && makeMarkdownPreviewWorkspaceTabKey(path)
+                        === activeWorkspaceTabKey
+                )
+            ) {
                 tab.classList.add('active');
             }
             if (isSupportedMarkdownPath(path)) {
                 tab.classList.add('bound-tab', 'bound-tab-primary');
+            }
+            if (splitEnabled) {
+                tab.classList.add('is-split');
             }
             
             const fileModel = this.getModel(path);
@@ -4707,18 +4910,44 @@ class EditorManager {
                 e.stopPropagation();
                 this.closeFile(path);
             };
+            let unsplitBtn = null;
+
+            if (splitEnabled) {
+                unsplitBtn = document.createElement('span');
+                unsplitBtn.className = 'tab-action-btn markdown-unsplit-btn';
+                unsplitBtn.innerHTML = MARKDOWN_SPLIT_DISABLE_ICON_SVG;
+                unsplitBtn.title = 'Restore tabbed markdown view';
+                unsplitBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.setMarkdownSplitView(
+                        path,
+                        false,
+                        this.currentSession
+                    );
+                    this.activateFileTab(path, false, {
+                        focusEditor: false
+                    });
+                };
+                tab.appendChild(unsplitBtn);
+            }
             
             tab.onclick = () => this.activateFileTab(path);
             bindSingleTapActivation(tab, () => this.activateFileTab(path), {
-                ignoreSelector: '.close-btn'
+                ignoreSelector: '.close-btn, .tab-action-btn'
             });
             
             tab.appendChild(icon);
             tab.appendChild(span);
+            if (unsplitBtn) {
+                tab.appendChild(unsplitBtn);
+            }
             tab.appendChild(closeBtn);
             this.tabsContainer.appendChild(tab);
 
-            if (isSupportedMarkdownPath(path)) {
+            if (
+                isSupportedMarkdownPath(path)
+                && !splitEnabled
+            ) {
                 const previewTab = document.createElement('div');
                 previewTab.className = 'editor-tab markdown-preview-tab bound-tab bound-tab-secondary';
                 if (
@@ -4734,15 +4963,41 @@ class EditorManager {
 
                 const previewLabel = document.createElement('span');
                 previewLabel.textContent = 'Preview';
+                let splitBtn = null;
+
+                if (
+                    path !== splitPath
+                    && canUseMarkdownSplitTabsMode()
+                ) {
+                    splitBtn = document.createElement('span');
+                    splitBtn.className = 'tab-action-btn markdown-split-btn';
+                    splitBtn.innerHTML = MARKDOWN_SPLIT_ENABLE_ICON_SVG;
+                    splitBtn.title = 'Show markdown editor and preview side by side';
+                    splitBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        this.setMarkdownSplitView(
+                            path,
+                            true,
+                            this.currentSession
+                        );
+                    };
+                    previewTab.appendChild(splitBtn);
+                }
 
                 previewTab.onclick = () => this.activateMarkdownPreviewTab(path);
                 bindSingleTapActivation(
                     previewTab,
-                    () => this.activateMarkdownPreviewTab(path)
+                    () => this.activateMarkdownPreviewTab(path),
+                    {
+                        ignoreSelector: '.tab-action-btn'
+                    }
                 );
 
                 previewTab.appendChild(previewIcon);
                 previewTab.appendChild(previewLabel);
+                if (splitBtn) {
+                    previewTab.appendChild(splitBtn);
+                }
                 this.tabsContainer.appendChild(previewTab);
             }
         }
@@ -4885,11 +5140,19 @@ class EditorManager {
         this.agentContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.hidePdfPreview();
-        this.monacoContainer.style.display = 'none';
-        this.markdownPreviewContainer.style.display = 'flex';
-        void this.renderMarkdownPreview(filePath, {
-            show: true
-        });
+        if (this.isMarkdownSplitViewEnabled(this.currentSession, filePath)) {
+            this.showMarkdownSplitView(filePath, {
+                session: this.currentSession,
+                focusEditor: false
+            });
+        } else {
+            this.contentContainer.classList.remove('markdown-split-active');
+            this.monacoContainer.style.display = 'none';
+            this.markdownPreviewContainer.style.display = 'flex';
+            void this.renderMarkdownPreview(filePath, {
+                show: true
+            });
+        }
     }
 
     activateFileTab(filePath, isRestore = false, options = {}) {
@@ -4945,6 +5208,17 @@ class EditorManager {
             this.pdfPreviewContainer.style.display = 'flex';
             void this.renderPdfPreview(filePath);
         } else if (isSupportedMarkdownPath(filePath)) {
+            if (this.isMarkdownSplitViewEnabled(this.currentSession, filePath)) {
+                this.showMarkdownSplitView(filePath, {
+                    session: this.currentSession,
+                    focusEditor
+                });
+                this.scheduleMarkdownPreviewRender(
+                    filePath,
+                    this.currentSession
+                );
+                return;
+            }
             this.agentContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'none';
             this.hidePdfPreview();
@@ -7484,7 +7758,8 @@ class Session {
                 ? legacyEditorState.recentAgentTabKeys.filter(
                     (key) => typeof key === 'string' && key.length > 0
                 )
-                : []
+                : [],
+            markdownSplitPath: this.sharedWorkspaceState.markdownSplitPath || ''
         };
         
         this.layoutState = {
@@ -7621,6 +7896,7 @@ class Session {
         this.sharedWorkspaceState = normalized;
         this.editorState.isVisible = normalized.isVisible;
         this.editorState.openFiles = [...normalized.openFiles];
+        this.workspaceState.markdownSplitPath = normalized.markdownSplitPath;
 
         if (
             this.editorState.activeFilePath

@@ -80,6 +80,13 @@ function uniqueStringList(values) {
 function normalizeWorkspaceState(input = {}, fallback = {}) {
     const source = input && typeof input === 'object' ? input : {};
     const base = fallback && typeof fallback === 'object' ? fallback : {};
+    const markdownSplitPath = typeof source.markdownSplitPath === 'string'
+        ? source.markdownSplitPath
+        : (
+            typeof base.markdownSplitPath === 'string'
+                ? base.markdownSplitPath
+                : ''
+        );
     return {
         updatedAt: Number.isFinite(source.updatedAt)
             ? source.updatedAt
@@ -100,7 +107,8 @@ function normalizeWorkspaceState(input = {}, fallback = {}) {
         terminalDisplayMode: source.terminalDisplayMode === 'tab'
             ? 'tab'
             : 'auto',
-        expandedPaths: uniqueStringList(source.expandedPaths)
+        expandedPaths: uniqueStringList(source.expandedPaths),
+        markdownSplitPath
     };
 }
 

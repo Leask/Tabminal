@@ -11,6 +11,7 @@ function createWorkspaceState(overrides = {}) {
         openFiles: [],
         terminalDisplayMode: 'auto',
         expandedPaths: [],
+        markdownSplitPath: '',
         ...overrides
     };
 }
@@ -44,7 +45,8 @@ describe('TerminalManager workspace sync', () => {
                 isVisible: true,
                 openFiles: ['/tmp/newer.js'],
                 terminalDisplayMode: 'tab',
-                expandedPaths: ['/tmp/src']
+                expandedPaths: ['/tmp/src'],
+                markdownSplitPath: '/tmp/newer.js'
             })
         });
 
@@ -54,6 +56,10 @@ describe('TerminalManager workspace sync', () => {
         assert.deepEqual(session.editorState.openFiles, ['/tmp/newer.js']);
         assert.equal(session.editorState.terminalDisplayMode, 'tab');
         assert.deepEqual(session.editorState.expandedPaths, ['/tmp/src']);
+        assert.equal(
+            session.editorState.markdownSplitPath,
+            '/tmp/newer.js'
+        );
     });
 
     it('uses updatedBy as a tie-breaker for equal timestamps', () => {
@@ -115,5 +121,33 @@ describe('TerminalManager workspace sync', () => {
         assert.equal(listed.length, 1);
         assert.deepEqual(listed[0].workspaceState, workspaceState);
         assert.deepEqual(listed[0].editorState, workspaceState);
+    });
+
+    it('preserves markdown split path in shared workspace snapshots', () => {
+        const manager = new TerminalManager();
+        const session = {
+            editorState: createWorkspaceState({
+                updatedAt: 10,
+                updatedBy: 'device-a',
+                openFiles: ['/tmp/readme.md'],
+                markdownSplitPath: '/tmp/readme.md'
+            }),
+            persistent: false
+        };
+        manager.sessions.set('session-4', session);
+
+        manager.updateSessionState('session-4', {
+            workspaceState: createWorkspaceState({
+                updatedAt: 11,
+                updatedBy: 'device-b',
+                openFiles: ['/tmp/readme.md'],
+                markdownSplitPath: '/tmp/readme.md'
+            })
+        });
+
+        assert.equal(
+            session.editorState.markdownSplitPath,
+            '/tmp/readme.md'
+        );
     });
 });
