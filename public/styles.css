@@ -1471,9 +1471,18 @@ kbd {
     color: var(--text-highlight);
 }
 
+.file-tree-item.selected {
+    background-color: rgba(88, 110, 117, 0.26);
+    color: var(--text-highlight);
+}
+
 .file-tree-item.active {
     background-color: rgba(38, 139, 210, 0.15);
     color: var(--accent-color);
+}
+
+.file-tree-item.selected.active {
+    background-color: rgba(38, 139, 210, 0.22);
 }
 
 .file-tree-item .icon {
@@ -1493,6 +1502,46 @@ kbd {
 
 .file-tree-item.is-dir {
     font-weight: bold;
+}
+
+.file-tree-name {
+    min-width: 0;
+}
+
+.file-tree-rename-btn {
+    display: none;
+    border: 1px solid rgba(38, 139, 210, 0.28);
+    border-radius: 999px;
+    background: rgba(38, 139, 210, 0.12);
+    color: var(--text-highlight);
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+}
+
+.file-tree-item:hover .file-tree-rename-btn,
+.file-tree-item.selected .file-tree-rename-btn,
+.file-tree-item:focus-within .file-tree-rename-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.file-tree-rename-btn:disabled {
+    display: none;
+}
+
+.file-tree-rename-input {
+    min-width: 0;
+    flex: 1 1 auto;
+    padding: 1px 4px;
+    border: 1px solid rgba(38, 139, 210, 0.5);
+    border-radius: 4px;
+    background: rgba(0, 43, 54, 0.9);
+    color: var(--text-highlight);
+    font: inherit;
 }
 
 .editor-workspace {

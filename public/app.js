@@ -119,6 +119,7 @@ const THOUGHT_SELECT_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15"
 const TERMINAL_TAB_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="m9 15 3-3 3 3"></path></svg>';
 const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="5" rx="1.5"></rect><rect x="4" y="14" width="16" height="5" rx="1.5"></rect></svg>';
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
+const RENAME_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m12 20 7-7"></path><path d="M16 6.5a1.8 1.8 0 1 1 2.5 2.5L8 19.5 4 20l.5-4L16 6.5Z"></path></svg>';
 const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
     + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
     + 'monospace';
@@ -1455,6 +1456,357 @@ class EditorManager {
         store.set(filePath, value);
     }
 
+    remapTreePath(pathValue, oldPath, newPath, isDirectory) {
+        if (typeof pathValue !== 'string' || pathValue.length === 0) {
+            return pathValue;
+        }
+        if (pathValue === oldPath) {
+            return newPath;
+        }
+        if (
+            isDirectory
+            && pathValue.startsWith(`${oldPath}/`)
+        ) {
+            return `${newPath}${pathValue.slice(oldPath.length)}`;
+        }
+        return pathValue;
+    }
+
+    remapWorkspaceTabKey(key, oldPath, newPath, isDirectory) {
+        if (!isFileWorkspaceTabKey(key)) return key;
+        const filePath = workspaceKeyToFilePath(key);
+        const nextPath = this.remapTreePath(
+            filePath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        return nextPath ? makeFileWorkspaceTabKey(nextPath) : key;
+    }
+
+    cloneRenamedModelEntry(entry, nextPath) {
+        if (!entry || typeof entry !== 'object') return entry;
+        const nextEntry = {
+            ...entry
+        };
+        if (nextEntry.model) {
+            let nextContent = nextEntry.content;
+            try {
+                if (typeof nextEntry.model.getValue === 'function') {
+                    nextContent = nextEntry.model.getValue();
+                }
+            } catch {
+                // Ignore content extraction failure and keep cached content.
+            }
+            nextEntry.content = nextContent;
+
+            if (
+                this.monacoInstance
+                && typeof nextEntry.model.getLanguageId === 'function'
+            ) {
+                const oldModel = nextEntry.model;
+                const languageId = oldModel.getLanguageId();
+                const uri = this.monacoInstance.Uri.file(nextPath);
+                const existingModel = this.monacoInstance.editor.getModel(uri);
+                if (existingModel && existingModel !== oldModel) {
+                    existingModel.setValue(nextContent ?? '');
+                    nextEntry.model = existingModel;
+                } else {
+                    nextEntry.model = this.monacoInstance.editor.createModel(
+                        nextContent ?? '',
+                        languageId,
+                        uri
+                    );
+                }
+                if (nextEntry.model !== oldModel) {
+                    try {
+                        oldModel.dispose();
+                    } catch {
+                        // Ignore disposal failures for stale models.
+                    }
+                }
+                return nextEntry;
+            }
+        }
+        return nextEntry;
+    }
+
+    remapModelStorePaths(server, oldPath, newPath, isDirectory) {
+        if (!server?.modelStore) return false;
+        const nextEntries = [];
+        let changed = false;
+        for (const [path, entry] of server.modelStore.entries()) {
+            const nextPath = this.remapTreePath(
+                path,
+                oldPath,
+                newPath,
+                isDirectory
+            );
+            if (nextPath !== path) {
+                changed = true;
+                nextEntries.push([
+                    nextPath,
+                    this.cloneRenamedModelEntry(entry, nextPath)
+                ]);
+                server.modelStore.delete(path);
+            }
+        }
+        for (const [nextPath, entry] of nextEntries) {
+            server.modelStore.set(nextPath, entry);
+        }
+        return changed;
+    }
+
+    remapPendingFileWrites(sessionKey, oldPath, newPath, isDirectory) {
+        const pending = pendingChanges.sessions.get(sessionKey);
+        if (!pending?.fileWrites || pending.fileWrites.size === 0) {
+            return false;
+        }
+        const nextEntries = [];
+        let changed = false;
+        for (const [path, content] of pending.fileWrites.entries()) {
+            const nextPath = this.remapTreePath(
+                path,
+                oldPath,
+                newPath,
+                isDirectory
+            );
+            if (nextPath !== path) {
+                changed = true;
+                pending.fileWrites.delete(path);
+                nextEntries.push([nextPath, content]);
+            }
+        }
+        for (const [nextPath, content] of nextEntries) {
+            pending.fileWrites.set(nextPath, content);
+        }
+        return changed;
+    }
+
+    applyRenamedPathToSession(session, oldPath, newPath, isDirectory) {
+        let workspaceChanged = false;
+        let visualChanged = false;
+
+        const remapList = (values) => {
+            const nextValues = [];
+            for (const value of values) {
+                const nextValue = this.remapTreePath(
+                    value,
+                    oldPath,
+                    newPath,
+                    isDirectory
+                );
+                if (!nextValues.includes(nextValue)) {
+                    nextValues.push(nextValue);
+                }
+            }
+            return nextValues;
+        };
+
+        const nextOpenFiles = remapList(session.editorState.openFiles);
+        if (
+            JSON.stringify(nextOpenFiles)
+            !== JSON.stringify(session.editorState.openFiles)
+        ) {
+            session.editorState.openFiles = nextOpenFiles;
+            session.sharedWorkspaceState.openFiles = [...nextOpenFiles];
+            workspaceChanged = true;
+            visualChanged = true;
+        }
+
+        const nextExpandedPaths = remapList(
+            session.sharedWorkspaceState.expandedPaths
+        );
+        if (
+            JSON.stringify(nextExpandedPaths)
+            !== JSON.stringify(session.sharedWorkspaceState.expandedPaths)
+        ) {
+            session.sharedWorkspaceState.expandedPaths = nextExpandedPaths;
+            workspaceChanged = true;
+        }
+
+        const nextActiveFilePath = this.remapTreePath(
+            session.editorState.activeFilePath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextActiveFilePath !== session.editorState.activeFilePath) {
+            session.editorState.activeFilePath = nextActiveFilePath || null;
+            visualChanged = true;
+        }
+
+        const nextActiveTabKey = this.remapWorkspaceTabKey(
+            session.workspaceState.activeTabKey,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextActiveTabKey !== session.workspaceState.activeTabKey) {
+            session.workspaceState.activeTabKey = nextActiveTabKey;
+            visualChanged = true;
+        }
+
+        const nextLastNonTerminalTabKey = this.remapWorkspaceTabKey(
+            session.workspaceState.lastNonTerminalTabKey,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (
+            nextLastNonTerminalTabKey
+            !== session.workspaceState.lastNonTerminalTabKey
+        ) {
+            session.workspaceState.lastNonTerminalTabKey =
+                nextLastNonTerminalTabKey;
+        }
+
+        if (session.editorState.viewStates.size > 0) {
+            const nextViewStates = new Map();
+            for (const [path, viewState] of session.editorState.viewStates) {
+                nextViewStates.set(
+                    this.remapTreePath(path, oldPath, newPath, isDirectory),
+                    viewState
+                );
+            }
+            session.editorState.viewStates = nextViewStates;
+        }
+
+        const nextSelectedTreePath = this.remapTreePath(
+            session.selectedTreePath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextSelectedTreePath !== session.selectedTreePath) {
+            session.selectedTreePath = nextSelectedTreePath || '';
+            visualChanged = true;
+        }
+
+        const nextEditingTreePath = this.remapTreePath(
+            session.treeEditingPath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextEditingTreePath !== session.treeEditingPath) {
+            session.treeEditingPath = nextEditingTreePath || '';
+        }
+
+        const nextPendingFocusPath = this.remapTreePath(
+            session.pendingTreeFocusPath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (nextPendingFocusPath !== session.pendingTreeFocusPath) {
+            session.pendingTreeFocusPath = nextPendingFocusPath || '';
+        }
+
+        const nextPendingRenameFocusPath = this.remapTreePath(
+            session.pendingTreeRenameFocusPath,
+            oldPath,
+            newPath,
+            isDirectory
+        );
+        if (
+            nextPendingRenameFocusPath
+            !== session.pendingTreeRenameFocusPath
+        ) {
+            session.pendingTreeRenameFocusPath =
+                nextPendingRenameFocusPath || '';
+        }
+
+        return {
+            workspaceChanged,
+            visualChanged
+        };
+    }
+
+    focusTreePath(session, path) {
+        if (!session?.fileTreeElement || !path) return;
+        requestAnimationFrame(() => {
+            const item = Array.from(
+                session.fileTreeElement.querySelectorAll('li')
+            ).find((candidate) => candidate.dataset.path === path);
+            const row = item?.querySelector('.file-tree-item');
+            if (row) {
+                row.scrollIntoView({ block: 'nearest' });
+                session.fileTreeElement.focus({ preventScroll: true });
+            }
+        });
+    }
+
+    keepTreeFocus(session) {
+        if (!session?.fileTreeElement || session.treeEditingPath) {
+            return;
+        }
+        requestAnimationFrame(() => {
+            if (!session?.fileTreeElement || session.treeEditingPath) {
+                return;
+            }
+            session.fileTreeElement.focus({ preventScroll: true });
+        });
+    }
+
+    handleRenamedPaths(server, oldPath, newPath, isDirectory) {
+        this.remapModelStorePaths(server, oldPath, newPath, isDirectory);
+
+        let currentSessionAffected = false;
+        for (const session of state.sessions.values()) {
+            if (session.serverId !== server.id) continue;
+
+            const { workspaceChanged, visualChanged } =
+                this.applyRenamedPathToSession(
+                    session,
+                    oldPath,
+                    newPath,
+                    isDirectory
+                );
+            const pendingChanged = this.remapPendingFileWrites(
+                session.key,
+                oldPath,
+                newPath,
+                isDirectory
+            );
+
+            if (workspaceChanged || pendingChanged) {
+                session.saveState({ touchWorkspace: true });
+            }
+
+            if (visualChanged && session.key === state.activeSessionKey) {
+                currentSessionAffected = true;
+            }
+
+            if (session.editorState.isVisible) {
+                this.requestSessionTreeRefresh(session);
+            }
+        }
+
+        if (!currentSessionAffected || !this.currentSession) {
+            return;
+        }
+
+        this.renderEditorTabs();
+        this.updateEditorPaneVisibility();
+        const activeKey = this.getActiveWorkspaceTabKey(this.currentSession);
+        if (isFileWorkspaceTabKey(activeKey)) {
+            this.activateFileTab(
+                workspaceKeyToFilePath(activeKey),
+                true,
+                { focusEditor: false }
+            );
+            return;
+        }
+        if (isAgentWorkspaceTabKey(activeKey)) {
+            this.activateAgentTab(activeKey, true);
+            return;
+        }
+        if (isTerminalWorkspaceTabKey(activeKey)) {
+            this.activateTerminalTab(true);
+        }
+    }
+
     async loadIconMap() {
         try {
             const res = await fetch('/icons/map.json');
@@ -1548,16 +1900,20 @@ class EditorManager {
         return !!session?.fileTreeElement && !!session?.editorState?.isVisible;
     }
 
+    canRefreshSessionTree(session) {
+        return this.isSessionTreeVisible(session) && !session.treeEditingPath;
+    }
+
     refreshVisibleSessionTrees() {
         for (const session of state.sessions.values()) {
-            if (this.isSessionTreeVisible(session)) {
+            if (this.canRefreshSessionTree(session)) {
                 this.requestSessionTreeRefresh(session);
             }
         }
     }
 
-    requestSessionTreeRefresh(session) {
-        if (!this.isSessionTreeVisible(session)) {
+    requestSessionTreeRefresh(session, { force = false } = {}) {
+        if (!force && !this.canRefreshSessionTree(session)) {
             this.updateTreeAutoRefresh();
             return;
         }
@@ -1565,7 +1921,7 @@ class EditorManager {
         session.fileTreeRefreshQueued = true;
         requestAnimationFrame(() => {
             session.fileTreeRefreshQueued = false;
-            if (this.isSessionTreeVisible(session)) {
+            if (force || this.canRefreshSessionTree(session)) {
                 this.refreshSessionTree(session);
             } else {
                 this.updateTreeAutoRefresh();
@@ -1577,7 +1933,7 @@ class EditorManager {
         const shouldRun = (
             document.visibilityState === 'visible'
             && Array.from(state.sessions.values()).some(
-                (session) => this.isSessionTreeVisible(session)
+                (session) => this.canRefreshSessionTree(session)
             )
         );
         if (shouldRun && !this.treeRefreshTimer) {
@@ -1586,9 +1942,9 @@ class EditorManager {
                     this.updateTreeAutoRefresh();
                     return;
                 }
-                const hasVisibleTrees = Array.from(state.sessions.values()).some(
-                    (session) => this.isSessionTreeVisible(session)
-                );
+                const hasVisibleTrees = Array.from(
+                    state.sessions.values()
+                ).some((session) => this.canRefreshSessionTree(session));
                 if (!hasVisibleTrees) {
                     this.updateTreeAutoRefresh();
                     return;
@@ -1600,6 +1956,185 @@ class EditorManager {
         if (!shouldRun && this.treeRefreshTimer) {
             window.clearInterval(this.treeRefreshTimer);
             this.treeRefreshTimer = null;
+        }
+    }
+
+    setSelectedTreePath(session, path, { preserveFocus = false } = {}) {
+        if (!session) return;
+        const nextPath = typeof path === 'string' ? path : '';
+        if (session.selectedTreePath === nextPath) return;
+        session.selectedTreePath = nextPath;
+        if (preserveFocus && nextPath) {
+            session.pendingTreeFocusPath = nextPath;
+        }
+        if (this.isSessionTreeVisible(session)) {
+            this.syncSelectedTreePath(session);
+        }
+    }
+
+    syncSelectedTreePath(session) {
+        if (!session?.fileTreeElement) return;
+        const selectedPath = session.selectedTreePath || '';
+        Array.from(
+            session.fileTreeElement.querySelectorAll('.file-tree-item')
+        ).forEach((row) => {
+            const rowPath = row.parentElement?.dataset.path || '';
+            row.classList.toggle(
+                'selected',
+                selectedPath.length > 0 && rowPath === selectedPath
+            );
+        });
+    }
+
+    getVisibleTreeRows(session) {
+        if (!session?.fileTreeElement) return [];
+        return Array.from(
+            session.fileTreeElement.querySelectorAll('li > .file-tree-item')
+        ).filter((row) => row instanceof HTMLElement);
+    }
+
+    getDomSelectedTreePath(session) {
+        return session?.fileTreeElement?.querySelector(
+            '.file-tree-item.selected'
+        )?.parentElement?.dataset.path || '';
+    }
+
+    moveTreeSelection(session, delta) {
+        if (!session || !delta) return false;
+        const rows = this.getVisibleTreeRows(session);
+        if (rows.length === 0) return false;
+
+        const currentPath = this.getDomSelectedTreePath(session)
+            || session.selectedTreePath
+            || session.editorState.activeFilePath
+            || '';
+        let currentIndex = rows.findIndex(
+            (row) => row.parentElement?.dataset.path === currentPath
+        );
+        if (currentIndex === -1) {
+            currentIndex = delta > 0 ? -1 : rows.length;
+        }
+
+        const nextIndex = Math.max(
+            0,
+            Math.min(rows.length - 1, currentIndex + delta)
+        );
+        const nextRow = rows[nextIndex];
+        const nextPath = nextRow?.parentElement?.dataset.path || '';
+        if (!nextPath) return false;
+
+        this.setSelectedTreePath(session, nextPath, { preserveFocus: true });
+        nextRow.scrollIntoView({ block: 'nearest' });
+        session.fileTreeElement?.focus({ preventScroll: true });
+        return true;
+    }
+
+    beginSelectedTreeRename(session) {
+        if (!session) return false;
+        const selectedPath = this.getDomSelectedTreePath(session)
+            || session.selectedTreePath
+            || '';
+        if (!selectedPath) return false;
+
+        const item = session.fileTreeElement?.querySelector(
+            `li[data-path="${CSS.escape(selectedPath)}"]`
+        );
+        const row = item?.querySelector('.file-tree-item');
+        const nameEl = row?.querySelector('.file-tree-name');
+        if (
+            !item
+            || !row
+            || !nameEl
+            || item.dataset.renameable !== '1'
+        ) {
+            return false;
+        }
+
+        const renameButton = row.querySelector('.file-tree-rename-btn');
+        if (
+            renameButton instanceof HTMLButtonElement
+            && !renameButton.disabled
+        ) {
+            renameButton.click();
+            return true;
+        }
+
+        this.beginTreeRename(session, {
+            path: selectedPath,
+            name: nameEl.textContent || '',
+            isDirectory: item.dataset.isDirectory === '1',
+            renameable: true
+        });
+        return true;
+    }
+
+    cancelTreeRename(session) {
+        if (!session || !session.treeEditingPath) return;
+        session.treeEditingPath = '';
+        session.treeRenameSubmitting = false;
+        session.pendingTreeRenameFocusPath = '';
+        if (this.isSessionTreeVisible(session)) {
+            this.requestSessionTreeRefresh(session);
+        }
+    }
+
+    beginTreeRename(session, file) {
+        if (!session || !file?.renameable) return;
+        session.selectedTreePath = file.path;
+        session.pendingTreeFocusPath = '';
+        session.treeEditingPath = file.path;
+        session.treeRenameSubmitting = false;
+        session.pendingTreeRenameFocusPath = file.path;
+        this.requestSessionTreeRefresh(session, { force: true });
+    }
+
+    async commitTreeRename(session, file, nextName) {
+        if (!session || !file || typeof nextName !== 'string') {
+            return;
+        }
+        if (nextName.length === 0) {
+            return;
+        }
+        if (nextName === file.name) {
+            this.cancelTreeRename(session);
+            this.focusTreePath(session, file.path);
+            return;
+        }
+
+        session.treeRenameSubmitting = true;
+        try {
+            const response = await session.server.fetch('/api/fs/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: file.path,
+                    newName: nextName
+                })
+            });
+            if (!response.ok) {
+                await throwResponseError(response, 'Failed to rename path');
+            }
+            const payload = await response.json();
+            session.treeEditingPath = '';
+            session.treeRenameSubmitting = false;
+            session.pendingTreeRenameFocusPath = '';
+            session.selectedTreePath = payload.newPath || file.path;
+            session.pendingTreeFocusPath = payload.newPath || file.path;
+            this.handleRenamedPaths(
+                session.server,
+                file.path,
+                payload.newPath || file.path,
+                !!payload.isDirectory
+            );
+            this.requestSessionTreeRefresh(session);
+            this.focusTreePath(session, session.pendingTreeFocusPath);
+        } catch (error) {
+            session.treeRenameSubmitting = false;
+            this.cancelTreeRename(session);
+            alert(error.message || 'Failed to rename path', {
+                type: 'error',
+                title: 'Files'
+            });
         }
     }
 
@@ -1625,6 +2160,7 @@ class EditorManager {
     updateTreeItem(li, file, session, renderToken) {
         li.dataset.path = file.path;
         li.dataset.isDirectory = file.isDirectory ? '1' : '0';
+        li.dataset.renameable = file.renameable ? '1' : '0';
 
         let row = Array.from(li.children).find(
             (child) => child.classList?.contains('file-tree-item')
@@ -1634,6 +2170,7 @@ class EditorManager {
             row.className = 'file-tree-item';
             li.prepend(row);
         }
+        row.tabIndex = -1;
 
         let icon = row.querySelector('.icon');
         if (!icon) {
@@ -1642,12 +2179,34 @@ class EditorManager {
             row.appendChild(icon);
         }
 
-        let name = Array.from(row.children).find(
-            (child) => child !== icon
-        );
+        let renameButton = row.querySelector('.file-tree-rename-btn');
+        if (!renameButton) {
+            renameButton = document.createElement('button');
+            renameButton.type = 'button';
+            renameButton.className = 'file-tree-rename-btn';
+            renameButton.title = 'Rename';
+            renameButton.setAttribute('aria-label', `Rename ${file.name}`);
+            renameButton.innerHTML = RENAME_ICON_SVG;
+            row.appendChild(renameButton);
+        }
+
+        let name = row.querySelector('.file-tree-name');
         if (!name) {
             name = document.createElement('span');
+            name.className = 'file-tree-name';
             row.appendChild(name);
+        }
+
+        let renameInput = row.querySelector('.file-tree-rename-input');
+        const isEditing = session.treeEditingPath === file.path;
+        if (isEditing && !renameInput) {
+            renameInput = document.createElement('input');
+            renameInput.type = 'text';
+            renameInput.className = 'file-tree-rename-input';
+            row.appendChild(renameInput);
+        } else if (!isEditing && renameInput) {
+            renameInput.remove();
+            renameInput = null;
         }
 
         row.className = 'file-tree-item';
@@ -1659,15 +2218,93 @@ class EditorManager {
             !file.isDirectory
             && session.editorState.activeFilePath === file.path
         );
+        row.classList.toggle(
+            'selected',
+            session.selectedTreePath === file.path
+        );
+        row.classList.toggle('editing', isEditing);
 
         const isExpanded = file.isDirectory
             && this.getTreeItemExpanded(file.path, session);
         li.classList.toggle('expanded', isExpanded);
         icon.innerHTML = this.getIcon(file.name, file.isDirectory, isExpanded);
         name.textContent = file.name;
+        name.style.display = isEditing ? 'none' : '';
+        renameButton.style.display = isEditing ? 'none' : '';
+        renameButton.hidden = !file.renameable;
+        renameButton.disabled = !file.renameable;
+        renameButton.title = `Rename ${file.name}`;
+        renameButton.setAttribute('aria-label', `Rename ${file.name}`);
+        renameButton.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        renameButton.onclick = (event) => {
+            event.stopPropagation();
+            this.beginTreeRename(session, file);
+        };
+
+        if (renameInput) {
+            if (document.activeElement !== renameInput) {
+                renameInput.value = file.name;
+            }
+            renameInput.onkeydown = async (event) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.cancelTreeRename(session);
+                    this.focusTreePath(session, file.path);
+                    return;
+                }
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await this.commitTreeRename(
+                        session,
+                        file,
+                        renameInput.value
+                    );
+                }
+            };
+            renameInput.onmousedown = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onclick = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onfocus = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onblur = () => {
+                if (!session.treeRenameSubmitting) {
+                    this.cancelTreeRename(session);
+                }
+            };
+
+            if (session.pendingTreeRenameFocusPath === file.path) {
+                session.pendingTreeRenameFocusPath = '';
+                requestAnimationFrame(() => {
+                    renameInput.focus({ preventScroll: true });
+                    renameInput.setSelectionRange(
+                        0,
+                        renameInput.value.length
+                    );
+                });
+            }
+        }
 
         row.onclick = async (e) => {
             e.stopPropagation();
+            if (e.target.closest('.file-tree-rename-btn')) {
+                return;
+            }
+            if (e.target.closest('.file-tree-rename-input')) {
+                return;
+            }
+            this.setSelectedTreePath(session, file.path, {
+                preserveFocus: true
+            });
+            session.fileTreeElement?.focus({ preventScroll: true });
             if (file.isDirectory) {
                 if (li.classList.contains('expanded')) {
                     li.classList.remove('expanded');
@@ -1711,18 +2348,44 @@ class EditorManager {
                 icon.innerHTML = this.getIcon(file.name, true, true);
                 await this.renderTree(file.path, li, session, renderToken);
                 this.updateTreeAutoRefresh();
+                session.fileTreeElement?.focus({ preventScroll: true });
                 return;
             }
 
-            await this.openFile(file.path, session);
+            await this.openFile(file.path, session, {
+                focusEditor: false
+            });
+            this.focusTreePath(session, file.path);
+            session.pendingTreeFocusPath = file.path;
             this.requestSessionTreeRefresh(session);
         };
+
+        row.onmousedown = (event) => {
+            if (
+                event.target.closest('.file-tree-rename-btn')
+                || event.target.closest('.file-tree-rename-input')
+            ) {
+                return;
+            }
+            event.preventDefault();
+            session.fileTreeElement?.focus({ preventScroll: true });
+        };
+
+        row.onkeydown = null;
 
         if (!isExpanded) {
             const childUl = this.getTreeChildList(li);
             if (childUl) {
                 childUl.remove();
             }
+        }
+
+        if (session.pendingTreeFocusPath === file.path) {
+            session.pendingTreeFocusPath = '';
+            requestAnimationFrame(() => {
+                row.scrollIntoView({ block: 'nearest' });
+                session.fileTreeElement?.focus({ preventScroll: true });
+            });
         }
     }
 
@@ -1985,7 +2648,11 @@ class EditorManager {
         }
     }
 
-    async openFile(filePath, sessionOrRestore = this.currentSession) {
+    async openFile(
+        filePath,
+        sessionOrRestore = this.currentSession,
+        options = {}
+    ) {
         const session = typeof sessionOrRestore === 'boolean'
             ? this.currentSession
             : sessionOrRestore;
@@ -2051,7 +2718,7 @@ class EditorManager {
             });
         }
 
-        this.activateFileTab(filePath);
+        this.activateFileTab(filePath, false, options);
         if (touchedWorkspace) {
             targetSession.saveState({ touchWorkspace: true });
         }
@@ -2258,9 +2925,10 @@ class EditorManager {
         });
     }
 
-    activateFileTab(filePath, isRestore = false) {
+    activateFileTab(filePath, isRestore = false, options = {}) {
         if (!this.currentSession) return;
         if (!filePath) return;
+        const focusEditor = options.focusEditor !== false;
         const state = this.currentSession.editorState;
 
         if (!isRestore && state.activeFilePath && state.activeFilePath !== filePath) {
@@ -2282,7 +2950,7 @@ class EditorManager {
         this.syncTerminalWorkspacePlacement();
 
         if (!file) {
-            this.openFile(filePath, true);
+            this.openFile(filePath, true, options);
             return;
         }
 
@@ -2317,7 +2985,9 @@ class EditorManager {
                 if (savedViewState) {
                     this.editor.restoreViewState(savedViewState);
                 }
-                this.editor.focus();
+                if (focusEditor) {
+                    this.editor.focus();
+                }
                 // Force layout to ensure content is visible
                 requestAnimationFrame(() => this.editor.layout());
             }
@@ -4811,6 +5481,11 @@ class Session {
         this.layoutState = {
             editorFlex: '2 1 0%'
         };
+        this.selectedTreePath = '';
+        this.treeEditingPath = '';
+        this.treeRenameSubmitting = false;
+        this.pendingTreeFocusPath = '';
+        this.pendingTreeRenameFocusPath = '';
         this.previewRelayoutScheduled = false;
         this.lastTerminalControlClaimAt = 0;
         this.boundTerminalClaimRoot = null;
@@ -11052,7 +11727,51 @@ function createTabElement(session) {
     
     const fileTree = document.createElement('div');
     fileTree.className = 'tab-file-tree';
+    fileTree.tabIndex = 0;
     session.fileTreeElement = fileTree;
+    fileTree.addEventListener('mousedown', (event) => {
+        if (
+            event.target.closest('.file-tree-rename-input')
+            || event.target.closest('.file-tree-rename-btn')
+        ) {
+            return;
+        }
+        if (event.target.closest('.file-tree-item')) {
+            event.preventDefault();
+            fileTree.focus({ preventScroll: true });
+        }
+    });
+    fileTree.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && session.treeEditingPath) {
+            event.preventDefault();
+            event.stopPropagation();
+            editorManager.cancelTreeRename(session);
+            editorManager.focusTreePath(session, session.selectedTreePath);
+            return;
+        }
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            event.stopPropagation();
+            editorManager.moveTreeSelection(session, 1);
+            editorManager.keepTreeFocus(session);
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            event.stopPropagation();
+            editorManager.moveTreeSelection(session, -1);
+            editorManager.keepTreeFocus(session);
+            return;
+        }
+        if (event.key !== 'Enter' || session.treeEditingPath) {
+            return;
+        }
+        if (!editorManager.beginSelectedTreeRename(session)) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+    });
     
     if (session.editorState && session.editorState.isVisible) {
         editorManager.refreshSessionTree(session);

@@ -1,3 +1,4 @@
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -23,6 +24,14 @@ export const setupFsRoutes = (router) => {
                 return;
             }
 
+            let renameable = false;
+            try {
+                await fs.access(fullPath, fsConstants.W_OK);
+                renameable = true;
+            } catch {
+                renameable = false;
+            }
+
             const dirents = await fs.readdir(fullPath, { withFileTypes: true });
             
             const files = dirents
@@ -32,7 +41,7 @@ export const setupFsRoutes = (router) => {
                         name: dirent.name,
                         isDirectory: dirent.isDirectory(),
                         path: path.join(dirPath, dirent.name),
-                        // Add basic icon/type hint logic here if needed later
+                        renameable
                     };
                 });
 
@@ -48,6 +57,52 @@ export const setupFsRoutes = (router) => {
         } catch (err) {
             console.error('FS List Error:', err);
             ctx.status = 500;
+            ctx.body = { error: err.message };
+        }
+    });
+
+    router.post('/api/fs/rename', async (ctx) => {
+        const sourcePath = ctx.request.body?.path;
+        const newName = ctx.request.body?.newName;
+        if (typeof sourcePath !== 'string' || sourcePath.length === 0) {
+            ctx.status = 400;
+            ctx.body = { error: 'Path required' };
+            return;
+        }
+        if (typeof newName !== 'string' || newName.length === 0) {
+            ctx.status = 400;
+            ctx.body = { error: 'New name required' };
+            return;
+        }
+        if (newName === '.' || newName === '..') {
+            ctx.status = 400;
+            ctx.body = { error: 'Invalid name' };
+            return;
+        }
+        if (/[\\/]/.test(newName)) {
+            ctx.status = 400;
+            ctx.body = { error: 'Name must not contain path separators' };
+            return;
+        }
+
+        try {
+            const fullSourcePath = resolvePath(baseDir, sourcePath);
+            const stats = await fs.stat(fullSourcePath);
+            const nextPath = path.join(path.dirname(sourcePath), newName);
+            const fullNextPath = resolvePath(baseDir, nextPath);
+
+            if (fullSourcePath !== fullNextPath) {
+                await fs.rename(fullSourcePath, fullNextPath);
+            }
+
+            ctx.body = {
+                path: sourcePath,
+                newPath: nextPath,
+                isDirectory: stats.isDirectory()
+            };
+        } catch (err) {
+            console.error('FS Rename Error:', err);
+            ctx.status = err?.code === 'EEXIST' ? 409 : 500;
             ctx.body = { error: err.message };
         }
     });
