@@ -45,6 +45,106 @@ export function isSupportedTextBuffer(buffer) {
     }
 }
 
+function joinRelativePath(basePath, name) {
+    if (!basePath || basePath === '.' || basePath === path.sep) {
+        return name;
+    }
+    return path.join(basePath, name);
+}
+
+async function canWritePath(targetPath) {
+    try {
+        await fs.access(targetPath, fsConstants.W_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export async function createUniqueChild(baseDir, parentPath, kind) {
+    const normalizedParentPath = parentPath || '.';
+    const fullParentPath = resolvePath(baseDir, normalizedParentPath);
+    const parentStats = await fs.stat(fullParentPath);
+    if (!parentStats.isDirectory()) {
+        const error = new Error('Parent path is not a directory');
+        error.status = 400;
+        throw error;
+    }
+    const writable = await canWritePath(fullParentPath);
+    if (!writable) {
+        const error = new Error('Parent directory is read-only');
+        error.status = 403;
+        throw error;
+    }
+
+    const baseName = kind === 'directory'
+        ? 'untitled_folder'
+        : 'untitled_file';
+
+    for (let attempt = 0; attempt < 10000; attempt += 1) {
+        const name = attempt === 0
+            ? baseName
+            : `${baseName}_${attempt}`;
+        const relativePath = joinRelativePath(normalizedParentPath, name);
+        const fullPath = resolvePath(baseDir, relativePath);
+        try {
+            if (kind === 'directory') {
+                await fs.mkdir(fullPath);
+            } else {
+                const handle = await fs.open(fullPath, 'wx');
+                await handle.close();
+            }
+            return {
+                path: relativePath,
+                parentPath: normalizedParentPath,
+                name,
+                isDirectory: kind === 'directory'
+            };
+        } catch (error) {
+            if (error?.code === 'EEXIST') {
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    const error = new Error('Unable to find an available name');
+    error.status = 409;
+    throw error;
+}
+
+export async function ensureRenameTargetAvailable(baseDir, sourcePath, newName) {
+    const nextPath = path.join(path.dirname(sourcePath), newName);
+    const fullSourcePath = resolvePath(baseDir, sourcePath);
+    const fullNextPath = resolvePath(baseDir, nextPath);
+
+    if (fullSourcePath === fullNextPath) {
+        return {
+            nextPath,
+            fullSourcePath,
+            fullNextPath
+        };
+    }
+
+    try {
+        await fs.stat(fullNextPath);
+        const error = new Error(
+            'A file or folder with that name already exists.'
+        );
+        error.status = 409;
+        throw error;
+    } catch (error) {
+        if (error?.code === 'ENOENT') {
+            return {
+                nextPath,
+                fullSourcePath,
+                fullNextPath
+            };
+        }
+        throw error;
+    }
+}
+
 // Helper to safely resolve path
 const resolvePath = (baseDir, targetPath) => {
     return path.resolve(baseDir, targetPath);
@@ -76,27 +176,33 @@ export const setupFsRoutes = (router) => {
 
             const dirents = await fs.readdir(fullPath, { withFileTypes: true });
             
-            const files = dirents
-                .filter(dirent => dirent.name !== '.DS_Store')
-                .map(dirent => {
-                    return {
-                        name: dirent.name,
-                        isDirectory: dirent.isDirectory(),
-                        path: path.join(dirPath, dirent.name),
-                        renameable,
-                        deleteable: renameable
-                    };
-                });
+            const items = await Promise.all(
+                dirents
+                    .filter(dirent => dirent.name !== '.DS_Store')
+                    .map(async (dirent) => {
+                        const entryPath = path.join(dirPath, dirent.name);
+                        return {
+                            name: dirent.name,
+                            isDirectory: dirent.isDirectory(),
+                            path: entryPath,
+                            renameable,
+                            deleteable: renameable
+                        };
+                    })
+            );
 
             // Sort: Directories first, then files
-            files.sort((a, b) => {
+            items.sort((a, b) => {
                 if (a.isDirectory === b.isDirectory) {
                     return a.name.localeCompare(b.name);
                 }
                 return a.isDirectory ? -1 : 1;
             });
 
-            ctx.body = files;
+            ctx.body = {
+                items,
+                creatable: renameable
+            };
         } catch (err) {
             console.error('FS List Error:', err);
             ctx.status = 500;
@@ -129,10 +235,12 @@ export const setupFsRoutes = (router) => {
         }
 
         try {
-            const fullSourcePath = resolvePath(baseDir, sourcePath);
+            const {
+                nextPath,
+                fullSourcePath,
+                fullNextPath
+            } = await ensureRenameTargetAvailable(baseDir, sourcePath, newName);
             const stats = await fs.stat(fullSourcePath);
-            const nextPath = path.join(path.dirname(sourcePath), newName);
-            const fullNextPath = resolvePath(baseDir, nextPath);
 
             if (fullSourcePath !== fullNextPath) {
                 await fs.rename(fullSourcePath, fullNextPath);
@@ -145,7 +253,7 @@ export const setupFsRoutes = (router) => {
             };
         } catch (err) {
             console.error('FS Rename Error:', err);
-            ctx.status = err?.code === 'EEXIST' ? 409 : 500;
+            ctx.status = err?.status || (err?.code === 'EEXIST' ? 409 : 500);
             ctx.body = { error: err.message };
         }
     });
@@ -173,6 +281,35 @@ export const setupFsRoutes = (router) => {
         } catch (err) {
             console.error('FS Delete Error:', err);
             ctx.status = 500;
+            ctx.body = { error: err.message };
+        }
+    });
+
+    router.post('/api/fs/create', async (ctx) => {
+        const parentPath = ctx.request.body?.parentPath;
+        const kind = ctx.request.body?.kind;
+
+        if (typeof parentPath !== 'string' || parentPath.length === 0) {
+            ctx.status = 400;
+            ctx.body = { error: 'Parent path required' };
+            return;
+        }
+        if (kind !== 'file' && kind !== 'directory') {
+            ctx.status = 400;
+            ctx.body = { error: 'Invalid create kind' };
+            return;
+        }
+
+        try {
+            const created = await createUniqueChild(
+                baseDir,
+                parentPath,
+                kind
+            );
+            ctx.body = created;
+        } catch (err) {
+            console.error('FS Create Error:', err);
+            ctx.status = err?.status || 500;
             ctx.body = { error: err.message };
         }
     });

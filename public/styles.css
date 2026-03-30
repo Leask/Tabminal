@@ -1540,7 +1540,9 @@ kbd {
 }
 
 .file-tree-rename-btn,
-.file-tree-delete-btn {
+.file-tree-delete-btn,
+.file-tree-new-folder-btn,
+.file-tree-new-file-btn {
     display: none;
     border: 1px solid rgba(38, 139, 210, 0.28);
     border-radius: 999px;
@@ -1571,8 +1573,30 @@ kbd {
 }
 
 .file-tree-rename-btn:disabled,
-.file-tree-delete-btn:disabled {
+.file-tree-delete-btn:disabled,
+.file-tree-new-folder-btn:disabled,
+.file-tree-new-file-btn:disabled {
     display: none;
+}
+
+.file-tree-create-entry {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.file-tree-create-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px 3px 28px;
+}
+
+.file-tree-create-actions .file-tree-new-folder-btn,
+.file-tree-create-actions .file-tree-new-file-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .file-tree-rename-input {
@@ -3326,12 +3350,12 @@ kbd {
     align-items: center;
     justify-content: center;
     overflow: auto;
-    background-color: #f0f0f0;
+    background-color: #073642;
     background-image:
-        linear-gradient(45deg, #e0e0e0 25%, transparent 25%),
-        linear-gradient(-45deg, #e0e0e0 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #e0e0e0 75%),
-        linear-gradient(-45deg, transparent 75%, #e0e0e0 75%);
+        linear-gradient(45deg, #0b3f4b 25%, transparent 25%),
+        linear-gradient(-45deg, #0b3f4b 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #0b3f4b 75%),
+        linear-gradient(-45deg, transparent 75%, #0b3f4b 75%);
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
 }

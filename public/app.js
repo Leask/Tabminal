@@ -135,6 +135,8 @@ const TERMINAL_AUTO_MODE_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height=
 const PLUS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>';
 const RENAME_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="m12 20 7-7"></path><path d="M16 6.5a1.8 1.8 0 1 1 2.5 2.5L8 19.5 4 20l.5-4L16 6.5Z"></path></svg>';
 const DELETE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M6 7l1 12h10l1-12"></path><path d="M9 7V4h6v3"></path></svg>';
+const NEW_FOLDER_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4l2 2h6a2.5 2.5 0 0 1 2.5 2.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z"></path><path d="M12 10.5v5"></path><path d="M9.5 13h5"></path></svg>';
+const NEW_FILE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4V20.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z"></path><path d="M14 3.5V8h4"></path><path d="M12 11v6"></path><path d="M9 14h6"></path></svg>';
 const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
     + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
     + 'monospace';
@@ -2358,6 +2360,59 @@ class EditorManager {
         return true;
     }
 
+    async createTreeEntry(session, parentPath, kind) {
+        if (!session || typeof parentPath !== 'string' || !parentPath) {
+            return;
+        }
+
+        try {
+            const response = await session.server.fetch('/api/fs/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    parentPath,
+                    kind
+                })
+            });
+            if (!response.ok) {
+                await throwResponseError(response, 'Failed to create path');
+            }
+
+            const payload = await response.json();
+            if (
+                parentPath !== '.'
+                && !session.sharedWorkspaceState.expandedPaths.includes(parentPath)
+            ) {
+                session.sharedWorkspaceState.expandedPaths =
+                    uniqueStringList([
+                        ...session.sharedWorkspaceState.expandedPaths,
+                        parentPath
+                    ]);
+                session.saveState({ touchWorkspace: true });
+                void session.server.fetch('/api/memory/expand', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: parentPath,
+                        expanded: true
+                    })
+                });
+            }
+
+            this.beginTreeRename(session, {
+                path: payload.path,
+                name: payload.name,
+                isDirectory: !!payload.isDirectory,
+                renameable: true
+            });
+        } catch (error) {
+            alert(error.message || 'Failed to create path', {
+                type: 'error',
+                title: 'Files'
+            });
+        }
+    }
+
     cancelTreeRename(session) {
         if (!session || !session.treeEditingPath) return;
         session.treeEditingPath = '';
@@ -2454,6 +2509,37 @@ class EditorManager {
                 })
             });
             if (!response.ok) {
+                if (response.status === 409) {
+                    let message = 'A file or folder with that name already exists.';
+                    try {
+                        const payload = await response.json();
+                        if (payload?.error) {
+                            message = payload.error;
+                        }
+                    } catch {
+                        // Ignore invalid JSON error bodies.
+                    }
+                    await showConfirmModal({
+                        title: 'Rename Failed',
+                        message,
+                        confirmLabel: 'OK',
+                        hideCancel: true
+                    });
+                    session.treeRenameSubmitting = false;
+                    requestAnimationFrame(() => {
+                        const renameInput = session.fileTreeElement?.querySelector(
+                            '.file-tree-rename-input'
+                        );
+                        if (renameInput instanceof HTMLInputElement) {
+                            renameInput.focus({ preventScroll: true });
+                            renameInput.setSelectionRange(
+                                0,
+                                renameInput.value.length
+                            );
+                        }
+                    });
+                    return;
+                }
                 await throwResponseError(response, 'Failed to rename path');
             }
             const payload = await response.json();
@@ -2497,6 +2583,73 @@ class EditorManager {
 
     getTreeItemExpanded(filePath, session) {
         return session.sharedWorkspaceState.expandedPaths.includes(filePath);
+    }
+
+    updateTreeCreateRow(list, dirPath, creatable, session) {
+        let row = Array.from(list.children).find(
+            (child) => child.classList?.contains('file-tree-create-entry')
+        );
+
+        if (!creatable) {
+            row?.remove();
+            return;
+        }
+
+        if (!row) {
+            row = document.createElement('li');
+            row.className = 'file-tree-create-entry';
+
+            const actions = document.createElement('div');
+            actions.className = 'file-tree-create-actions';
+
+            const newFolderButton = document.createElement('button');
+            newFolderButton.type = 'button';
+            newFolderButton.className = 'file-tree-new-folder-btn';
+            newFolderButton.title = 'New Folder';
+            newFolderButton.innerHTML = NEW_FOLDER_ICON_SVG;
+            actions.appendChild(newFolderButton);
+
+            const newFileButton = document.createElement('button');
+            newFileButton.type = 'button';
+            newFileButton.className = 'file-tree-new-file-btn';
+            newFileButton.title = 'New File';
+            newFileButton.innerHTML = NEW_FILE_ICON_SVG;
+            actions.appendChild(newFileButton);
+
+            row.appendChild(actions);
+        }
+
+        const newFolderButton = row.querySelector('.file-tree-new-folder-btn');
+        const newFileButton = row.querySelector('.file-tree-new-file-btn');
+
+        if (newFolderButton instanceof HTMLButtonElement) {
+            newFolderButton.setAttribute(
+                'aria-label',
+                `New folder in ${dirPath}`
+            );
+            newFolderButton.onmousedown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            newFolderButton.onclick = (event) => {
+                event.stopPropagation();
+                void this.createTreeEntry(session, dirPath, 'directory');
+            };
+        }
+
+        if (newFileButton instanceof HTMLButtonElement) {
+            newFileButton.setAttribute('aria-label', `New file in ${dirPath}`);
+            newFileButton.onmousedown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            newFileButton.onclick = (event) => {
+                event.stopPropagation();
+                void this.createTreeEntry(session, dirPath, 'file');
+            };
+        }
+
+        list.appendChild(row);
     }
 
     updateTreeItem(li, file, session, renderToken) {
@@ -2761,7 +2914,7 @@ class EditorManager {
         }
     }
 
-    reconcileTreeList(list, files, session, renderToken) {
+    reconcileTreeList(list, dirPath, files, creatable, session, renderToken) {
         const existingItems = new Map();
         Array.from(list.children).forEach((child) => {
             if (child.tagName === 'LI' && child.dataset.path) {
@@ -2788,6 +2941,8 @@ class EditorManager {
         for (const li of orderedItems) {
             list.appendChild(li);
         }
+
+        this.updateTreeCreateRow(list, dirPath, creatable, session);
     }
 
     initMonaco() {
@@ -2995,11 +3150,26 @@ class EditorManager {
                 `/api/fs/list?path=${encodeURIComponent(dirPath)}`
             );
             if (!res.ok) return;
-            const files = await res.json();
+            const payload = await res.json();
+            const files = Array.isArray(payload)
+                ? payload
+                : Array.isArray(payload?.items)
+                    ? payload.items
+                    : [];
+            const creatable = Array.isArray(payload)
+                ? false
+                : !!payload?.creatable;
             if ((session.fileTreeRenderToken || 0) !== renderToken) return;
 
             const list = this.ensureTreeList(container);
-            this.reconcileTreeList(list, files, session, renderToken);
+            this.reconcileTreeList(
+                list,
+                dirPath,
+                files,
+                creatable,
+                session,
+                renderToken
+            );
             if ((session.fileTreeRenderToken || 0) !== renderToken) return;
 
             for (const file of files) {
