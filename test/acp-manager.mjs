@@ -41,9 +41,12 @@ class FakeRuntime extends EventEmitter {
         this.sessionCapabilities = {
             load: true,
             list: true,
+            listAll: true,
             resume: false,
             fork: false
         };
+        this.supportsAllListing = options.supportsAllListing !== false;
+        this.sessionCapabilities.listAll = this.supportsAllListing;
     }
 
     async createTab(meta) {
@@ -217,25 +220,37 @@ class FakeRuntime extends EventEmitter {
         return { ...tab };
     }
 
-    async listSessions({ cwd, cursor = '' } = {}) {
-        this.listRequests.push({ cwd, cursor });
+    async listSessions({ cwd, cursor = '', all = false } = {}) {
+        if (all && !this.supportsAllListing) {
+            this.listRequests.push({ cwd: null, cursor, all: true });
+            throw new Error('All-session listing unsupported');
+        }
+        this.listRequests.push({
+            cwd: all ? null : cwd,
+            cursor,
+            all
+        });
         return {
             sessions: [
                 {
                     sessionId: 'hist-1',
-                    cwd: cwd || this.cwd,
+                    cwd: (all ? '/tmp/other-project' : cwd) || this.cwd,
                     title: 'Previous run',
                     updatedAt: '2026-03-27T00:00:00.000Z'
                 },
                 {
                     sessionId: 'hist-2',
-                    cwd: cwd || this.cwd,
+                    cwd: (all ? '/tmp/project' : cwd) || this.cwd,
                     title: 'Earlier run',
                     updatedAt: '2026-03-26T00:00:00.000Z'
                 }
             ],
             nextCursor: ''
         };
+    }
+
+    getSessionCapabilities() {
+        return { ...this.sessionCapabilities };
     }
 
     async resumeTab(meta) {
@@ -580,6 +595,7 @@ describe('AcpManager', () => {
         assert.deepEqual(tab.sessionCapabilities, {
             load: true,
             list: true,
+            listAll: true,
             resume: false,
             fork: false
         });
@@ -598,9 +614,74 @@ describe('AcpManager', () => {
         const runtimeEntry = manager.runtimes.values().next().value;
         assert.deepEqual(runtimeEntry.runtime.listRequests, [{
             cwd: '/tmp/project',
-            cursor: ''
+            cursor: '',
+            all: false
         }]);
         assert.equal(runtimeEntry.runtime.idleScheduled, true);
+    });
+
+    it('uses all-session listing when the runtime supports it', async () => {
+        const { manager } = createManager();
+
+        const result = await manager.listSessions({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            all: true
+        });
+
+        assert.equal(result.sessions.length, 2);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.listRequests, [{
+            cwd: null,
+            cursor: '',
+            all: true
+        }]);
+    });
+
+    it('uses cwd-scoped listing when all-session listing is unsupported', async () => {
+        let persistedTabs = [];
+        let persistedConfigs = {};
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) => new FakeRuntime(
+                definition,
+                {
+                    ...options,
+                    supportsAllListing: false
+                }
+            ),
+            loadTabs: async () => persistedTabs,
+            saveTabs: async (tabs) => {
+                persistedTabs = structuredClone(tabs);
+            },
+            loadConfigs: async () => persistedConfigs,
+            saveConfigs: async (configs) => {
+                persistedConfigs = structuredClone(configs);
+            }
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const result = await manager.listSessions({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            all: true
+        });
+
+        assert.equal(result.sessions.length, 2);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.listRequests, [
+            {
+                cwd: '/tmp/project',
+                cursor: '',
+                all: false
+            }
+        ]);
     });
 
     it('creates a new tab from a historical session', async () => {

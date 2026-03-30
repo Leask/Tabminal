@@ -402,13 +402,19 @@ router.get('/api/agents', async (ctx) => {
 });
 
 router.get('/api/agents/sessions', async (ctx) => {
-    const { agentId = '', cwd = '', cursor = '' } = ctx.query || {};
+    const {
+        agentId = '',
+        cwd = '',
+        cursor = '',
+        all = ''
+    } = ctx.query || {};
     if (!agentId || typeof agentId !== 'string') {
         ctx.status = 400;
         ctx.body = { error: 'agentId is required' };
         return;
     }
-    if (!cwd || typeof cwd !== 'string') {
+    const wantsAll = all === '1' || all === 'true' || all === 'yes';
+    if (!wantsAll && (!cwd || typeof cwd !== 'string')) {
         ctx.status = 400;
         ctx.body = { error: 'cwd is required' };
         return;
@@ -422,6 +428,7 @@ router.get('/api/agents/sessions', async (ctx) => {
             const result = await acpManager.listSessions({
                 agentId,
                 cwd,
+                all: wantsAll,
                 cursor: nextCursor
             });
             sessions.push(...(Array.isArray(result?.sessions)
@@ -436,7 +443,8 @@ router.get('/api/agents/sessions', async (ctx) => {
         }
         ctx.body = {
             sessions: sessions.slice(0, 50),
-            nextCursor
+            nextCursor,
+            scope: wantsAll ? 'all' : 'cwd'
         };
     } catch (error) {
         const message = error?.message || 'Failed to list agent sessions';

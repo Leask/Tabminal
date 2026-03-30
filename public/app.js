@@ -5275,7 +5275,9 @@ class EditorManager {
             makeMarkdownPreviewWorkspaceTabKey(filePath);
         this.currentSession.workspaceState.lastNonTerminalTabKey =
             makeMarkdownPreviewWorkspaceTabKey(filePath);
-        this.currentSession.saveState({ touchWorkspace: true });
+        if (!isRestore) {
+            this.currentSession.saveState({ touchWorkspace: true });
+        }
         const file = this.getModel(filePath);
 
         this.renderEditorTabs();
@@ -5325,7 +5327,9 @@ class EditorManager {
         this.currentSession.workspaceState.activeTabKey = makeFileWorkspaceTabKey(filePath);
         this.currentSession.workspaceState.lastNonTerminalTabKey =
             makeFileWorkspaceTabKey(filePath);
-        this.currentSession.saveState({ touchWorkspace: true });
+        if (!isRestore) {
+            this.currentSession.saveState({ touchWorkspace: true });
+        }
         const file = this.getModel(filePath);
         
         this.renderEditorTabs();
@@ -5459,7 +5463,9 @@ class EditorManager {
         this.currentSession.workspaceState.lastNonTerminalTabKey = agentTabKey;
         noteRecentAgentTab(this.currentSession, agentTabKey);
         agentTab.needsAttention = false;
-        this.currentSession.saveState({ touchWorkspace: true });
+        if (!isRestore) {
+            this.currentSession.saveState({ touchWorkspace: true });
+        }
         this.renderEditorTabs();
         this.currentSession.updateTabUI();
         this.syncTerminalWorkspacePlacement(agentTabKey);
@@ -8844,7 +8850,8 @@ class AgentTab {
             const cwd = this.cwd || this.getLinkedSession()?.cwd || '';
             const params = new URLSearchParams({
                 agentId: this.agentId,
-                cwd
+                cwd,
+                all: '1'
             });
             const response = await this.server.fetch(
                 `/api/agents/sessions?${params.toString()}`
@@ -10083,6 +10090,7 @@ function normalizeAgentSessionCapabilities(sessionCapabilities) {
     return {
         load: !!source.load,
         list: !!source.list,
+        listAll: !!source.listAll,
         resume: !!source.resume,
         fork: !!source.fork
     };
@@ -10500,6 +10508,9 @@ function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
     const intent = getAgentPromptIntent(agentTab, promptValue);
     if (intent.kind !== 'resume') return [];
     const query = String(intent.query || '').toLowerCase();
+    const currentCwd = String(
+        agentTab?.cwd || agentTab?.getLinkedSession?.()?.cwd || ''
+    ).trim().toLowerCase();
     const openSessions = getOpenAgentSessionsForServer(
         agentTab?.serverId,
         agentTab?.agentId
@@ -10513,17 +10524,24 @@ function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
             ).toLowerCase();
             const cwd = String(session.cwd || '').toLowerCase();
             const sessionId = String(session.sessionId || '').toLowerCase();
+            const cwdMatch = !!currentCwd && cwd === currentCwd;
             const titleMatch = !query || displayName.includes(query);
-            const otherMatch = !query || cwd.includes(query) || sessionId.includes(query);
+            const otherMatch = !query
+                || cwd.includes(query)
+                || sessionId.includes(query);
             return {
                 session,
                 index,
+                cwdMatch,
                 titleMatch,
                 matched: titleMatch || otherMatch
             };
         })
         .filter(({ matched }) => matched)
         .sort((left, right) => {
+            if (left.cwdMatch !== right.cwdMatch) {
+                return left.cwdMatch ? -1 : 1;
+            }
             if (left.titleMatch !== right.titleMatch) {
                 return left.titleMatch ? -1 : 1;
             }

@@ -16,6 +16,11 @@ const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
 const DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS = 30 * 1000;
 const DEFAULT_PROBE_CACHE_TTL_MS = 15 * 1000;
 const DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS = 250;
+const ALL_SESSION_AGENT_IDS = new Set([
+    'claude',
+    'codex',
+    'copilot'
+]);
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
     'txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'toml',
     'ini', 'env', 'xml', 'html', 'htm', 'css', 'scss', 'less', 'csv',
@@ -104,7 +109,8 @@ function buildAgentConfigSummary(agentId, config = {}) {
 
 function normalizeAgentSessionCapabilities(
     agentCapabilities = null,
-    connection = null
+    connection = null,
+    definitionId = ''
 ) {
     const sessionCapabilities = (
         agentCapabilities?.sessionCapabilities
@@ -120,6 +126,11 @@ function normalizeAgentSessionCapabilities(
         list: !!(
             sessionCapabilities?.list
             && typeof connection?.listSessions === 'function'
+        ),
+        listAll: !!(
+            sessionCapabilities?.list
+            && typeof connection?.listSessions === 'function'
+            && ALL_SESSION_AGENT_IDS.has(String(definitionId || '').trim())
         ),
         resume: !!(
             sessionCapabilities?.resume
@@ -1514,15 +1525,21 @@ class AcpRuntime extends EventEmitter {
     #getSessionCapabilities() {
         const capabilities = normalizeAgentSessionCapabilities(
             this.agentCapabilities,
-            this.connection
+            this.connection,
+            this.definition?.id
         );
         if (
             this.definition?.id === 'gemini'
             && this.#supportsGeminiCliSessionListing()
         ) {
             capabilities.list = true;
+            capabilities.listAll = false;
         }
         return capabilities;
+    }
+
+    getSessionCapabilities() {
+        return { ...this.#getSessionCapabilities() };
     }
 
     #supportsGeminiCliSessionListing() {
@@ -1575,6 +1592,32 @@ class AcpRuntime extends EventEmitter {
             updatedAt: '',
             relativeUpdatedAt: session.relativeUpdatedAt
         }));
+    }
+
+    #supportsAllSessionListing() {
+        return !!(
+            this.#getSessionCapabilities().listAll
+            && typeof this.connection?.listSessions === 'function'
+        );
+    }
+
+    async #listSessionsViaConnection(options = {}) {
+        const response = await this.connection.listSessions({
+            cwd: options.all ? null : (options.cwd || this.cwd),
+            cursor: options.cursor || null
+        });
+        return {
+            sessions: Array.isArray(response?.sessions)
+                ? response.sessions
+                    .map(normalizeListedSessionInfo)
+                    .filter(
+                        (session) => session.sessionId && session.cwd
+                    )
+                : [],
+            nextCursor: typeof response?.nextCursor === 'string'
+                ? response.nextCursor
+                : ''
+        };
     }
 
     #resolveAvailableModes(availableModes, existingModes = []) {
@@ -2023,27 +2066,24 @@ class AcpRuntime extends EventEmitter {
         this.clearIdleShutdown();
 
         const sessionCapabilities = this.#getSessionCapabilities();
+        const wantsAll = !!options.all;
         if (
             sessionCapabilities.list
             && typeof this.connection?.listSessions === 'function'
         ) {
-            try {
-                const response = await this.connection.listSessions({
+            if (wantsAll && this.#supportsAllSessionListing()) {
+                return await this.#listSessionsViaConnection({
                     cwd: options.cwd || this.cwd,
-                    cursor: options.cursor || null
+                    cursor: options.cursor || '',
+                    all: true
                 });
-                return {
-                    sessions: Array.isArray(response?.sessions)
-                        ? response.sessions
-                            .map(normalizeListedSessionInfo)
-                            .filter(
-                                (session) => session.sessionId && session.cwd
-                            )
-                        : [],
-                    nextCursor: typeof response?.nextCursor === 'string'
-                        ? response.nextCursor
-                        : ''
-                };
+            }
+            try {
+                return await this.#listSessionsViaConnection({
+                    cwd: options.cwd || this.cwd,
+                    cursor: options.cursor || '',
+                    all: false
+                });
             } catch (error) {
                 const message = String(error?.message || '');
                 const canFallbackToCli = this.#supportsGeminiCliSessionListing();
@@ -3391,7 +3431,8 @@ export class AcpManager {
 
         const sessionCapabilities = normalizeAgentSessionCapabilities(
             runtime?.agentCapabilities,
-            runtime?.connection
+            runtime?.connection,
+            runtime?.definition?.id
         );
         const hasSessionCapabilities = serialized.sessionCapabilities
             && typeof serialized.sessionCapabilities === 'object';
@@ -3671,11 +3712,19 @@ export class AcpManager {
         const cwd = path.resolve(options.cwd || process.cwd());
         const { runtimeEntry, createdRuntime, runtimeStoreKey } =
             this.#ensureRuntimeEntry(definition, cwd);
+        const cursor = typeof options.cursor === 'string' ? options.cursor : '';
+        const sessionCapabilities = (
+            typeof runtimeEntry.runtime.getSessionCapabilities === 'function'
+                ? runtimeEntry.runtime.getSessionCapabilities()
+                : {}
+        );
+        const canListAll = !!(options.all && sessionCapabilities.listAll);
 
         try {
             const result = await runtimeEntry.runtime.listSessions({
                 cwd,
-                cursor: typeof options.cursor === 'string' ? options.cursor : ''
+                all: canListAll,
+                cursor
             });
             this.#clearDefinitionAvailabilityOverride(definition.id);
             if (runtimeEntry.runtime.tabs.size === 0) {
