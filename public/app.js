@@ -104,6 +104,7 @@ const editorPane = document.getElementById('editor-pane');
 const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const FILE_TREE_REFRESH_INTERVAL_MS = 3000;
+const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
@@ -809,6 +810,10 @@ class EditorManager {
             renderedWidth: 0,
             relayoutTimer: 0
         };
+        this.fileVersionCheckTimer = null;
+        this.fileVersionCheckPromise = null;
+        this.fileConflictDialogKey = '';
+        this.suppressFileWriteCapture = false;
         this.agentTranscriptResizeObserver = null;
 
         this.initTerminalControls();
@@ -820,6 +825,9 @@ class EditorManager {
             this.refreshAgentTimelineTimestamps();
             this.refreshAgentUsageHud();
         }, 1000);
+        this.fileVersionCheckTimer = window.setInterval(() => {
+            void this.checkActiveFileVersion();
+        }, FILE_VERSION_CHECK_INTERVAL_MS);
     }
 
     isTerminalTabPinned(session = this.currentSession) {
@@ -1534,6 +1542,467 @@ class EditorManager {
         const store = this.getModelStore(session);
         if (!store) return;
         store.set(filePath, value);
+    }
+
+    normalizePendingFileWrite(write, entry = null) {
+        if (write && typeof write === 'object' && !Array.isArray(write)) {
+            return {
+                content: typeof write.content === 'string' ? write.content : '',
+                expectedVersion: typeof write.expectedVersion === 'string'
+                    ? write.expectedVersion
+                    : (
+                        typeof entry?.version === 'string'
+                            ? entry.version
+                            : ''
+                    ),
+                blocked: write.blocked === true,
+                force: write.force === true
+            };
+        }
+        return {
+            content: typeof write === 'string' ? write : '',
+            expectedVersion: typeof entry?.version === 'string'
+                ? entry.version
+                : '',
+            blocked: false,
+            force: false
+        };
+    }
+
+    queuePendingFileWrite(session, filePath, content, overrides = {}) {
+        if (!session || !filePath) return;
+        const pending = getPendingSession(session.key);
+        const entry = this.getModel(filePath, session);
+        const previous = this.normalizePendingFileWrite(
+            pending.fileWrites.get(filePath),
+            entry
+        );
+        pending.fileWrites.set(filePath, {
+            ...previous,
+            content,
+            expectedVersion: typeof overrides.expectedVersion === 'string'
+                ? overrides.expectedVersion
+                : previous.expectedVersion,
+            blocked: overrides.blocked ?? false,
+            force: overrides.force ?? false
+        });
+    }
+
+    getPendingFileWrite(session, filePath) {
+        if (!session || !filePath) return null;
+        const pending = getPendingSession(session.key);
+        if (!pending?.fileWrites?.has(filePath)) {
+            return null;
+        }
+        return this.normalizePendingFileWrite(
+            pending.fileWrites.get(filePath),
+            this.getModel(filePath, session)
+        );
+    }
+
+    getTextFileEntry(filePath, session = this.currentSession) {
+        const entry = this.getModel(filePath, session);
+        if (!entry || entry.type !== 'text') {
+            return null;
+        }
+        if (typeof entry.contentVersion !== 'string') {
+            entry.contentVersion = typeof entry.version === 'string'
+                ? entry.version
+                : '';
+        }
+        return entry;
+    }
+
+    getCurrentTextFileContent(filePath, session = this.currentSession) {
+        const entry = this.getTextFileEntry(filePath, session);
+        if (!entry) return '';
+        try {
+            if (typeof entry.model?.getValue === 'function') {
+                return entry.model.getValue();
+            }
+        } catch {
+            // Ignore model access failures and fall back to cached content.
+        }
+        return typeof entry.content === 'string' ? entry.content : '';
+    }
+
+    isActiveTextFile(session, filePath) {
+        if (!session || !filePath) return false;
+        if (this.currentSession?.key !== session.key) return false;
+        if (state.activeSessionKey !== session.key) return false;
+        if (session.editorState.activeFilePath !== filePath) return false;
+        return this.getActiveWorkspaceTabKey(session)
+            === makeFileWorkspaceTabKey(filePath);
+    }
+
+    updateTextFileEntry(filePath, updates, session = this.currentSession) {
+        const entry = this.getTextFileEntry(filePath, session);
+        if (!entry || !updates || typeof updates !== 'object') {
+            return null;
+        }
+        Object.assign(entry, updates);
+        return entry;
+    }
+
+    updateActiveEditorReadOnlyState(session, filePath, readonly) {
+        if (!this.isActiveTextFile(session, filePath) || !this.editor) {
+            return;
+        }
+        this.editor.updateOptions({ readOnly: !!readonly });
+        this.renderEditorTabs();
+    }
+
+    applyProgrammaticTextContent(entry, nextContent) {
+        if (
+            !entry?.model
+            || typeof entry.model.getValue !== 'function'
+            || typeof entry.model.setValue !== 'function'
+        ) {
+            entry.content = nextContent;
+            return;
+        }
+        const currentValue = entry.model.getValue();
+        if (currentValue === nextContent) {
+            entry.content = nextContent;
+            return;
+        }
+        this.suppressFileWriteCapture = true;
+        try {
+            entry.model.setValue(nextContent);
+        } finally {
+            this.suppressFileWriteCapture = false;
+        }
+        entry.content = nextContent;
+    }
+
+    async readTextFileSnapshot(session, filePath) {
+        if (!session || !filePath) {
+            throw new Error('File path required');
+        }
+        const response = await session.server.fetch(
+            `/api/fs/read?path=${encodeURIComponent(filePath)}`
+        );
+        if (!response.ok) {
+            await throwResponseError(response, 'Failed to read file');
+        }
+        return await response.json();
+    }
+
+    async readTextFileInfo(session, filePath) {
+        if (!session || !filePath) {
+            throw new Error('File path required');
+        }
+        const response = await session.server.fetch(
+            `/api/fs/info?path=${encodeURIComponent(filePath)}`
+        );
+        if (!response.ok) {
+            await throwResponseError(response, 'Failed to inspect file');
+        }
+        return await response.json();
+    }
+
+    applyTextFileSnapshot(session, filePath, snapshot, options = {}) {
+        const entry = this.getTextFileEntry(filePath, session);
+        if (!entry || !snapshot || typeof snapshot !== 'object') {
+            return null;
+        }
+        const useLocalContent = options.useLocalContent === true;
+        const nextReadonly = !!snapshot.readonly;
+        const nextVersion = typeof snapshot.version === 'string'
+            ? snapshot.version
+            : entry.version || '';
+        const nextContent = typeof snapshot.content === 'string'
+            ? snapshot.content
+            : entry.content || '';
+
+        if (!entry.model && this.monacoInstance) {
+            const uri = this.monacoInstance.Uri.file(filePath);
+            const existing = this.monacoInstance.editor.getModel(uri);
+            entry.model = existing || this.monacoInstance.editor.createModel(
+                typeof entry.content === 'string' ? entry.content : '',
+                undefined,
+                uri
+            );
+        }
+
+        if (!useLocalContent) {
+            const restoreViewState = (
+                this.isActiveTextFile(session, filePath)
+                && this.editor
+                && this.editor.getModel?.() === entry.model
+            )
+                ? this.editor.saveViewState()
+                : null;
+            this.applyProgrammaticTextContent(entry, nextContent);
+            if (restoreViewState && this.editor) {
+                this.editor.restoreViewState(restoreViewState);
+            }
+            entry.contentVersion = nextVersion;
+        } else if (typeof snapshot.content === 'string') {
+            entry.content = snapshot.content;
+            entry.contentVersion = nextVersion;
+        }
+
+        entry.version = nextVersion;
+        entry.readonly = nextReadonly;
+        entry.size = Number.isFinite(snapshot.size) ? snapshot.size : entry.size;
+        entry.mtimeMs = Number.isFinite(snapshot.mtimeMs)
+            ? snapshot.mtimeMs
+            : entry.mtimeMs;
+        entry.lastDismissedRemoteVersion = '';
+        this.updateActiveEditorReadOnlyState(session, filePath, nextReadonly);
+        return entry;
+    }
+
+    getFileConflictDialogKey(session, filePath, version, source) {
+        return [
+            session?.key || '',
+            filePath || '',
+            version || '',
+            source || ''
+        ].join(':');
+    }
+
+    async promptTextFileConflict(session, filePath, snapshot, source) {
+        if (!session || !filePath || !snapshot) {
+            return 'dismiss';
+        }
+        const version = typeof snapshot.version === 'string'
+            ? snapshot.version
+            : '';
+        const dialogKey = this.getFileConflictDialogKey(
+            session,
+            filePath,
+            version,
+            source
+        );
+        if (this.fileConflictDialogKey === dialogKey) {
+            return 'dismiss';
+        }
+        this.fileConflictDialogKey = dialogKey;
+        const fileName = filePath.split('/').pop() || filePath;
+        const keepLocal = await showConfirmModal({
+            title: source === 'save-conflict'
+                ? 'Save Conflict'
+                : 'File Changed on Disk',
+            message: source === 'save-conflict'
+                ? `“${fileName}” changed on disk before Tabminal could save it.`
+                : `“${fileName}” was modified outside Tabminal.`,
+            note: 'Use Remote reloads the disk version. Use Local keeps your '
+                + 'current editor contents and overwrites the remote change '
+                + 'on the next save.',
+            confirmLabel: 'Use Local',
+            cancelLabel: 'Use Remote',
+            preferredFocus: 'cancel',
+            allowDismiss: false,
+            returnFocus: this.isActiveTextFile(session, filePath)
+                ? this.monacoContainer
+                : document.activeElement
+        });
+        this.fileConflictDialogKey = '';
+        return keepLocal ? 'local' : 'remote';
+    }
+
+    async resolveTextFileConflict(session, filePath, snapshot, source) {
+        const entry = this.getTextFileEntry(filePath, session);
+        if (!entry || !snapshot) {
+            return;
+        }
+        const decision = await this.promptTextFileConflict(
+            session,
+            filePath,
+            snapshot,
+            source
+        );
+        if (decision === 'remote') {
+            const remoteSnapshot = typeof snapshot.content === 'string'
+                ? snapshot
+                : await this.readTextFileSnapshot(session, filePath);
+            this.applyTextFileSnapshot(session, filePath, remoteSnapshot);
+            this.clearPendingFileWrite(session.key, filePath);
+            if (this.isActiveTextFile(session, filePath)) {
+                this.renderEditorTabs();
+            }
+            return;
+        }
+
+        if (decision === 'local') {
+            const currentContent = this.getCurrentTextFileContent(
+                filePath,
+                session
+            );
+            this.applyTextFileSnapshot(session, filePath, snapshot, {
+                useLocalContent: true
+            });
+            this.queuePendingFileWrite(session, filePath, currentContent, {
+                expectedVersion: typeof snapshot.version === 'string'
+                    ? snapshot.version
+                    : entry.version || '',
+                blocked: false,
+                force: false
+            });
+            requestImmediateServerSync(session.server, 0);
+        }
+    }
+
+    async applyFileWriteResults(server, sessionResults, sentFileWrites) {
+        if (!server || !Array.isArray(sessionResults)) {
+            return;
+        }
+        for (const update of sessionResults) {
+            const session = state.sessions.get(
+                makeSessionKey(server.id, update?.id)
+            );
+            if (!session || !Array.isArray(update?.fileWrites)) {
+                continue;
+            }
+            for (const result of update.fileWrites) {
+                const filePath = typeof result?.path === 'string'
+                    ? result.path
+                    : '';
+                if (!filePath) continue;
+                const entry = this.getTextFileEntry(filePath, session);
+                const sentWrite = sentFileWrites?.get(update.id)?.get(filePath)
+                    || null;
+                if (!entry) {
+                    this.clearPendingFileWrite(session.key, filePath);
+                    continue;
+                }
+                if (result.status === 'ok') {
+                    const currentWrite = this.getPendingFileWrite(
+                        session,
+                        filePath
+                    );
+                    const sentContent = sentWrite?.content
+                        ?? this.getCurrentTextFileContent(filePath, session);
+                    entry.content = sentContent;
+                    entry.version = typeof result.version === 'string'
+                        ? result.version
+                        : entry.version || '';
+                    entry.contentVersion = entry.version;
+                    entry.readonly = !!result.readonly;
+                    entry.lastDismissedRemoteVersion = '';
+                    const hasNewerPendingWrite = !!(
+                        currentWrite
+                        && sentWrite
+                        && (
+                            currentWrite.content !== sentWrite.content
+                            || currentWrite.expectedVersion
+                                !== sentWrite.expectedVersion
+                            || currentWrite.force !== sentWrite.force
+                        )
+                    );
+                    if (hasNewerPendingWrite) {
+                        this.queuePendingFileWrite(
+                            session,
+                            filePath,
+                            currentWrite.content,
+                            {
+                                expectedVersion: entry.version,
+                                blocked: false,
+                                force: currentWrite.force
+                            }
+                        );
+                    } else {
+                        this.clearPendingFileWrite(session.key, filePath);
+                    }
+                    this.updateActiveEditorReadOnlyState(
+                        session,
+                        filePath,
+                        entry.readonly
+                    );
+                    continue;
+                }
+                if (result.status === 'conflict') {
+                    this.queuePendingFileWrite(
+                        session,
+                        filePath,
+                        this.getCurrentTextFileContent(filePath, session),
+                        {
+                            expectedVersion: typeof result.version === 'string'
+                                ? result.version
+                                : entry.version || '',
+                            blocked: true,
+                            force: false
+                        }
+                    );
+                    await this.resolveTextFileConflict(
+                        session,
+                        filePath,
+                        result,
+                        'save-conflict'
+                    );
+                    continue;
+                }
+                this.queuePendingFileWrite(
+                    session,
+                    filePath,
+                    this.getCurrentTextFileContent(filePath, session),
+                    {
+                        blocked: true
+                    }
+                );
+                alert(result?.error || 'Failed to save file.', {
+                    type: 'error',
+                    title: 'Save Error'
+                });
+            }
+        }
+    }
+
+    async checkActiveFileVersion() {
+        if (
+            this.fileVersionCheckPromise
+            || document.visibilityState === 'hidden'
+            || isConfirmModalOpen()
+        ) {
+            return;
+        }
+        const session = this.currentSession;
+        const filePath = session?.editorState?.activeFilePath || '';
+        if (!this.isActiveTextFile(session, filePath)) {
+            return;
+        }
+        const entry = this.getTextFileEntry(filePath, session);
+        if (!entry || entry.readonly) {
+            return;
+        }
+        this.fileVersionCheckPromise = (async () => {
+            try {
+                const info = await this.readTextFileInfo(session, filePath);
+                if (
+                    !info
+                    || typeof info.version !== 'string'
+                    || !info.version
+                    || info.version === entry.version
+                    || info.version === entry.lastDismissedRemoteVersion
+                ) {
+                    return;
+                }
+                const pendingWrite = this.getPendingFileWrite(session, filePath);
+                if (pendingWrite?.blocked) {
+                    return;
+                }
+                await this.resolveTextFileConflict(
+                    session,
+                    filePath,
+                    info,
+                    'remote-change'
+                );
+            } catch (error) {
+                console.warn('Failed to check file version:', error);
+            }
+        })();
+        try {
+            await this.fileVersionCheckPromise;
+        } finally {
+            this.fileVersionCheckPromise = null;
+        }
+    }
+
+    clearPendingFileWrite(sessionKey, filePath) {
+        const pending = pendingChanges.sessions.get(sessionKey);
+        pending?.fileWrites?.delete(filePath);
     }
 
     remapTreePath(pathValue, oldPath, newPath, isDirectory) {
@@ -3013,12 +3482,26 @@ class EditorManager {
             });
             
             this.editor.onDidChangeModelContent(() => {
+                if (this.suppressFileWriteCapture) return;
                 if (!this.currentSession) return;
                 const filePath = this.currentSession.editorState.activeFilePath;
                 if (!filePath) return;
-                
-                const pending = getPendingSession(this.currentSession.key);
-                pending.fileWrites.set(filePath, this.editor.getValue());
+                const entry = this.getTextFileEntry(filePath, this.currentSession);
+                if (!entry) return;
+                const nextContent = this.editor.getValue();
+                if (
+                    nextContent === (entry.content || '')
+                    && (entry.contentVersion || '') === (entry.version || '')
+                ) {
+                    this.clearPendingFileWrite(this.currentSession.key, filePath);
+                    return;
+                }
+                entry.lastDismissedRemoteVersion = '';
+                this.queuePendingFileWrite(
+                    this.currentSession,
+                    filePath,
+                    nextContent
+                );
             });
             
             monaco.editor.defineTheme('solarized-dark', {
@@ -3584,33 +4067,29 @@ class EditorManager {
         const isImage = isSupportedImagePath(filePath);
         const isPdf = isSupportedPdfPath(filePath);
 
-        if (!this.getModel(filePath)) {
+        if (!this.getModel(filePath, targetSession)) {
             let model = null;
             let content = null;
             let readonly = false;
+            let version = '';
+            let size = 0;
+            let mtimeMs = 0;
 
             if (!isImage && !isPdf) {
                 try {
-                    const res = await targetSession.server.fetch(
-                        `/api/fs/read?path=${encodeURIComponent(filePath)}`
+                    const data = await this.readTextFileSnapshot(
+                        targetSession,
+                        filePath
                     );
-                    if (res.status === 415) {
-                        await showConfirmModal({
-                            title: 'Unsupported File Type',
-                            message: 'This file type is not supported yet.',
-                            note: 'Only text files, supported images, and PDFs can be opened right now.',
-                            confirmLabel: 'OK',
-                            hideCancel: true,
-                            returnFocus: document.activeElement
-                        });
-                        return;
-                    }
-                    if (!res.ok) {
-                        throw new Error('Failed to read file');
-                    }
-                    const data = await res.json();
                     content = data.content;
                     readonly = data.readonly;
+                    version = typeof data.version === 'string'
+                        ? data.version
+                        : '';
+                    size = Number.isFinite(data.size) ? data.size : 0;
+                    mtimeMs = Number.isFinite(data.mtimeMs)
+                        ? data.mtimeMs
+                        : 0;
                     
                     if (this.monacoInstance) {
                         const uri = this.monacoInstance.Uri.file(filePath);
@@ -3623,6 +4102,17 @@ class EditorManager {
                         }
                     }
                 } catch (err) {
+                    if (err?.message === 'Unsupported file type') {
+                        await showConfirmModal({
+                            title: 'Unsupported File Type',
+                            message: 'This file type is not supported yet.',
+                            note: 'Only text files, supported images, and PDFs can be opened right now.',
+                            confirmLabel: 'OK',
+                            hideCancel: true,
+                            returnFocus: document.activeElement
+                        });
+                        return;
+                    }
                     alert(`Failed to open file: ${err.message}`, { type: 'error', title: 'Error' });
                     this.closeFile(filePath);
                     return;
@@ -3633,8 +4123,13 @@ class EditorManager {
                 type: isImage ? 'image' : isPdf ? 'pdf' : 'text',
                 model: model,
                 content: content,
-                readonly: readonly
-            });
+                readonly: readonly,
+                version,
+                contentVersion: version,
+                size,
+                mtimeMs,
+                lastDismissedRemoteVersion: ''
+            }, targetSession);
         }
 
         let touchedWorkspace = false;
@@ -3928,6 +4423,7 @@ class EditorManager {
                 // Force layout to ensure content is visible
                 requestAnimationFrame(() => this.editor.layout());
             }
+            void this.checkActiveFileVersion();
         }
     }
 
@@ -11866,6 +12362,7 @@ async function syncServer(server) {
         }
 
         const updates = { sessions: [] };
+        const sentFileWrites = new Map();
         for (const [sessionKey, pending] of pendingChanges.sessions) {
             const { serverId, sessionId } = splitSessionKey(sessionKey);
             if (serverId !== server.id) continue;
@@ -11882,10 +12379,31 @@ async function syncServer(server) {
                 hasUpdate = true;
             }
             if (pending.fileWrites && pending.fileWrites.size > 0) {
-                sessionUpdate.fileWrites = Array.from(
+                const fileWrites = Array.from(
                     pending.fileWrites.entries()
-                ).map(([path, content]) => ({ path, content }));
-                hasUpdate = true;
+                )
+                    .map(([path, write]) => ({
+                        path,
+                        write: editorManager.normalizePendingFileWrite(write)
+                    }))
+                    .filter(({ write }) => !write.blocked);
+                if (fileWrites.length > 0) {
+                    sessionUpdate.fileWrites = fileWrites.map(
+                        ({ path, write }) => ({
+                            path,
+                            content: write.content,
+                            expectedVersion: write.expectedVersion,
+                            force: write.force === true
+                        })
+                    );
+                    sentFileWrites.set(
+                        sessionUpdate.id,
+                        new Map(
+                            fileWrites.map(({ path, write }) => [path, write])
+                        )
+                    );
+                    hasUpdate = true;
+                }
             }
 
             if (hasUpdate) {
@@ -11929,11 +12447,6 @@ async function syncServer(server) {
 
                 if (update.resize) delete pending.resize;
                 if (update.workspaceState) delete pending.workspaceState;
-                if (update.fileWrites) {
-                    for (const file of update.fileWrites) {
-                        pending.fileWrites.delete(file.path);
-                    }
-                }
             }
 
             const data = await response.json();
@@ -11960,6 +12473,33 @@ async function syncServer(server) {
             const sessions = Array.isArray(data) ? data : data.sessions;
             reconcileSessions(server, sessions || []);
             reconcileAgentInventory(server, data.agents);
+            await editorManager.applyFileWriteResults(
+                server,
+                Array.isArray(data?.fileWriteResults)
+                    ? data.fileWriteResults
+                    : [],
+                sentFileWrites
+            );
+
+            for (const [sessionId, writes] of sentFileWrites.entries()) {
+                const pending = pendingChanges.sessions.get(
+                    makeSessionKey(server.id, sessionId)
+                );
+                if (!pending?.fileWrites) {
+                    continue;
+                }
+                for (const [path] of writes.entries()) {
+                    if (!pending.fileWrites.has(path)) {
+                        continue;
+                    }
+                    const current = editorManager.normalizePendingFileWrite(
+                        pending.fileWrites.get(path)
+                    );
+                    if (!current.blocked) {
+                        pending.fileWrites.delete(path);
+                    }
+                }
+            }
         } catch (error) {
             if (!wasReconnecting) {
                 console.warn(
@@ -12946,7 +13486,8 @@ const confirmModalState = {
     resolve: null,
     returnFocus: null,
     preferredFocus: 'confirm',
-    hideCancel: false
+    hideCancel: false,
+    allowDismiss: true
 };
 
 function isConfirmModalOpen() {
@@ -12985,6 +13526,7 @@ function settleConfirmModal(result) {
     confirmModalState.returnFocus = null;
     confirmModalState.preferredFocus = 'confirm';
     confirmModalState.hideCancel = false;
+    confirmModalState.allowDismiss = true;
     if (returnFocus instanceof HTMLElement) {
         requestAnimationFrame(() => {
             try {
@@ -13002,8 +13544,11 @@ function showConfirmModal({
     message = '',
     note = '',
     confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
     danger = false,
     hideCancel = false,
+    preferredFocus = 'confirm',
+    allowDismiss = true,
     returnFocus = null
 } = {}) {
     if (
@@ -13023,13 +13568,17 @@ function showConfirmModal({
     confirmModalMessage.textContent = message;
     confirmModalNote.textContent = note;
     confirmModalNote.style.display = note ? '' : 'none';
+    confirmModalCancel.textContent = cancelLabel;
     confirmModalCancel.style.display = hideCancel ? 'none' : '';
     confirmModalConfirm.textContent = confirmLabel;
     confirmModalConfirm.classList.toggle('danger-button', danger);
     confirmModal.style.display = 'flex';
     confirmModalState.returnFocus = returnFocus;
     confirmModalState.hideCancel = hideCancel;
-    confirmModalState.preferredFocus = 'confirm';
+    confirmModalState.preferredFocus = preferredFocus === 'cancel'
+        ? 'cancel'
+        : 'confirm';
+    confirmModalState.allowDismiss = allowDismiss !== false;
     requestAnimationFrame(() => {
         getConfirmModalPreferredButton()?.focus({ preventScroll: true });
     });
@@ -13219,12 +13768,14 @@ window.addEventListener('focus', () => {
     enterAppNotificationQuietPeriod();
     editorManager.refreshVisibleSessionTrees();
     editorManager.updateTreeAutoRefresh();
+    void editorManager.checkActiveFileVersion();
 });
 window.addEventListener('pageshow', () => {
     noteAppInteraction();
     enterAppNotificationQuietPeriod();
     editorManager.refreshVisibleSessionTrees();
     editorManager.updateTreeAutoRefresh();
+    void editorManager.checkActiveFileVersion();
 });
 
 document.addEventListener('click', () => {
@@ -13236,6 +13787,7 @@ document.addEventListener('visibilitychange', () => {
         enterAppNotificationQuietPeriod();
         clearVisibleAttentionState();
         editorManager.refreshVisibleSessionTrees();
+        void editorManager.checkActiveFileVersion();
     }
     editorManager.updateTreeAutoRefresh();
 });
@@ -13666,7 +14218,10 @@ if (
     });
 
     confirmModal.addEventListener('click', (event) => {
-        if (event.target === confirmModal) {
+        if (
+            event.target === confirmModal
+            && confirmModalState.allowDismiss
+        ) {
             settleConfirmModal(false);
         }
     });
@@ -13677,6 +14232,11 @@ if (
 
     confirmModal.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
+            if (!confirmModalState.allowDismiss) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
             event.preventDefault();
             settleConfirmModal(false);
             return;

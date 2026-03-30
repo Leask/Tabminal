@@ -1,5 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -48,6 +49,81 @@ export function isSupportedTextBuffer(buffer) {
     } catch {
         return false;
     }
+}
+
+function createFsRouteError(message, status) {
+    const error = new Error(message);
+    error.status = status;
+    return error;
+}
+
+export function buildTextFileVersion(buffer) {
+    return crypto
+        .createHash('sha256')
+        .update(buffer)
+        .digest('hex');
+}
+
+async function canWriteExistingFile(targetPath) {
+    try {
+        const handle = await fs.open(targetPath, 'r+');
+        await handle.close();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export async function readTextFileSnapshot(fullPath) {
+    const stats = await fs.stat(fullPath);
+
+    if (!stats.isFile()) {
+        throw createFsRouteError('Not a file', 400);
+    }
+
+    if (stats.size > 1024 * 1024 * 5) {
+        throw createFsRouteError('File too large', 400);
+    }
+
+    const contentBuffer = await fs.readFile(fullPath);
+    if (!isSupportedTextBuffer(contentBuffer)) {
+        const error = createFsRouteError('Unsupported file type', 415);
+        error.code = 'unsupported-file-type';
+        throw error;
+    }
+
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    const content = decoder.decode(contentBuffer);
+
+    return {
+        content,
+        readonly: !(await canWriteExistingFile(fullPath)),
+        version: buildTextFileVersion(contentBuffer),
+        size: stats.size,
+        mtimeMs: stats.mtimeMs
+    };
+}
+
+export async function writeTextFileSnapshot(
+    fullPath,
+    content,
+    expectedVersion = '',
+    force = false
+) {
+    const current = await readTextFileSnapshot(fullPath);
+    if (
+        !force
+        && expectedVersion
+        && expectedVersion !== current.version
+    ) {
+        const error = createFsRouteError('File version conflict', 409);
+        error.code = 'file-version-conflict';
+        error.snapshot = current;
+        throw error;
+    }
+
+    await fs.writeFile(fullPath, content, 'utf8');
+    return await readTextFileSnapshot(fullPath);
 }
 
 function joinRelativePath(basePath, name) {
@@ -330,46 +406,41 @@ export const setupFsRoutes = (router) => {
 
         try {
             const fullPath = resolvePath(baseDir, filePath);
-            const stats = await fs.stat(fullPath);
-
-            if (!stats.isFile()) {
-                ctx.status = 400;
-                ctx.body = { error: 'Not a file' };
-                return;
-            }
-
-            if (stats.size > 1024 * 1024 * 5) { // 5MB limit for now
-                ctx.status = 400;
-                ctx.body = { error: 'File too large' };
-                return;
-            }
-
-            const contentBuffer = await fs.readFile(fullPath);
-            if (!isSupportedTextBuffer(contentBuffer)) {
-                ctx.status = 415;
-                ctx.body = {
-                    error: 'Unsupported file type',
-                    code: 'unsupported-file-type'
-                };
-                return;
-            }
-
-            const decoder = new TextDecoder('utf-8', { fatal: true });
-            const content = decoder.decode(contentBuffer);
-            
-            let readonly = false;
-            try {
-                const handle = await fs.open(fullPath, 'r+');
-                await handle.close();
-            } catch {
-                readonly = true;
-            }
-
-            ctx.body = { content, readonly };
+            ctx.body = await readTextFileSnapshot(fullPath);
         } catch (err) {
             console.error('FS Read Error:', err);
-            ctx.status = 500;
-            ctx.body = { error: err.message };
+            ctx.status = err?.status || 500;
+            ctx.body = {
+                error: err.message,
+                ...(err?.code ? { code: err.code } : {})
+            };
+        }
+    });
+
+    router.get('/api/fs/info', async (ctx) => {
+        const filePath = ctx.query.path;
+        if (!filePath) {
+            ctx.status = 400;
+            ctx.body = { error: 'Path required' };
+            return;
+        }
+
+        try {
+            const fullPath = resolvePath(baseDir, filePath);
+            const snapshot = await readTextFileSnapshot(fullPath);
+            ctx.body = {
+                readonly: snapshot.readonly,
+                version: snapshot.version,
+                size: snapshot.size,
+                mtimeMs: snapshot.mtimeMs
+            };
+        } catch (err) {
+            console.error('FS Info Error:', err);
+            ctx.status = err?.status || 500;
+            ctx.body = {
+                error: err.message,
+                ...(err?.code ? { code: err.code } : {})
+            };
         }
     });
 

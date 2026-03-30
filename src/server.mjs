@@ -19,7 +19,10 @@ import { AcpManager } from './acp-manager.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import { authMiddleware, verifyClient } from './auth.mjs';
-import { setupFsRoutes } from './fs-routes.mjs';
+import {
+    setupFsRoutes,
+    writeTextFileSnapshot
+} from './fs-routes.mjs';
 import * as persistence from './persistence.mjs';
 import { alan, network, web } from 'utilitas';
 
@@ -206,6 +209,7 @@ setupFsRoutes(router);
 
 // API routes for session management
 router.all('/api/heartbeat', async (ctx) => {
+    const fileWriteResults = [];
     if (ctx.method === 'POST') {
         const { updates } = ctx.request.body;
         if (updates && updates.sessions) {
@@ -223,12 +227,49 @@ router.all('/api/heartbeat', async (ctx) => {
                         });
                     }
                     if (update.fileWrites) {
+                        const sessionResults = [];
                         for (const file of update.fileWrites) {
                             try {
-                                await fsPromises.writeFile(file.path, file.content);
+                                const snapshot = await writeTextFileSnapshot(
+                                    file.path,
+                                    file.content,
+                                    file.expectedVersion,
+                                    file.force === true
+                                );
+                                sessionResults.push({
+                                    path: file.path,
+                                    status: 'ok',
+                                    version: snapshot.version,
+                                    readonly: snapshot.readonly
+                                });
                             } catch (e) {
-                                console.error(`[Heartbeat] Write failed: ${file.path}`, e);
+                                if (e?.status === 409) {
+                                    sessionResults.push({
+                                        path: file.path,
+                                        status: 'conflict',
+                                        version: e.snapshot?.version || '',
+                                        content: e.snapshot?.content || '',
+                                        readonly: !!e.snapshot?.readonly,
+                                        error: e.message
+                                    });
+                                    continue;
+                                }
+                                console.error(
+                                    `[Heartbeat] Write failed: ${file.path}`,
+                                    e
+                                );
+                                sessionResults.push({
+                                    path: file.path,
+                                    status: 'error',
+                                    error: e?.message || 'Write failed'
+                                });
                             }
+                        }
+                        if (sessionResults.length > 0) {
+                            fileWriteResults.push({
+                                id: update.id,
+                                fileWrites: sessionResults
+                            });
                         }
                     }
                 }
@@ -239,6 +280,7 @@ router.all('/api/heartbeat', async (ctx) => {
     ctx.body = {
         sessions: terminalManager.listSessions(),
         agents: await acpManager.listInventory(),
+        fileWriteResults,
         system: systemMonitor.getStats(),
         runtime: {
             bootId: SERVER_BOOT_ID

@@ -5,9 +5,12 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+    buildTextFileVersion,
     createUniqueChild,
     ensureRenameTargetAvailable,
-    isSupportedTextBuffer
+    isSupportedTextBuffer,
+    readTextFileSnapshot,
+    writeTextFileSnapshot
 } from '../src/fs-routes.mjs';
 
 describe('FS read text detection', () => {
@@ -93,6 +96,72 @@ describe('FS rename target validation', () => {
             await assert.rejects(
                 ensureRenameTargetAvailable(tempDir, 'a', 'b'),
                 (error) => error?.status === 409
+            );
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('FS text snapshot versioning', () => {
+    it('returns a stable content hash version', async () => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        try {
+            const filePath = path.join(tempDir, 'sample.txt');
+            await fs.writeFile(filePath, 'hello\n', 'utf8');
+
+            const snapshot = await readTextFileSnapshot(filePath);
+
+            assert.equal(
+                snapshot.version,
+                buildTextFileVersion(Buffer.from('hello\n', 'utf8'))
+            );
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('writes when expected version matches', async () => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        try {
+            const filePath = path.join(tempDir, 'sample.txt');
+            await fs.writeFile(filePath, 'before\n', 'utf8');
+            const before = await readTextFileSnapshot(filePath);
+
+            const after = await writeTextFileSnapshot(
+                filePath,
+                'after\n',
+                before.version
+            );
+
+            assert.equal(after.content, 'after\n');
+            assert.notEqual(after.version, before.version);
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects writes when expected version is stale', async () => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        try {
+            const filePath = path.join(tempDir, 'sample.txt');
+            await fs.writeFile(filePath, 'before\n', 'utf8');
+            const before = await readTextFileSnapshot(filePath);
+            await fs.writeFile(filePath, 'remote\n', 'utf8');
+
+            await assert.rejects(
+                writeTextFileSnapshot(filePath, 'local\n', before.version),
+                (error) => (
+                    error?.status === 409
+                    && error?.code === 'file-version-conflict'
+                    && error?.snapshot?.content === 'remote\n'
+                )
             );
         } finally {
             await fs.rm(tempDir, { recursive: true, force: true });
