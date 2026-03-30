@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 
 const { TerminalManager } = await import('../src/terminal-manager.mjs');
 
@@ -161,5 +162,96 @@ describe('TerminalManager workspace sync', () => {
             session.editorState.activeWorkspaceTabKey,
             'preview:/tmp/readme.md'
         );
+    });
+
+    it('selects the latest workspace cwd for new sessions', () => {
+        const manager = new TerminalManager();
+        manager.sessions.set('older', {
+            cwd: '/tmp/older',
+            createdAt: '2026-03-29T10:00:00.000Z',
+            updatedAt: '2026-03-29T10:05:00.000Z',
+            editorState: createWorkspaceState({
+                updatedAt: 10,
+                updatedBy: 'device-a'
+            })
+        });
+        manager.sessions.set('newer', {
+            cwd: '/tmp/newer',
+            createdAt: '2026-03-29T11:00:00.000Z',
+            updatedAt: '2026-03-29T11:05:00.000Z',
+            editorState: createWorkspaceState({
+                updatedAt: 20,
+                updatedBy: 'device-b'
+            })
+        });
+
+        assert.equal(manager.getDefaultSessionCwd(), '/tmp/newer');
+    });
+
+    it('prefers explicit cwd over derived cwd when creating sessions', () => {
+        const manager = new TerminalManager();
+        manager.sessions.set('existing', {
+            cwd: '/tmp/from-workspace',
+            createdAt: '2026-03-29T11:00:00.000Z',
+            updatedAt: '2026-03-29T11:05:00.000Z',
+            editorState: createWorkspaceState({
+                updatedAt: 20,
+                updatedBy: 'device-a'
+            })
+        });
+
+        let capturedOptions = null;
+        manager._createPtySession = (options = {}) => {
+            capturedOptions = options;
+            return options;
+        };
+
+        manager.createSession({});
+        assert.equal(capturedOptions.cwd, '/tmp/from-workspace');
+
+        manager.createSession({ cwd: '/tmp/explicit' });
+        assert.equal(capturedOptions.cwd, '/tmp/explicit');
+    });
+
+    it('falls back to home when no sessions remain', () => {
+        const manager = new TerminalManager();
+        const previous = process.env.TABMINAL_CWD;
+        delete process.env.TABMINAL_CWD;
+        try {
+            assert.equal(manager.getDefaultSessionCwd(), os.homedir());
+        } finally {
+            if (typeof previous === 'string') {
+                process.env.TABMINAL_CWD = previous;
+            } else {
+                delete process.env.TABMINAL_CWD;
+            }
+        }
+    });
+
+    it('does not inject a derived cwd when restoring a session snapshot', () => {
+        const manager = new TerminalManager();
+        manager.sessions.set('existing', {
+            cwd: '/tmp/from-workspace',
+            createdAt: '2026-03-29T11:00:00.000Z',
+            updatedAt: '2026-03-29T11:05:00.000Z',
+            editorState: createWorkspaceState({
+                updatedAt: 20,
+                updatedBy: 'device-a'
+            })
+        });
+
+        let capturedOptions = null;
+        manager._createPtySession = (options = {}) => {
+            capturedOptions = options;
+            return options;
+        };
+
+        manager.createSession({
+            id: 'restored-session',
+            createdAt: '2026-03-29T12:00:00.000Z',
+            editorState: createWorkspaceState()
+        });
+
+        assert.equal(capturedOptions.cwd, undefined);
     });
 });

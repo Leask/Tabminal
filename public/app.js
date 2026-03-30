@@ -14129,7 +14129,7 @@ function reconcileSessions(server, remoteSessions) {
     }
 }
 
-async function createNewSession(server = getActiveServer()) {
+async function createNewSession(server = getActiveServer(), options = {}) {
     if (!server) return;
     if (server.needsLogin || !server.isAuthenticated) {
         const password = window.prompt(`Password for ${getDisplayHost(server)}`);
@@ -14137,16 +14137,15 @@ async function createNewSession(server = getActiveServer()) {
         await server.login(password);
     }
     try {
-        const options = {};
-        const activeSession = getActiveSession();
-        if (activeSession && activeSession.serverId === server.id && activeSession.cwd) {
-            options.cwd = activeSession.cwd;
+        const request = {};
+        if (typeof options.cwd === 'string' && options.cwd.trim()) {
+            request.cwd = options.cwd.trim();
         }
 
         const response = await server.fetch('/api/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(options)
+            body: JSON.stringify(request)
         });
         if (!response.ok) throw new Error('Failed to create session');
         const newSession = await response.json();

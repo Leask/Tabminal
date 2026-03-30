@@ -147,6 +147,70 @@ export class TerminalManager {
         this.disposing = false;
     }
 
+    getLatestWorkspaceSession() {
+        let bestSession = null;
+        let bestWorkspaceUpdatedAt = -1;
+        let bestTerminalUpdatedAt = -1;
+        let bestCreatedAt = -1;
+
+        for (const session of this.sessions.values()) {
+            const cwd = typeof session?.cwd === 'string'
+                ? session.cwd.trim()
+                : '';
+            if (!cwd) continue;
+
+            const workspaceUpdatedAt = Number.isFinite(
+                session?.editorState?.updatedAt
+            )
+                ? session.editorState.updatedAt
+                : 0;
+            const terminalUpdatedAt = session?.updatedAt instanceof Date
+                ? session.updatedAt.getTime()
+                : Date.parse(session?.updatedAt || '') || 0;
+            const createdAt = session?.createdAt instanceof Date
+                ? session.createdAt.getTime()
+                : Date.parse(session?.createdAt || '') || 0;
+
+            const isBetterWorkspace = (
+                workspaceUpdatedAt > bestWorkspaceUpdatedAt
+            );
+            const isSameWorkspace = (
+                workspaceUpdatedAt === bestWorkspaceUpdatedAt
+            );
+            const isBetterTerminal = (
+                isSameWorkspace
+                && terminalUpdatedAt > bestTerminalUpdatedAt
+            );
+            const isSameTerminal = (
+                isSameWorkspace
+                && terminalUpdatedAt === bestTerminalUpdatedAt
+            );
+            const isBetterCreated = (
+                isSameTerminal
+                && createdAt > bestCreatedAt
+            );
+
+            if (
+                isBetterWorkspace
+                || isBetterTerminal
+                || isBetterCreated
+            ) {
+                bestSession = session;
+                bestWorkspaceUpdatedAt = workspaceUpdatedAt;
+                bestTerminalUpdatedAt = terminalUpdatedAt;
+                bestCreatedAt = createdAt;
+            }
+        }
+
+        return bestSession;
+    }
+
+    getDefaultSessionCwd() {
+        return this.getLatestWorkspaceSession()?.cwd
+            || process.env.TABMINAL_CWD
+            || os.homedir();
+    }
+
     queueSessionPersistence(id, operation) {
         const previous = this.sessionPersistenceChains.get(id)
             || Promise.resolve();
@@ -332,10 +396,25 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
     }
 
     createSession(restoredData = null) {
+        const isRestoredSession = !!(
+            restoredData
+            && typeof restoredData === 'object'
+            && (
+                restoredData.id
+                || restoredData.createdAt
+                || restoredData.executions
+                || restoredData.editorState
+                || restoredData.workspaceState
+            )
+        );
         return this._createPtySession({
             id: restoredData?.id,
             shell: resolveShell(),
-            cwd: restoredData?.cwd,
+            cwd: restoredData?.cwd || (
+                isRestoredSession
+                    ? undefined
+                    : this.getDefaultSessionCwd()
+            ),
             cols: restoredData?.cols,
             rows: restoredData?.rows,
             createdAt: restoredData?.createdAt,
