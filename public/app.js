@@ -110,8 +110,16 @@ const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
 const RECENT_AGENT_USAGE_STORAGE_KEY = 'tabminal_recent_agent_usage';
 const FILE_WORKSPACE_TAB_PREFIX = 'file:';
+const MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX = 'markdown-preview:';
 const AGENT_WORKSPACE_TAB_PREFIX = 'agent:';
 const TERMINAL_WORKSPACE_TAB_KEY = 'terminal:main';
+const SUPPORTED_MARKDOWN_EXTENSIONS = new Set([
+    'md',
+    'markdown',
+    'mkd',
+    'mkdn',
+    'mdown'
+]);
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
     'png',
     'jpg',
@@ -126,6 +134,14 @@ const SUPPORTED_PDF_EXTENSIONS = new Set([
 const PDFJS_VERSION = '5.6.205';
 const PDFJS_MODULE_URL = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.mjs`;
 const PDFJS_WORKER_URL = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+const MARKDOWN_IT_MODULE_URL = 'https://cdn.jsdelivr.net/npm/markdown-it@14.1.1/+esm';
+const MARKDOWN_TASK_LISTS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/markdown-it-task-lists@2.1.1/+esm';
+const MARKDOWN_KATEX_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@traptitech/markdown-it-katex@3.6.0/+esm';
+const KATEX_MODULE_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.25/+esm';
+const HIGHLIGHT_JS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/+esm';
+const MARKDOWN_PREVIEW_GITHUB_CSS_URL = 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown-dark.min.css';
+const MARKDOWN_PREVIEW_HIGHLIGHT_CSS_URL = 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.css';
+const MARKDOWN_PREVIEW_KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
@@ -144,6 +160,7 @@ const RENAME_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke=
 const DELETE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M6 7l1 12h10l1-12"></path><path d="M9 7V4h6v3"></path></svg>';
 const NEW_FOLDER_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4l2 2h6a2.5 2.5 0 0 1 2.5 2.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z"></path><path d="M12 10.5v5"></path><path d="M9.5 13h5"></path></svg>';
 const NEW_FILE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4V20.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z"></path><path d="M14 3.5V8h4"></path><path d="M12 11v6"></path><path d="M9 14h6"></path></svg>';
+const MARKDOWN_PREVIEW_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5h18"></path><path d="M3 9.5h18"></path><path d="M5 5.5V18a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V5.5"></path><path d="M9 13h6"></path><path d="M9 16h4"></path></svg>';
 const TERMINAL_FONT_FAMILY = '\'Monaspace Neon\', "SF Mono Terminal", '
     + '"SFMono-Regular", "SF Mono", "JetBrains Mono", Menlo, Consolas, '
     + 'monospace';
@@ -169,10 +186,15 @@ const agentSetupState = {
 let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
 let pdfJsLibPromise = null;
+let markdownPreviewBundlePromise = null;
 // #endregion
 
 function makeFileWorkspaceTabKey(filePath) {
     return `${FILE_WORKSPACE_TAB_PREFIX}${filePath}`;
+}
+
+function makeMarkdownPreviewWorkspaceTabKey(filePath) {
+    return `${MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX}${filePath}`;
 }
 
 function makeAgentTabKey(serverId, tabId) {
@@ -190,7 +212,15 @@ function isTerminalWorkspaceTabKey(key) {
 
 function isFileWorkspaceTabKey(key) {
     return typeof key === 'string'
-        && key.startsWith(FILE_WORKSPACE_TAB_PREFIX);
+        && (
+            key.startsWith(FILE_WORKSPACE_TAB_PREFIX)
+            || key.startsWith(MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX)
+        );
+}
+
+function isMarkdownPreviewWorkspaceTabKey(key) {
+    return typeof key === 'string'
+        && key.startsWith(MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX);
 }
 
 function isCompactWorkspaceMode() {
@@ -219,6 +249,96 @@ function isSupportedPdfPath(filePath) {
     }
     const ext = filePath.slice(dotIndex + 1).toLowerCase();
     return SUPPORTED_PDF_EXTENSIONS.has(ext);
+}
+
+function isSupportedMarkdownPath(filePath) {
+    if (typeof filePath !== 'string') {
+        return false;
+    }
+    const dotIndex = filePath.lastIndexOf('.');
+    if (dotIndex === -1) {
+        return false;
+    }
+    const ext = filePath.slice(dotIndex + 1).toLowerCase();
+    return SUPPORTED_MARKDOWN_EXTENSIONS.has(ext);
+}
+
+function ensureExternalStylesheet(id, href) {
+    if (!href || document.getElementById(id)) {
+        return;
+    }
+    const link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+}
+
+async function loadMarkdownPreviewBundle() {
+    if (!markdownPreviewBundlePromise) {
+        markdownPreviewBundlePromise = (async () => {
+            ensureExternalStylesheet(
+                'markdown-preview-github-css',
+                MARKDOWN_PREVIEW_GITHUB_CSS_URL
+            );
+            ensureExternalStylesheet(
+                'markdown-preview-highlight-css',
+                MARKDOWN_PREVIEW_HIGHLIGHT_CSS_URL
+            );
+            ensureExternalStylesheet(
+                'markdown-preview-katex-css',
+                MARKDOWN_PREVIEW_KATEX_CSS_URL
+            );
+            const [
+                { default: MarkdownIt },
+                { default: markdownItTaskLists },
+                { default: markdownItKatex },
+                { default: katex },
+                { default: hljs }
+            ] = await Promise.all([
+                import(MARKDOWN_IT_MODULE_URL),
+                import(MARKDOWN_TASK_LISTS_MODULE_URL),
+                import(MARKDOWN_KATEX_MODULE_URL),
+                import(KATEX_MODULE_URL),
+                import(HIGHLIGHT_JS_MODULE_URL)
+            ]);
+            const renderer = new MarkdownIt({
+                html: true,
+                linkify: true,
+                breaks: false,
+                highlight(source, language) {
+                    const code = String(source || '');
+                    const nextLanguage = String(language || '').trim();
+                    let html = '';
+                    if (nextLanguage && hljs.getLanguage(nextLanguage)) {
+                        html = hljs.highlight(code, {
+                            language: nextLanguage,
+                            ignoreIllegals: true
+                        }).value;
+                    } else {
+                        html = hljs.highlightAuto(code).value;
+                    }
+                    const languageClass = nextLanguage
+                        ? ` language-${escapeHtml(nextLanguage)}`
+                        : '';
+                    return `<pre class="hljs"><code class="hljs${languageClass}">${html}</code></pre>`;
+                }
+            });
+            renderer.use(markdownItTaskLists, {
+                enabled: false,
+                label: true,
+                labelAfter: true
+            });
+            renderer.use(markdownItKatex, { katex });
+            return {
+                renderer
+            };
+        })().catch((error) => {
+            markdownPreviewBundlePromise = null;
+            throw error;
+        });
+    }
+    return await markdownPreviewBundlePromise;
 }
 
 async function loadPdfJs() {
@@ -251,8 +371,52 @@ function buildMainTerminalTheme() {
 }
 
 function workspaceKeyToFilePath(key) {
-    if (!isFileWorkspaceTabKey(key)) return '';
-    return key.slice(FILE_WORKSPACE_TAB_PREFIX.length);
+    if (typeof key !== 'string' || key.length === 0) return '';
+    if (key.startsWith(MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX)) {
+        return key.slice(MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX.length);
+    }
+    if (key.startsWith(FILE_WORKSPACE_TAB_PREFIX)) {
+        return key.slice(FILE_WORKSPACE_TAB_PREFIX.length);
+    }
+    return '';
+}
+
+function isExternalHref(href) {
+    return /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(String(href || '').trim());
+}
+
+function resolveMarkdownLocalTarget(baseFilePath, href) {
+    const value = String(href || '').trim();
+    const basePath = String(baseFilePath || '').trim();
+    if (!value || !basePath || value.startsWith('#') || isExternalHref(value)) {
+        return null;
+    }
+    const baseDir = basePath.includes('/')
+        ? basePath.slice(0, basePath.lastIndexOf('/') + 1)
+        : '/';
+    try {
+        const resolved = new URL(
+            value,
+            `https://tabminal.local${encodeURI(baseDir)}`
+        );
+        if (resolved.origin !== 'https://tabminal.local') {
+            return null;
+        }
+        return {
+            path: decodeURIComponent(resolved.pathname),
+            hash: resolved.hash || ''
+        };
+    } catch {
+        return null;
+    }
+}
+
+function slugifyMarkdownHeading(text) {
+    return String(text || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s-]/gu, '')
+        .replace(/\s+/g, '-');
 }
 
 function getWorkspaceDeviceId() {
@@ -751,6 +915,15 @@ class EditorManager {
             'pdf-preview-status-secondary'
         );
         this.pdfPreviewPages = document.getElementById('pdf-preview-pages');
+        this.markdownPreviewContainer = document.getElementById(
+            'markdown-preview-container'
+        );
+        this.markdownPreviewScroll = document.getElementById(
+            'markdown-preview-scroll'
+        );
+        this.markdownPreviewContent = document.getElementById(
+            'markdown-preview-content'
+        );
         this.emptyState = document.getElementById('empty-editor-state');
         this.terminalWrapper = terminalWrapper;
         this.terminalOriginalParent = terminalWrapper?.parentElement || null;
@@ -810,6 +983,13 @@ class EditorManager {
             renderedWidth: 0,
             relayoutTimer: 0
         };
+        this.markdownPreviewState = {
+            path: '',
+            sessionKey: '',
+            renderToken: 0,
+            renderTimer: 0,
+            pendingHash: ''
+        };
         this.fileVersionCheckTimer = null;
         this.fileVersionCheckPromise = null;
         this.fileConflictDialogKey = '';
@@ -819,6 +999,7 @@ class EditorManager {
         this.initTerminalControls();
         this.initResizer();
         this.initAgentPanel();
+        this.initMarkdownPreview();
         this.initMonaco();
         this.loadIconMap();
         this.agentTimestampTimer = window.setInterval(() => {
@@ -868,6 +1049,30 @@ class EditorManager {
             this.setTerminalDisplayMode(nextMode);
         });
         this.terminalWrapper.appendChild(this.terminalLayoutButton);
+    }
+
+    initMarkdownPreview() {
+        if (!this.markdownPreviewContainer || !this.markdownPreviewContent) {
+            return;
+        }
+        this.markdownPreviewContainer.addEventListener('click', (event) => {
+            const link = event.target.closest('a[data-markdown-local-path]');
+            if (!link) {
+                return;
+            }
+            const filePath = String(
+                link.dataset.markdownLocalPath || ''
+            ).trim();
+            if (!filePath) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            void this.openLocalMarkdownLink(
+                filePath,
+                String(link.dataset.markdownLocalHash || '')
+            );
+        });
     }
 
     updateTerminalLayoutButton() {
@@ -959,7 +1164,13 @@ class EditorManager {
             }
         } else if (isFileWorkspaceTabKey(lastNonTerminal)) {
             const filePath = workspaceKeyToFilePath(lastNonTerminal);
-            if (session.editorState.openFiles.includes(filePath)) {
+            if (
+                session.editorState.openFiles.includes(filePath)
+                && (
+                    !isMarkdownPreviewWorkspaceTabKey(lastNonTerminal)
+                    || isSupportedMarkdownPath(filePath)
+                )
+            ) {
                 return lastNonTerminal;
             }
         }
@@ -1504,6 +1715,12 @@ class EditorManager {
                 && session.editorState.openFiles.includes(
                     workspaceKeyToFilePath(explicitKey)
                 )
+                && (
+                    !isMarkdownPreviewWorkspaceTabKey(explicitKey)
+                    || isSupportedMarkdownPath(
+                        workspaceKeyToFilePath(explicitKey)
+                    )
+                )
             ) {
                 return explicitKey;
             }
@@ -1751,6 +1968,13 @@ class EditorManager {
             : entry.mtimeMs;
         entry.lastDismissedRemoteVersion = '';
         this.updateActiveEditorReadOnlyState(session, filePath, nextReadonly);
+        if (
+            this.currentSession?.key === session.key
+            && isSupportedMarkdownPath(filePath)
+            && this.currentSession.editorState.activeFilePath === filePath
+        ) {
+            this.scheduleMarkdownPreviewRender(filePath, session);
+        }
         return entry;
     }
 
@@ -2030,7 +2254,12 @@ class EditorManager {
             newPath,
             isDirectory
         );
-        return nextPath ? makeFileWorkspaceTabKey(nextPath) : key;
+        if (!nextPath) {
+            return key;
+        }
+        return isMarkdownPreviewWorkspaceTabKey(key)
+            ? makeMarkdownPreviewWorkspaceTabKey(nextPath)
+            : makeFileWorkspaceTabKey(nextPath);
     }
 
     cloneRenamedModelEntry(entry, nextPath) {
@@ -3502,6 +3731,12 @@ class EditorManager {
                     filePath,
                     nextContent
                 );
+                if (isSupportedMarkdownPath(filePath)) {
+                    this.scheduleMarkdownPreviewRender(
+                        filePath,
+                        this.currentSession
+                    );
+                }
             });
             
             monaco.editor.defineTheme('solarized-dark', {
@@ -3536,6 +3771,227 @@ class EditorManager {
             if (this.currentSession) {
                 this.switchTo(this.currentSession);
             }
+        });
+    }
+
+    clearMarkdownPreview() {
+        const state = this.markdownPreviewState;
+        state.renderToken += 1;
+        clearTimeout(state.renderTimer);
+        state.renderTimer = 0;
+        state.path = '';
+        state.sessionKey = '';
+        state.pendingHash = '';
+        if (this.markdownPreviewContent) {
+            this.markdownPreviewContent.innerHTML = '';
+        }
+        if (this.markdownPreviewScroll) {
+            this.markdownPreviewScroll.scrollTop = 0;
+        }
+    }
+
+    hideMarkdownPreview() {
+        if (this.markdownPreviewContainer) {
+            this.markdownPreviewContainer.style.display = 'none';
+        }
+    }
+
+    getMarkdownSourceContent(filePath, session = this.currentSession) {
+        const entry = this.getModel(filePath, session);
+        if (!entry || entry.type !== 'text') {
+            return '';
+        }
+        if (entry.model && typeof entry.model.getValue === 'function') {
+            return entry.model.getValue();
+        }
+        return typeof entry.content === 'string' ? entry.content : '';
+    }
+
+    resolveMarkdownPreviewImageUrl(filePath, src, session) {
+        const resolved = resolveMarkdownLocalTarget(filePath, src);
+        if (resolved && isSupportedImagePath(resolved.path)) {
+            return session.server.resolveUrl(
+                `/api/fs/raw?path=${encodeURIComponent(resolved.path)}`
+                + `&token=${session.server.token}`
+            );
+        }
+        return src;
+    }
+
+    decorateMarkdownPreviewContent(root, filePath, session) {
+        if (!(root instanceof DocumentFragment) && !(root instanceof Element)) {
+            return;
+        }
+        const headingIds = new Map();
+        for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+            const baseId = slugifyMarkdownHeading(heading.textContent || '')
+                || 'section';
+            const nextCount = (headingIds.get(baseId) || 0) + 1;
+            headingIds.set(baseId, nextCount);
+            heading.id = nextCount === 1
+                ? baseId
+                : `${baseId}-${nextCount}`;
+        }
+
+        for (const image of root.querySelectorAll('img[src]')) {
+            const src = String(image.getAttribute('src') || '').trim();
+            if (!src) {
+                continue;
+            }
+            image.loading = 'lazy';
+            image.decoding = 'async';
+            image.src = this.resolveMarkdownPreviewImageUrl(
+                filePath,
+                src,
+                session
+            );
+        }
+
+        for (const link of root.querySelectorAll('a[href]')) {
+            const href = String(link.getAttribute('href') || '').trim();
+            if (!href) {
+                continue;
+            }
+            const resolved = resolveMarkdownLocalTarget(filePath, href);
+            if (resolved) {
+                link.dataset.markdownLocalPath = resolved.path;
+                link.dataset.markdownLocalHash = resolved.hash || '';
+                continue;
+            }
+            if (!href.startsWith('#')) {
+                link.target = '_blank';
+                link.rel = 'noreferrer noopener';
+            }
+        }
+    }
+
+    scrollMarkdownPreviewHash(hash) {
+        const nextHash = String(hash || '').trim();
+        if (!nextHash || !this.markdownPreviewScroll) {
+            return;
+        }
+        const id = nextHash.startsWith('#') ? nextHash.slice(1) : nextHash;
+        if (!id) {
+            return;
+        }
+        const target = this.markdownPreviewContent?.querySelector(
+            `#${CSS.escape(id)}`
+        );
+        if (!target) {
+            return;
+        }
+        target.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+        });
+    }
+
+    scheduleMarkdownPreviewRender(filePath, session = this.currentSession) {
+        if (
+            !session
+            || !filePath
+            || !isSupportedMarkdownPath(filePath)
+        ) {
+            return;
+        }
+        const state = this.markdownPreviewState;
+        clearTimeout(state.renderTimer);
+        state.renderTimer = window.setTimeout(() => {
+            if (
+                this.currentSession?.key !== session.key
+                || this.currentSession?.editorState.activeFilePath !== filePath
+            ) {
+                return;
+            }
+            const shouldShow = isMarkdownPreviewWorkspaceTabKey(
+                this.getActiveWorkspaceTabKey(session)
+            );
+            void this.renderMarkdownPreview(filePath, {
+                session,
+                show: shouldShow
+            });
+        }, 60);
+    }
+
+    async renderMarkdownPreview(filePath, options = {}) {
+        const session = options.session || this.currentSession;
+        const show = options.show === true;
+        if (
+            !session
+            || !filePath
+            || !this.markdownPreviewContainer
+            || !this.markdownPreviewContent
+            || !isSupportedMarkdownPath(filePath)
+        ) {
+            return;
+        }
+        const state = this.markdownPreviewState;
+        const renderToken = state.renderToken + 1;
+        state.renderToken = renderToken;
+        state.path = filePath;
+        state.sessionKey = session.key;
+        if (show) {
+            this.markdownPreviewContainer.style.display = 'flex';
+        }
+
+        try {
+            const { renderer } = await loadMarkdownPreviewBundle();
+            if (
+                state.renderToken !== renderToken
+                || state.path !== filePath
+                || state.sessionKey !== session.key
+            ) {
+                return;
+            }
+            const source = this.getMarkdownSourceContent(filePath, session);
+            const rendered = renderer.render(source || '');
+            const sanitized = DOMPurify.sanitize(rendered, {
+                USE_PROFILES: {
+                    html: true,
+                    mathMl: true,
+                    svg: true
+                }
+            });
+            const template = document.createElement('template');
+            template.innerHTML = sanitized;
+            this.decorateMarkdownPreviewContent(
+                template.content,
+                filePath,
+                session
+            );
+            this.markdownPreviewContent.replaceChildren(template.content);
+            const pendingHash = state.pendingHash;
+            state.pendingHash = '';
+            if (pendingHash) {
+                requestAnimationFrame(() => {
+                    this.scrollMarkdownPreviewHash(pendingHash);
+                });
+            }
+        } catch (error) {
+            console.error('Failed to render markdown preview:', error);
+            this.markdownPreviewContent.innerHTML = '';
+            const fallback = document.createElement('div');
+            fallback.className = 'markdown-preview-error';
+            fallback.textContent = 'Failed to render markdown preview.';
+            this.markdownPreviewContent.appendChild(fallback);
+        }
+    }
+
+    async openLocalMarkdownLink(filePath, hash = '') {
+        const session = this.currentSession;
+        if (!session || !filePath) {
+            return;
+        }
+        if (isSupportedMarkdownPath(filePath)) {
+            this.markdownPreviewState.pendingHash = hash || '';
+            await this.openFile(filePath, session, {
+                activatePreview: true,
+                focusEditor: false
+            });
+            return;
+        }
+        await this.openFile(filePath, session, {
+            focusEditor: false
         });
     }
 
@@ -4141,7 +4597,11 @@ class EditorManager {
         
         this.updateEditorPaneVisibility();
 
-        this.activateFileTab(filePath, false, options);
+        if (options.activatePreview && isSupportedMarkdownPath(filePath)) {
+            this.activateMarkdownPreviewTab(filePath, false);
+        } else {
+            this.activateFileTab(filePath, false, options);
+        }
         if (touchedWorkspace) {
             targetSession.saveState({ touchWorkspace: true });
         }
@@ -4223,6 +4683,9 @@ class EditorManager {
             if (makeFileWorkspaceTabKey(path) === activeWorkspaceTabKey) {
                 tab.classList.add('active');
             }
+            if (isSupportedMarkdownPath(path)) {
+                tab.classList.add('bound-tab', 'bound-tab-primary');
+            }
             
             const fileModel = this.getModel(path);
             if (fileModel && fileModel.readonly) {
@@ -4254,6 +4717,34 @@ class EditorManager {
             tab.appendChild(span);
             tab.appendChild(closeBtn);
             this.tabsContainer.appendChild(tab);
+
+            if (isSupportedMarkdownPath(path)) {
+                const previewTab = document.createElement('div');
+                previewTab.className = 'editor-tab markdown-preview-tab bound-tab bound-tab-secondary';
+                if (
+                    makeMarkdownPreviewWorkspaceTabKey(path)
+                    === activeWorkspaceTabKey
+                ) {
+                    previewTab.classList.add('active');
+                }
+
+                const previewIcon = document.createElement('span');
+                previewIcon.className = 'file-editor-tab-icon';
+                previewIcon.innerHTML = MARKDOWN_PREVIEW_ICON_SVG;
+
+                const previewLabel = document.createElement('span');
+                previewLabel.textContent = 'Preview';
+
+                previewTab.onclick = () => this.activateMarkdownPreviewTab(path);
+                bindSingleTapActivation(
+                    previewTab,
+                    () => this.activateMarkdownPreviewTab(path)
+                );
+
+                previewTab.appendChild(previewIcon);
+                previewTab.appendChild(previewLabel);
+                this.tabsContainer.appendChild(previewTab);
+            }
         }
 
         for (const agentTab of getAgentTabsForSession(this.currentSession)) {
@@ -4305,6 +4796,13 @@ class EditorManager {
             this.activateAgentTab(workspaceTabKey, isRestore);
             return;
         }
+        if (isMarkdownPreviewWorkspaceTabKey(workspaceTabKey)) {
+            this.activateMarkdownPreviewTab(
+                workspaceKeyToFilePath(workspaceTabKey),
+                isRestore
+            );
+            return;
+        }
         this.activateFileTab(workspaceKeyToFilePath(workspaceTabKey), isRestore);
     }
 
@@ -4337,6 +4835,7 @@ class EditorManager {
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.hidePdfPreview();
+        this.hideMarkdownPreview();
         this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'none';
         this.syncTerminalWorkspacePlacement(TERMINAL_WORKSPACE_TAB_KEY);
@@ -4346,6 +4845,50 @@ class EditorManager {
                 this.currentSession.mainTerm.focus();
             }
             this.currentSession.reportResize();
+        });
+    }
+
+    activateMarkdownPreviewTab(filePath, isRestore = false) {
+        if (!this.currentSession || !filePath) return;
+
+        const state = this.currentSession.editorState;
+        if (!isRestore && state.activeFilePath && state.activeFilePath !== filePath) {
+            const currentGlobal = this.getModel(state.activeFilePath);
+            if (currentGlobal && currentGlobal.type === 'text' && this.editor) {
+                state.viewStates.set(
+                    state.activeFilePath,
+                    this.editor.saveViewState()
+                );
+            }
+        }
+
+        state.activeFilePath = filePath;
+        this.currentSession.workspaceState.activeTabKey =
+            makeMarkdownPreviewWorkspaceTabKey(filePath);
+        this.currentSession.workspaceState.lastNonTerminalTabKey =
+            makeMarkdownPreviewWorkspaceTabKey(filePath);
+        this.currentSession.saveState();
+        const file = this.getModel(filePath);
+
+        this.renderEditorTabs();
+        this.emptyState.style.display = 'none';
+        this.syncTerminalWorkspacePlacement();
+
+        if (!file) {
+            void this.openFile(filePath, true, {
+                activatePreview: true,
+                focusEditor: false
+            });
+            return;
+        }
+
+        this.agentContainer.style.display = 'none';
+        this.imagePreviewContainer.style.display = 'none';
+        this.hidePdfPreview();
+        this.monacoContainer.style.display = 'none';
+        this.markdownPreviewContainer.style.display = 'flex';
+        void this.renderMarkdownPreview(filePath, {
+            show: true
         });
     }
 
@@ -4381,6 +4924,7 @@ class EditorManager {
         if (file.type === 'image') {
             this.agentContainer.style.display = 'none';
             this.monacoContainer.style.display = 'none';
+            this.hideMarkdownPreview();
             this.imagePreviewContainer.style.display = 'flex';
             this.hidePdfPreview();
             
@@ -4397,12 +4941,40 @@ class EditorManager {
             this.agentContainer.style.display = 'none';
             this.monacoContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'none';
+            this.hideMarkdownPreview();
             this.pdfPreviewContainer.style.display = 'flex';
             void this.renderPdfPreview(filePath);
+        } else if (isSupportedMarkdownPath(filePath)) {
+            this.agentContainer.style.display = 'none';
+            this.imagePreviewContainer.style.display = 'none';
+            this.hidePdfPreview();
+            this.hideMarkdownPreview();
+            this.monacoContainer.style.display = 'block';
+            if (!file.model && file.content !== null && this.monacoInstance) {
+                file.model = this.monacoInstance.editor.createModel(
+                    file.content,
+                    undefined,
+                    this.monacoInstance.Uri.file(filePath)
+                );
+            }
+            if (this.editor && file.model) {
+                this.editor.setModel(file.model);
+                this.editor.updateOptions({ readOnly: !!file.readonly });
+                const savedViewState = state.viewStates.get(filePath);
+                if (savedViewState) {
+                    this.editor.restoreViewState(savedViewState);
+                }
+                if (focusEditor) {
+                    this.editor.focus();
+                }
+                requestAnimationFrame(() => this.editor.layout());
+            }
+            this.scheduleMarkdownPreviewRender(filePath, this.currentSession);
         } else {
             this.agentContainer.style.display = 'none';
             this.imagePreviewContainer.style.display = 'none';
             this.hidePdfPreview();
+            this.hideMarkdownPreview();
             this.monacoContainer.style.display = 'block';
             
             if (!file.model && file.content !== null && this.monacoInstance) {
@@ -4467,6 +5039,7 @@ class EditorManager {
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.hidePdfPreview();
+        this.hideMarkdownPreview();
         this.emptyState.style.display = 'none';
         this.agentContainer.style.display = 'flex';
         this.renderAgentPanel(agentTab);
@@ -6208,6 +6781,7 @@ class EditorManager {
         this.monacoContainer.style.display = 'none';
         this.imagePreviewContainer.style.display = 'none';
         this.hidePdfPreview();
+        this.hideMarkdownPreview();
         this.agentContainer.style.display = 'none';
         this.emptyState.style.display = 'flex';
         this.syncTerminalWorkspacePlacement('');
@@ -7061,7 +7635,13 @@ class Session {
         const activeKey = this.workspaceState.activeTabKey || '';
         if (isFileWorkspaceTabKey(activeKey)) {
             const filePath = workspaceKeyToFilePath(activeKey);
-            if (!this.editorState.openFiles.includes(filePath)) {
+            if (
+                !this.editorState.openFiles.includes(filePath)
+                || (
+                    isMarkdownPreviewWorkspaceTabKey(activeKey)
+                    && !isSupportedMarkdownPath(filePath)
+                )
+            ) {
                 this.workspaceState.activeTabKey = resolveFallbackActiveKey();
             }
         } else if (
@@ -7075,7 +7655,13 @@ class Session {
             this.workspaceState.lastNonTerminalTabKey || '';
         if (isFileWorkspaceTabKey(lastNonTerminalKey)) {
             const filePath = workspaceKeyToFilePath(lastNonTerminalKey);
-            if (!this.editorState.openFiles.includes(filePath)) {
+            if (
+                !this.editorState.openFiles.includes(filePath)
+                || (
+                    isMarkdownPreviewWorkspaceTabKey(lastNonTerminalKey)
+                    && !isSupportedMarkdownPath(filePath)
+                )
+            ) {
                 this.workspaceState.lastNonTerminalTabKey = '';
             }
         }
@@ -8884,6 +9470,9 @@ function getWorkspaceTabKeysForSession(session) {
     }
     for (const path of session.editorState?.openFiles || []) {
         keys.push(makeFileWorkspaceTabKey(path));
+        if (isSupportedMarkdownPath(path)) {
+            keys.push(makeMarkdownPreviewWorkspaceTabKey(path));
+        }
     }
     for (const agentTab of getAgentTabsForSession(session)) {
         keys.push(agentTab.key);

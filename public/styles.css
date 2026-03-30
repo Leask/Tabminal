@@ -1711,6 +1711,20 @@ kbd {
     border-top: 2px solid var(--accent-color);
 }
 
+.editor-tab.bound-tab-primary {
+    border-right: 0;
+}
+
+.editor-tab.bound-tab-secondary {
+    min-width: 0;
+    padding-left: 10px;
+    padding-right: 12px;
+}
+
+.markdown-preview-tab {
+    color: rgba(229, 237, 239, 0.76);
+}
+
 .editor-tab .close-btn {
     margin-left: auto;
     font-size: 14px;
@@ -3377,6 +3391,74 @@ kbd {
     min-height: 0;
     background:
         linear-gradient(180deg, rgba(7, 54, 66, 0.98), rgba(0, 36, 46, 0.98));
+}
+
+.markdown-preview-container {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    background:
+        linear-gradient(180deg, rgba(7, 54, 66, 0.98), rgba(0, 36, 46, 0.98));
+}
+
+.markdown-preview-scroll {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    padding: 18px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y pinch-zoom;
+}
+
+.markdown-preview-sheet.markdown-body {
+    box-sizing: border-box;
+    width: min(960px, 100%);
+    min-height: 100%;
+    margin: 0 auto;
+    padding: 28px 32px 40px;
+    background: #0d1117;
+    color: #c9d1d9;
+    border: 1px solid rgba(229, 237, 239, 0.08);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.markdown-preview-sheet.markdown-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+}
+
+.markdown-preview-sheet.markdown-body pre {
+    overflow: auto;
+}
+
+.markdown-preview-sheet.markdown-body .task-list-item {
+    list-style: none;
+}
+
+.markdown-preview-sheet.markdown-body .task-list-item input {
+    margin-right: 8px;
+}
+
+.markdown-preview-error {
+    color: #fca5a5;
+    font-size: 13px;
+}
+
+@media (max-width: 767px) {
+    .markdown-preview-scroll {
+        padding: 12px;
+    }
+
+    .markdown-preview-sheet.markdown-body {
+        padding: 18px 16px 28px;
+        border-radius: 10px;
+    }
 }
 
 .pdf-preview-status {
