@@ -684,6 +684,98 @@ describe('AcpManager', () => {
         ]);
     });
 
+    it('merges cwd and all-session listings for resume discovery', async () => {
+        const { manager } = createManager();
+
+        const result = await manager.listResumeSessions({
+            agentId: 'codex',
+            cwd: '/tmp/project'
+        });
+
+        assert.equal(result.scope, 'merged');
+        assert.equal(result.sessions.length, 2);
+        assert.deepEqual(
+            result.sessions.map((session) => [session.sessionId, session.cwd]),
+            [
+                ['hist-1', '/tmp/project'],
+                ['hist-2', '/tmp/project']
+            ]
+        );
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.listRequests, [
+            {
+                cwd: '/tmp/project',
+                cursor: '',
+                all: false
+            },
+            {
+                cwd: null,
+                cursor: '',
+                all: true
+            }
+        ]);
+    });
+
+    it('keeps cwd results when all-session listing fails', async () => {
+        let persistedTabs = [];
+        let persistedConfigs = {};
+        const manager = new AcpManager({
+            runtimeFactory: (definition, options) => {
+                const runtime = new FakeRuntime(definition, options);
+                const original = runtime.listSessions.bind(runtime);
+                runtime.listSessions = async ({ all = false, ...rest } = {}) => {
+                    if (all) {
+                        runtime.listRequests.push({
+                            cwd: null,
+                            cursor: rest.cursor || '',
+                            all: true
+                        });
+                        throw new Error('All-session listing unsupported');
+                    }
+                    return await original({ all, ...rest });
+                };
+                return runtime;
+            },
+            loadTabs: async () => persistedTabs,
+            saveTabs: async (tabs) => {
+                persistedTabs = structuredClone(tabs);
+            },
+            loadConfigs: async () => persistedConfigs,
+            saveConfigs: async (configs) => {
+                persistedConfigs = structuredClone(configs);
+            }
+        });
+        manager.definitions = [{
+            id: 'codex',
+            label: 'Codex CLI',
+            description: 'test',
+            command: process.execPath,
+            args: [],
+            commandLabel: process.execPath
+        }];
+
+        const result = await manager.listResumeSessions({
+            agentId: 'codex',
+            cwd: '/tmp/project'
+        });
+
+        assert.equal(result.scope, 'cwd');
+        assert.equal(result.sessions.length, 2);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.listRequests, [
+            {
+                cwd: '/tmp/project',
+                cursor: '',
+                all: false
+            },
+            {
+                cwd: null,
+                cursor: '',
+                all: true
+            }
+        ]);
+    });
+
     it('creates a new tab from a historical session', async () => {
         const { manager, getPersistedTabs } = createManager();
 

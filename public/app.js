@@ -7178,20 +7178,57 @@ class EditorManager {
             const session = agentTab.getLinkedSession();
             if (!session) return;
             try {
+                let targetAgentTab = null;
+                let targetPromptDraft = '';
                 if (command.openTabKey) {
                     const existingTab = state.agentTabs.get(command.openTabKey);
                     const existingSession = existingTab?.getLinkedSession() || null;
                     if (existingTab && existingSession) {
-                        await activateAgentTab(existingSession, existingTab, {
+                        targetPromptDraft = String(
+                            existingTab.promptDraft || ''
+                        );
+                        targetAgentTab = await activateAgentTab(
+                            existingSession,
+                            existingTab,
+                            {
                             switchSession: true
-                        });
+                            }
+                        );
                     } else {
-                        await resumeAgentTabFromHistory(session, agentTab, command);
+                        targetAgentTab = await resumeAgentTabFromHistory(
+                            session,
+                            agentTab,
+                            command
+                        );
+                        targetPromptDraft = String(
+                            targetAgentTab?.promptDraft || ''
+                        );
                     }
                 } else {
-                    await resumeAgentTabFromHistory(session, agentTab, command);
+                    targetAgentTab = await resumeAgentTabFromHistory(
+                        session,
+                        agentTab,
+                        command
+                    );
+                    targetPromptDraft = String(
+                        targetAgentTab?.promptDraft || ''
+                    );
                 }
-                this.hideAgentCommandMenu();
+                const targetPromptIntent = getAgentPromptIntent(
+                    targetAgentTab,
+                    targetPromptDraft
+                );
+                if (targetPromptIntent.kind === 'resume') {
+                    targetPromptDraft = '';
+                    if (targetAgentTab) {
+                        targetAgentTab.promptDraft = '';
+                    }
+                }
+                agentTab.promptDraft = '';
+                this.setAgentPromptValue(
+                    targetPromptDraft,
+                    targetAgentTab || getActiveAgentTab() || agentTab
+                );
             } catch (error) {
                 alert(error.message, {
                     type: 'error',
@@ -8850,8 +8887,7 @@ class AgentTab {
             const cwd = this.cwd || this.getLinkedSession()?.cwd || '';
             const params = new URLSearchParams({
                 agentId: this.agentId,
-                cwd,
-                all: '1'
+                cwd
             });
             const response = await this.server.fetch(
                 `/api/agents/sessions?${params.toString()}`
@@ -10548,7 +10584,6 @@ function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
             return left.index - right.index;
         })
         .map(({ session }) => session)
-        .slice(0, 12)
         .map((session) => ({
             ...session,
             openTabKey: openSessions.get(session.sessionId)?.key || '',

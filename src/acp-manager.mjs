@@ -3745,6 +3745,119 @@ export class AcpManager {
         }
     }
 
+    async listResumeSessions(options) {
+        await this.ensureConfigsLoaded();
+        const definition = this.definitions.find(
+            (entry) => entry.id === options.agentId
+        );
+        if (!definition) {
+            throw new Error('Unknown agent');
+        }
+        const availability = this.getDefinitionAvailability(definition);
+        if (!availability.available) {
+            throw new Error(availability.reason || 'Agent unavailable');
+        }
+
+        const cwd = path.resolve(options.cwd || process.cwd());
+        const { runtimeEntry, createdRuntime, runtimeStoreKey } =
+            this.#ensureRuntimeEntry(definition, cwd);
+        const branchLimit = 500;
+        const mergedLimit = 300;
+
+        const listBranch = async (all) => {
+            const sessions = [];
+            let nextCursor = '';
+            const seenCursors = new Set();
+            for (;;) {
+                const result = await runtimeEntry.runtime.listSessions({
+                    cwd,
+                    all,
+                    cursor: nextCursor
+                });
+                sessions.push(...(Array.isArray(result?.sessions)
+                    ? result.sessions
+                    : []));
+                if (sessions.length >= branchLimit) {
+                    return sessions.slice(0, branchLimit);
+                }
+                const previousCursor = nextCursor;
+                nextCursor = typeof result?.nextCursor === 'string'
+                    ? result.nextCursor
+                    : '';
+                if (!nextCursor) {
+                    break;
+                }
+                if (nextCursor === previousCursor || seenCursors.has(nextCursor)) {
+                    break;
+                }
+                seenCursors.add(nextCursor);
+            }
+            return sessions;
+        };
+
+        const cwdPromise = listBranch(false);
+        const allPromise = listBranch(true);
+
+        try {
+            const settled = await Promise.allSettled([
+                cwdPromise,
+                allPromise
+            ]);
+            const cwdResult = settled[0];
+            const allResult = settled[1] || null;
+            const cwdSessions = cwdResult?.status === 'fulfilled'
+                ? cwdResult.value
+                : [];
+            const allSessions = allResult?.status === 'fulfilled'
+                && Array.isArray(allResult.value)
+                ? allResult.value
+                : [];
+
+            if (cwdSessions.length === 0 && allSessions.length === 0) {
+                throw (
+                    cwdResult?.reason
+                    || allResult?.reason
+                    || new Error('Failed to list agent sessions')
+                );
+            }
+
+            const merged = [];
+            const seen = new Set();
+            for (const session of [...cwdSessions, ...allSessions]) {
+                const sessionId = String(session?.sessionId || '').trim();
+                if (!sessionId || seen.has(sessionId)) continue;
+                seen.add(sessionId);
+                merged.push(session);
+                if (merged.length >= mergedLimit) {
+                    break;
+                }
+            }
+
+            this.#clearDefinitionAvailabilityOverride(definition.id);
+            if (runtimeEntry.runtime.tabs.size === 0) {
+                runtimeEntry.runtime.scheduleIdleShutdown(async () => {
+                    if (runtimeEntry.runtime.tabs.size > 0) return;
+                    await this.#disposeRuntimeEntry(
+                        runtimeStoreKey,
+                        runtimeEntry
+                    );
+                });
+            }
+
+            return {
+                sessions: merged,
+                scope: allResult?.status === 'fulfilled'
+                    ? 'merged'
+                    : 'cwd'
+            };
+        } catch (error) {
+            if (createdRuntime && runtimeEntry.runtime.tabs.size === 0) {
+                await this.#disposeRuntimeEntry(runtimeStoreKey, runtimeEntry);
+            }
+            throw error;
+        }
+    }
+
     async resumeTab(options) {
         await this.ensureConfigsLoaded();
         const definition = this.definitions.find(

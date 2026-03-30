@@ -402,49 +402,27 @@ router.get('/api/agents', async (ctx) => {
 });
 
 router.get('/api/agents/sessions', async (ctx) => {
-    const {
-        agentId = '',
-        cwd = '',
-        cursor = '',
-        all = ''
-    } = ctx.query || {};
+    const { agentId = '', cwd = '' } = ctx.query || {};
     if (!agentId || typeof agentId !== 'string') {
         ctx.status = 400;
         ctx.body = { error: 'agentId is required' };
         return;
     }
-    const wantsAll = all === '1' || all === 'true' || all === 'yes';
-    if (!wantsAll && (!cwd || typeof cwd !== 'string')) {
+    if (!cwd || typeof cwd !== 'string') {
         ctx.status = 400;
         ctx.body = { error: 'cwd is required' };
         return;
     }
 
     try {
-        let nextCursor = typeof cursor === 'string' ? cursor : '';
-        const sessions = [];
-        const paginate = !!nextCursor;
-        for (let page = 0; page < 5; page += 1) {
-            const result = await acpManager.listSessions({
-                agentId,
-                cwd,
-                all: wantsAll,
-                cursor: nextCursor
-            });
-            sessions.push(...(Array.isArray(result?.sessions)
-                ? result.sessions
-                : []));
-            nextCursor = typeof result?.nextCursor === 'string'
-                ? result.nextCursor
-                : '';
-            if (paginate || !nextCursor || sessions.length >= 50) {
-                break;
-            }
-        }
+        const result = await acpManager.listResumeSessions({
+            agentId,
+            cwd
+        });
         ctx.body = {
-            sessions: sessions.slice(0, 50),
-            nextCursor,
-            scope: wantsAll ? 'all' : 'cwd'
+            sessions: Array.isArray(result?.sessions) ? result.sessions : [],
+            nextCursor: '',
+            scope: typeof result?.scope === 'string' ? result.scope : 'cwd'
         };
     } catch (error) {
         const message = error?.message || 'Failed to list agent sessions';
