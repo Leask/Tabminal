@@ -4260,29 +4260,20 @@ class EditorManager {
         return String(session?.cwd || session?.initialCwd || '').trim();
     }
 
-    async enhanceAgentMarkdownBody(agentTab, message, body) {
-        if (!(body instanceof HTMLElement) || !message?.text) {
-            return;
-        }
-        if (isAgentMessageStreaming(agentTab, message)) {
-            return;
+    async ensureAgentMessageMarkdownCache(agentTab, message) {
+        if (!message?.text || isAgentMessageStreaming(agentTab, message)) {
+            return '';
         }
         const session = this.currentSession;
         if (!session) {
-            return;
+            return '';
         }
 
         const sourceText = String(message.text || '');
         const cachedMarkdown = getAgentMessageMarkdownCache(message);
         if (cachedMarkdown) {
-            body.classList.remove('plain');
-            body.classList.add('markdown');
-            body.innerHTML = cachedMarkdown;
-            return;
+            return cachedMarkdown;
         }
-
-        const renderToken = `${Date.now()}:${Math.random()}`;
-        body.dataset.markdownRenderToken = renderToken;
 
         try {
             const { renderer } = await loadMarkdownPreviewBundle();
@@ -4290,7 +4281,7 @@ class EditorManager {
                 String(message.text || '') !== sourceText
                 || isAgentMessageStreaming(agentTab, message)
             ) {
-                return;
+                return '';
             }
             const rendered = renderer.render(sourceText);
             const sanitized = DOMPurify.sanitize(rendered, {
@@ -4314,18 +4305,92 @@ class EditorManager {
             const nextMarkdownHtml = template.innerHTML;
             message.markdownRenderSource = sourceText;
             message.markdownRenderHtml = nextMarkdownHtml;
-            if (
-                !body.isConnected
-                || body.dataset.markdownRenderToken !== renderToken
-            ) {
-                return;
-            }
-            body.classList.remove('plain');
-            body.classList.add('markdown');
-            body.replaceChildren(template.content);
+            return nextMarkdownHtml;
         } catch {
-            // Keep the lightweight fallback rendering.
+            return '';
         }
+    }
+
+    findNextVisibleAgentMarkdownCandidate(agentTab) {
+        if (!agentTab) {
+            return null;
+        }
+        const timeline = getAgentTimelineItems(agentTab);
+        const transcriptWindow = getAgentTranscriptWindow(
+            agentTab,
+            timeline.length,
+            { pinToBottom: false }
+        );
+        const visibleTimeline = timeline.slice(
+            transcriptWindow.start,
+            transcriptWindow.end
+        );
+        for (let index = visibleTimeline.length - 1; index >= 0; index -= 1) {
+            const entry = visibleTimeline[index];
+            if (entry?.type !== 'message') {
+                continue;
+            }
+            const message = entry.value;
+            if (
+                message?.role === 'assistant'
+                && message?.kind === 'message'
+                && message?.text
+                && !getAgentMessageMarkdownCache(message)
+                && !isAgentMessageStreaming(agentTab, message)
+            ) {
+                return message;
+            }
+        }
+        return null;
+    }
+
+    scheduleVisibleAgentMarkdownUpgrade(agentTab) {
+        if (
+            !agentTab
+            || agentTab.busy
+            || !isAgentTabVisible(agentTab)
+            || agentTab.markdownUpgradeInFlight
+            || agentTab.markdownUpgradeTimer
+        ) {
+            return;
+        }
+        if (!this.findNextVisibleAgentMarkdownCandidate(agentTab)) {
+            return;
+        }
+        agentTab.markdownUpgradeTimer = setTimeout(() => {
+            agentTab.markdownUpgradeTimer = null;
+            void this.runVisibleAgentMarkdownUpgrade(agentTab);
+        }, 120);
+    }
+
+    async runVisibleAgentMarkdownUpgrade(agentTab) {
+        if (
+            !agentTab
+            || agentTab.busy
+            || agentTab.markdownUpgradeInFlight
+            || !isAgentTabVisible(agentTab)
+        ) {
+            return;
+        }
+        const candidate = this.findNextVisibleAgentMarkdownCandidate(agentTab);
+        if (!candidate) {
+            return;
+        }
+        agentTab.markdownUpgradeInFlight = true;
+        try {
+            const renderedHtml = await this.ensureAgentMessageMarkdownCache(
+                agentTab,
+                candidate
+            );
+            if (renderedHtml && isAgentTabVisible(agentTab)) {
+                this.renderAgentPanel(agentTab, {
+                    reason: 'markdown-upgrade'
+                });
+            }
+        } finally {
+            agentTab.markdownUpgradeInFlight = false;
+        }
+        this.scheduleVisibleAgentMarkdownUpgrade(agentTab);
     }
 
     scrollMarkdownPreviewHash(hash) {
@@ -5622,7 +5687,6 @@ class EditorManager {
     }
 
     renderAgentPanel(agentTab, options = {}) {
-        this.disposeAgentEmbeddedEditors();
         const previousLayout = this.captureAgentTranscriptLayout();
         const previousScrollTop = previousLayout?.scrollTop || 0;
         const wasNearBottom = this.isAgentTranscriptLayoutNearBottom(
@@ -5686,7 +5750,6 @@ class EditorManager {
 
         this.renderAgentComposerAttachments(agentTab);
 
-        this.agentTranscript.innerHTML = '';
         const timeline = getAgentTimelineItems(agentTab);
         const shouldPinToBottom = wasNearBottom || (
             agentTab.scrollToBottomOnNextRender
@@ -5705,45 +5768,63 @@ class EditorManager {
             transcriptWindow.end
         );
         if (timeline.length === 0) {
-            this.agentTranscript.appendChild(
-                this.buildAgentEmptyState(agentTab)
-            );
+            const existingChildren = Array.from(this.agentTranscript.children);
+            const emptyState = this.buildAgentEmptyState(agentTab);
+            this.agentTranscript.replaceChildren(emptyState);
+            for (const node of existingChildren) {
+                this.disposeAgentTimelineNode(node);
+            }
         } else {
+            const existingChildren = Array.from(this.agentTranscript.children);
+            const existingByKey = new Map();
+            for (const node of existingChildren) {
+                const key = node?.dataset?.timelineKey || '';
+                if (key) {
+                    existingByKey.set(key, node);
+                }
+            }
+            const nextNodes = [];
             for (const [index, entry] of visibleTimeline.entries()) {
                 const timelineIndex = transcriptWindow.start + index;
-                let node = null;
-                if (entry.type === 'message') {
-                    node = this.buildAgentMessageNode(agentTab, entry.value);
-                } else if (entry.type === 'tool') {
-                    node = this.buildAgentToolNode(agentTab, entry.value);
-                } else if (entry.type === 'permission') {
-                    node = this.buildAgentPermissionNode(
-                        agentTab,
-                        entry.value
-                    );
-                } else if (entry.type === 'plan') {
-                    node = this.buildAgentPlanHistoryNode(
-                        agentTab,
-                        entry.value
-                    );
-                }
+                const timelineKey = getAgentTimelineItemKey(
+                    entry,
+                    timelineIndex
+                );
+                const renderSignature = getAgentTimelineEntrySignature(entry);
+                const turnStart = timelineIndex > 0
+                    && entry.type === 'message'
+                    && String(entry.value?.role || '').toLowerCase()
+                        === 'user';
+                let node = existingByKey.get(timelineKey) || null;
                 if (node) {
-                    node.dataset.timelineKey = getAgentTimelineItemKey(
+                    existingByKey.delete(timelineKey);
+                    if (
+                        node.dataset.renderSignature !== renderSignature
+                    ) {
+                        this.disposeAgentTimelineNode(node);
+                        node = null;
+                    }
+                }
+                if (!node) {
+                    node = this.buildAgentTimelineNode(
+                        agentTab,
                         entry,
                         timelineIndex
                     );
-                    if (
-                        timelineIndex > 0
-                        && entry.type === 'message'
-                        && String(entry.value?.role || '').toLowerCase()
-                            === 'user'
-                    ) {
-                        node.classList.add('agent-turn-start');
-                    }
-                    this.agentTranscript.appendChild(node);
+                }
+                if (node) {
+                    node.dataset.timelineKey = timelineKey;
+                    node.dataset.renderSignature = renderSignature;
+                    node.classList.toggle('agent-turn-start', turnStart);
+                    nextNodes.push(node);
                 }
             }
+            for (const node of existingByKey.values()) {
+                this.disposeAgentTimelineNode(node);
+            }
+            this.applyAgentTranscriptNodeList(nextNodes);
         }
+        this.rebuildAgentEmbeddedTerminalRegistry();
         if (options.preserveTranscriptAnchor) {
             const restored = this.restoreAgentTranscriptAnchor(
                 options.preserveTranscriptAnchor
@@ -5760,6 +5841,9 @@ class EditorManager {
         }
         this.updateAgentScrollBottomButton();
         this.rememberAgentTranscriptLayout();
+        if (!agentTab.busy) {
+            this.scheduleVisibleAgentMarkdownUpgrade(agentTab);
+        }
         this.agentTools.innerHTML = '';
         this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
@@ -5772,6 +5856,57 @@ class EditorManager {
         this.refreshAgentTimelineTimestamps();
         this.refreshAgentUsageHud();
         this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
+    }
+
+    buildAgentTimelineNode(agentTab, entry, timelineIndex) {
+        if (!entry) {
+            return null;
+        }
+        let node = null;
+        if (entry.type === 'message') {
+            node = this.buildAgentMessageNode(agentTab, entry.value);
+        } else if (entry.type === 'tool') {
+            node = this.buildAgentToolNode(agentTab, entry.value);
+        } else if (entry.type === 'permission') {
+            node = this.buildAgentPermissionNode(
+                agentTab,
+                entry.value
+            );
+        } else if (entry.type === 'plan') {
+            node = this.buildAgentPlanHistoryNode(
+                agentTab,
+                entry.value
+            );
+        }
+        if (!node) {
+            return null;
+        }
+        node.dataset.timelineKey = getAgentTimelineItemKey(
+            entry,
+            timelineIndex
+        );
+        node.dataset.renderSignature = getAgentTimelineEntrySignature(entry);
+        return node;
+    }
+
+    applyAgentTranscriptNodeList(nextNodes) {
+        if (!this.agentTranscript) {
+            return;
+        }
+        const keepNodes = new Set(nextNodes);
+        let cursor = this.agentTranscript.firstChild;
+        for (const node of nextNodes) {
+            if (node === cursor) {
+                cursor = cursor?.nextSibling || null;
+                continue;
+            }
+            this.agentTranscript.insertBefore(node, cursor);
+        }
+        for (const node of Array.from(this.agentTranscript.children)) {
+            if (!keepNodes.has(node)) {
+                node.remove();
+            }
+        }
     }
 
     async loadOlderAgentTimeline(agentTab) {
@@ -6174,13 +6309,6 @@ class EditorManager {
                 } else {
                     body.classList.add('plain');
                     body.textContent = message.text || '';
-                    if (!isAgentMessageStreaming(agentTab, message)) {
-                        void this.enhanceAgentMarkdownBody(
-                            agentTab,
-                            message,
-                            body
-                        );
-                    }
                 }
             } else {
                 body.classList.add('plain');
@@ -6462,14 +6590,70 @@ class EditorManager {
 
     disposeAgentEmbeddedEditors() {
         this.agentEmbeddedTerminals.clear();
-        for (const disposable of this.agentEmbeddedEditors) {
-            try {
-                disposable.dispose();
-            } catch {
-                // Ignore embedded editor disposal failures.
-            }
+        if (!this.agentTranscript) {
+            this.agentEmbeddedEditors = [];
+            return;
+        }
+        for (const node of Array.from(this.agentTranscript.children)) {
+            this.disposeAgentTimelineNode(node);
         }
         this.agentEmbeddedEditors = [];
+    }
+
+    trackAgentTimelineDisposable(node, disposable) {
+        if (!node || !disposable) {
+            return;
+        }
+        if (!Array.isArray(node.__agentDisposables)) {
+            node.__agentDisposables = [];
+        }
+        node.__agentDisposables.push(disposable);
+    }
+
+    disposeAgentTimelineNode(node) {
+        if (!node || typeof node.querySelectorAll !== 'function') {
+            return;
+        }
+        const ownedNodes = [
+            node,
+            ...Array.from(node.querySelectorAll('*'))
+        ];
+        for (const ownedNode of ownedNodes) {
+            const disposables = Array.isArray(ownedNode.__agentDisposables)
+                ? ownedNode.__agentDisposables
+                : [];
+            for (const disposable of disposables) {
+                try {
+                    disposable.dispose();
+                } catch {
+                    // Ignore embedded editor disposal failures.
+                }
+            }
+            ownedNode.__agentDisposables = [];
+            if (ownedNode.__agentTerminalBinding) {
+                ownedNode.__agentTerminalBinding = null;
+            }
+        }
+    }
+
+    rebuildAgentEmbeddedTerminalRegistry() {
+        this.agentEmbeddedTerminals.clear();
+        if (!this.agentTranscript) {
+            return;
+        }
+        const terminalHosts = this.agentTranscript.querySelectorAll(
+            '.agent-tool-call-terminal-host'
+        );
+        for (const host of terminalHosts) {
+            const binding = host.__agentTerminalBinding;
+            if (!binding?.terminalId) {
+                continue;
+            }
+            if (!this.agentEmbeddedTerminals.has(binding.terminalId)) {
+                this.agentEmbeddedTerminals.set(binding.terminalId, []);
+            }
+            this.agentEmbeddedTerminals.get(binding.terminalId).push(binding);
+        }
     }
 
     buildAgentSectionBody(details, section) {
@@ -6535,7 +6719,8 @@ class EditorManager {
                     + '"JetBrains Mono", Menlo, Consolas, monospace'
             }
         );
-        this.agentEmbeddedEditors.push(editor, model);
+        this.trackAgentTimelineDisposable(host, editor);
+        this.trackAgentTimelineDisposable(host, model);
         details.addEventListener('toggle', () => {
             if (details.open) {
                 requestAnimationFrame(() => {
@@ -6622,20 +6807,19 @@ class EditorManager {
             }
         });
         if (terminalId) {
-            if (!this.agentEmbeddedTerminals.has(terminalId)) {
-                this.agentEmbeddedTerminals.set(terminalId, []);
-            }
-                this.agentEmbeddedTerminals.get(terminalId).push({
-                    meta,
-                    header,
-                    openButton,
-                    terminalNode,
-                    terminal: embeddedTerm,
-                    fitAddon,
+            host.__agentTerminalBinding = {
+                terminalId,
+                meta,
+                header,
+                openButton,
+                terminalNode,
+                terminal: embeddedTerm,
+                fitAddon,
                 layout: layoutTerminal
-            });
+            };
         }
-        this.agentEmbeddedEditors.push(embeddedTerm, fitAddon);
+        this.trackAgentTimelineDisposable(host, embeddedTerm);
+        this.trackAgentTimelineDisposable(host, fitAddon);
 
         return host;
     }
@@ -6749,11 +6933,9 @@ class EditorManager {
             original: originalModel,
             modified: modifiedModel
         });
-        this.agentEmbeddedEditors.push(
-            diffEditor,
-            originalModel,
-            modifiedModel
-        );
+        this.trackAgentTimelineDisposable(host, diffEditor);
+        this.trackAgentTimelineDisposable(host, originalModel);
+        this.trackAgentTimelineDisposable(host, modifiedModel);
         details.addEventListener('toggle', () => {
             if (details.open) {
                 requestAnimationFrame(() => {
@@ -9127,6 +9309,8 @@ class AgentTab {
         this.historyWindowEnd = -1;
         this.historyWindowLoading = false;
         this.streamingAssistantStreamKey = '';
+        this.markdownUpgradeTimer = null;
+        this.markdownUpgradeInFlight = false;
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
@@ -9483,6 +9667,9 @@ class AgentTab {
         }
         this.#syncBusyWatchdog();
         this.notifyUi();
+        if (!this.busy && isAgentTabVisible(this)) {
+            editorManager?.scheduleVisibleAgentMarkdownUpgrade?.(this);
+        }
         if (shouldAutostartQueuedPrompt) {
             this.lastCompletedRunCounter = this.runCounter;
             void drainQueuedAgentPrompt(this);
@@ -11332,6 +11519,46 @@ function isAgentMessageStreaming(agentTab, message) {
         && message.streamKey
         && message.streamKey === agentTab.streamingAssistantStreamKey
     );
+}
+
+function hashUiText(value) {
+    const text = String(value || '');
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+}
+
+function getAgentTimelineEntrySignature(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return 'unknown';
+    }
+    const type = String(entry.type || '');
+    const value = entry.value;
+    if (type === 'message') {
+        const attachments = Array.isArray(value?.attachments)
+            ? value.attachments.map((attachment) => [
+                attachment?.kind || '',
+                attachment?.name || '',
+                attachment?.path || '',
+                attachment?.url || '',
+                attachment?.size || 0,
+                attachment?.lastModified || 0
+            ])
+            : [];
+        return [
+            type,
+            value?.role || '',
+            value?.kind || '',
+            value?.createdAt || '',
+            hashUiText(value?.text || ''),
+            getAgentMessageMarkdownCache(value) ? 'markdown' : 'plain',
+            hashUiText(JSON.stringify(attachments))
+        ].join(':');
+    }
+    return `${type}:${hashUiText(JSON.stringify(value || null))}`;
 }
 
 function formatWorkspaceTabTitle(
