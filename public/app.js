@@ -4264,8 +4264,20 @@ class EditorManager {
         if (!(body instanceof HTMLElement) || !message?.text) {
             return;
         }
+        if (isAgentMessageStreaming(agentTab, message)) {
+            return;
+        }
         const session = this.currentSession;
         if (!session) {
+            return;
+        }
+
+        const sourceText = String(message.text || '');
+        const cachedMarkdown = getAgentMessageMarkdownCache(message);
+        if (cachedMarkdown) {
+            body.classList.remove('plain');
+            body.classList.add('markdown');
+            body.innerHTML = cachedMarkdown;
             return;
         }
 
@@ -4275,12 +4287,12 @@ class EditorManager {
         try {
             const { renderer } = await loadMarkdownPreviewBundle();
             if (
-                !body.isConnected
-                || body.dataset.markdownRenderToken !== renderToken
+                String(message.text || '') !== sourceText
+                || isAgentMessageStreaming(agentTab, message)
             ) {
                 return;
             }
-            const rendered = renderer.render(String(message.text || ''));
+            const rendered = renderer.render(sourceText);
             const sanitized = DOMPurify.sanitize(rendered, {
                 USE_PROFILES: {
                     html: true,
@@ -4299,6 +4311,17 @@ class EditorManager {
                 basePath,
                 session
             );
+            const nextMarkdownHtml = template.innerHTML;
+            message.markdownRenderSource = sourceText;
+            message.markdownRenderHtml = nextMarkdownHtml;
+            if (
+                !body.isConnected
+                || body.dataset.markdownRenderToken !== renderToken
+            ) {
+                return;
+            }
+            body.classList.remove('plain');
+            body.classList.add('markdown');
             body.replaceChildren(template.content);
         } catch {
             // Keep the lightweight fallback rendering.
@@ -6141,9 +6164,24 @@ class EditorManager {
                 message.role === 'assistant'
                 && message.kind === 'message'
             ) {
-                body.classList.add('markdown');
-                body.innerHTML = renderAgentMessageMarkdown(message.text || '');
-                void this.enhanceAgentMarkdownBody(agentTab, message, body);
+                const cachedMarkdown = getAgentMessageMarkdownCache(message);
+                if (
+                    !isAgentMessageStreaming(agentTab, message)
+                    && cachedMarkdown
+                ) {
+                    body.classList.add('markdown');
+                    body.innerHTML = cachedMarkdown;
+                } else {
+                    body.classList.add('plain');
+                    body.textContent = message.text || '';
+                    if (!isAgentMessageStreaming(agentTab, message)) {
+                        void this.enhanceAgentMarkdownBody(
+                            agentTab,
+                            message,
+                            body
+                        );
+                    }
+                }
             } else {
                 body.classList.add('plain');
                 body.textContent = message.text || '';
@@ -9088,6 +9126,7 @@ class AgentTab {
         this.historyWindowStart = -1;
         this.historyWindowEnd = -1;
         this.historyWindowLoading = false;
+        this.streamingAssistantStreamKey = '';
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
@@ -9295,9 +9334,23 @@ class AgentTab {
                 break;
             case 'message_open':
                 this.#upsertMessage(message.message);
+                if (
+                    message.message?.role === 'assistant'
+                    && message.message?.kind === 'message'
+                    && typeof message.message?.streamKey === 'string'
+                ) {
+                    this.streamingAssistantStreamKey = message.message.streamKey;
+                }
                 break;
             case 'message_chunk':
                 this.#appendChunk(message);
+                if (
+                    message.role === 'assistant'
+                    && message.kind === 'message'
+                    && typeof message.streamKey === 'string'
+                ) {
+                    this.streamingAssistantStreamKey = message.streamKey;
+                }
                 break;
             case 'session_update':
                 this.#applySessionUpdate(message.update || {});
@@ -9392,6 +9445,9 @@ class AgentTab {
                 break;
             default:
                 break;
+        }
+        if (!this.busy) {
+            this.streamingAssistantStreamKey = '';
         }
         const shouldAutostartQueuedPrompt = (
             wasBusy
@@ -9666,39 +9722,51 @@ class AgentTab {
         if (!message) return;
         const index = this.#findMessageIndex(message);
         if (index === -1) {
-            this.messages.push(this.#normalizeMessage(message));
+            const nextMessage = this.#normalizeMessage(message);
+            clearAgentMessageMarkdownCache(nextMessage);
+            this.messages.push(nextMessage);
             return;
         }
 
         const previous = this.messages[index];
         const nextMessage = this.#normalizeMessage(message, previous.order);
+        const mergedText = selectAgentMessageText(previous.text, nextMessage.text);
         this.messages[index] = {
             ...previous,
             ...nextMessage,
             createdAt: nextMessage.createdAt || previous.createdAt || '',
-            text: selectAgentMessageText(previous.text, nextMessage.text)
+            text: mergedText
         };
+        if (mergedText !== (previous.text || '')) {
+            clearAgentMessageMarkdownCache(this.messages[index]);
+        }
     }
 
     #appendChunk(message) {
         const index = this.#findMessageIndex(message);
         if (index !== -1) {
             const existing = this.messages[index];
-            existing.text = mergeAgentMessageText(
+            const nextText = mergeAgentMessageText(
                 existing.text || '',
                 message.text || ''
             );
+            if (nextText !== existing.text) {
+                existing.text = nextText;
+                clearAgentMessageMarkdownCache(existing);
+            }
             return;
         }
 
-        this.messages.push(this.#normalizeMessage({
+        const nextMessage = this.#normalizeMessage({
             id: crypto.randomUUID(),
             streamKey: message.streamKey,
             role: message.role || 'assistant',
             kind: message.kind || 'message',
             text: message.text || '',
             createdAt: new Date().toISOString()
-        }));
+        });
+        clearAgentMessageMarkdownCache(nextMessage);
+        this.messages.push(nextMessage);
     }
 
     #applySessionUpdate(update) {
@@ -11229,6 +11297,43 @@ function getAgentTimelineItemKey(entry, absoluteIndex = 0) {
     return `${entry.type}:${order}:${absoluteIndex}`;
 }
 
+function clearAgentMessageMarkdownCache(message) {
+    if (!message || typeof message !== 'object') {
+        return;
+    }
+    delete message.markdownRenderSource;
+    delete message.markdownRenderHtml;
+}
+
+function getAgentMessageMarkdownCache(message) {
+    if (!message || typeof message !== 'object') {
+        return '';
+    }
+    const source = typeof message.text === 'string' ? message.text : '';
+    if (
+        typeof message.markdownRenderSource !== 'string'
+        || message.markdownRenderSource !== source
+    ) {
+        return '';
+    }
+    return typeof message.markdownRenderHtml === 'string'
+        ? message.markdownRenderHtml
+        : '';
+}
+
+function isAgentMessageStreaming(agentTab, message) {
+    if (!agentTab || !message) {
+        return false;
+    }
+    return !!(
+        agentTab.busy
+        && message.role === 'assistant'
+        && message.kind === 'message'
+        && message.streamKey
+        && message.streamKey === agentTab.streamingAssistantStreamKey
+    );
+}
+
 function formatWorkspaceTabTitle(
     value,
     maxLength = WORKSPACE_TAB_TITLE_MAX_LENGTH
@@ -12139,119 +12244,6 @@ function escapeHtml(text) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
-}
-
-function renderAgentInlineMarkdown(text) {
-    const source = String(text || '');
-    const pattern = /(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))/g;
-    let result = '';
-    let lastIndex = 0;
-    for (const match of source.matchAll(pattern)) {
-        const [token, codeToken, , linkLabel, linkHref] = match;
-        result += escapeHtml(source.slice(lastIndex, match.index));
-        if (codeToken) {
-            result += `<code>${escapeHtml(codeToken.slice(1, -1))}</code>`;
-        } else if (linkLabel && linkHref) {
-            result += `<a href="${escapeHtml(linkHref)}">${escapeHtml(linkLabel)}</a>`;
-        } else {
-            result += escapeHtml(token);
-        }
-        lastIndex = (match.index || 0) + token.length;
-    }
-    result += escapeHtml(source.slice(lastIndex));
-    return result;
-}
-
-function normalizeAgentMessageText(text) {
-    return String(text || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/([.!?`'")])([A-Z[`"])/g, '$1\n\n$2');
-}
-
-function renderAgentMessageMarkdown(text) {
-    const source = normalizeAgentMessageText(text);
-    if (!source) return '';
-
-    const lines = source.split('\n');
-    const blocks = [];
-    let paragraph = [];
-    let list = [];
-    let codeFence = null;
-    let codeLines = [];
-
-    const flushParagraph = () => {
-        if (paragraph.length === 0) return;
-        blocks.push(
-            `<p>${paragraph.map(renderAgentInlineMarkdown).join('<br>')}</p>`
-        );
-        paragraph = [];
-    };
-
-    const flushList = () => {
-        if (list.length === 0) return;
-        blocks.push(
-            `<ul>${list.map((item) => (
-                `<li>${renderAgentInlineMarkdown(item)}</li>`
-            )).join('')}</ul>`
-        );
-        list = [];
-    };
-
-    const flushCode = () => {
-        if (codeFence === null) return;
-        const languageClass = codeFence
-            ? ` class="language-${escapeHtml(codeFence)}"`
-            : '';
-        blocks.push(
-            `<pre><code${languageClass}>${escapeHtml(
-                codeLines.join('\n')
-            )}</code></pre>`
-        );
-        codeFence = null;
-        codeLines = [];
-    };
-
-    for (const line of lines) {
-        const fenceMatch = line.match(/^```(.*)$/);
-        if (fenceMatch) {
-            flushParagraph();
-            flushList();
-            if (codeFence === null) {
-                codeFence = fenceMatch[1].trim();
-            } else {
-                flushCode();
-            }
-            continue;
-        }
-
-        if (codeFence !== null) {
-            codeLines.push(line);
-            continue;
-        }
-
-        if (!line.trim()) {
-            flushParagraph();
-            flushList();
-            continue;
-        }
-
-        const listMatch = line.match(/^[-*]\s+(.*)$/);
-        if (listMatch) {
-            flushParagraph();
-            list.push(listMatch[1]);
-            continue;
-        }
-
-        flushList();
-        paragraph.push(line);
-    }
-
-    flushParagraph();
-    flushList();
-    flushCode();
-
-    const html = blocks.join('');
-    return DOMPurify.sanitize(html);
 }
 
 function truncateAgentDetail(text, limit = AGENT_MESSAGE_MAX_RENDER_BYTES) {
