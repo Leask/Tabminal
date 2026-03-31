@@ -1063,7 +1063,6 @@ class EditorManager {
         this.initMonaco();
         this.loadIconMap();
         this.agentTimestampTimer = window.setInterval(() => {
-            this.refreshAgentTimelineTimestamps();
             this.refreshAgentUsageHud();
         }, 1000);
         this.fileVersionCheckTimer = window.setInterval(() => {
@@ -5791,7 +5790,6 @@ class EditorManager {
         this.setAgentPromptValue(agentTab.promptDraft || '', agentTab);
         this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
         this.updateAgentComposerActions(agentTab);
-        this.refreshAgentTimelineTimestamps();
         this.refreshAgentUsageHud();
         this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
     }
@@ -5936,20 +5934,6 @@ class EditorManager {
             });
         } finally {
             agentTab.historyWindowLoading = false;
-        }
-    }
-
-    refreshAgentTimelineTimestamps() {
-        if (!this.agentContainer || this.agentContainer.style.display === 'none') {
-            return;
-        }
-        const timestamps = this.agentContainer.querySelectorAll(
-            '.agent-message-time[data-created-at]'
-        );
-        for (const node of timestamps) {
-            const createdAt = String(node.dataset.createdAt || '').trim();
-            if (!createdAt) continue;
-            node.textContent = getAgentMessageTimeLabel({ createdAt });
         }
     }
 
@@ -6192,9 +6176,7 @@ class EditorManager {
         const item = document.createElement('div');
         item.className = 'agent-message agent-plan-history';
         item.appendChild(buildAgentTimelineHeader(
-            buildAgentTimelineRoleLabel(agentTab, 'plan'),
-            getAgentMessageTimeLabel(planEntry),
-            planEntry.createdAt || ''
+            buildAgentTimelineRoleLabel(agentTab, 'plan')
         ));
         const body = document.createElement('div');
         body.className = 'agent-plan-history-body';
@@ -6222,9 +6204,7 @@ class EditorManager {
         item.className = `agent-message ${message.role} ${message.kind}`;
 
         item.appendChild(buildAgentTimelineHeader(
-            getAgentMessageRoleLabel(agentTab, message),
-            getAgentMessageTimeLabel(message),
-            message.createdAt || ''
+            getAgentMessageRoleLabel(agentTab, message)
         ));
         const attachments = buildAgentMessageAttachmentsNode(
             message.attachments
@@ -6275,9 +6255,7 @@ class EditorManager {
         node.className = `agent-tool-call state-${toolStatusClass}`;
 
         node.appendChild(buildAgentTimelineHeader(
-            buildAgentTimelineRoleLabel(agentTab, 'tool'),
-            getAgentMessageTimeLabel(toolCall),
-            toolCall.createdAt || ''
+            buildAgentTimelineRoleLabel(agentTab, 'tool')
         ));
 
         const header = document.createElement('div');
@@ -6384,9 +6362,7 @@ class EditorManager {
                 permission.status === 'pending'
                     ? 'permission request'
                     : 'permission'
-            ),
-            getAgentMessageTimeLabel(permission),
-            permission.createdAt || ''
+            )
         ));
 
         const titleRow = document.createElement('div');
@@ -9883,6 +9859,9 @@ class AgentTab {
                 existing.text = nextText;
                 clearAgentMessageMarkdownCache(existing);
             }
+            if (Number.isFinite(message?.order)) {
+                existing.order = message.order;
+            }
             return;
         }
 
@@ -9892,7 +9871,8 @@ class AgentTab {
             role: message.role || 'assistant',
             kind: message.kind || 'message',
             text: message.text || '',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            order: message.order
         });
         clearAgentMessageMarkdownCache(nextMessage);
         this.messages.push(nextMessage);
@@ -11366,9 +11346,7 @@ function getAgentMessageTimeLabel(message) {
 }
 
 function buildAgentTimelineHeader(
-    roleLabel,
-    timeLabel = '',
-    createdAt = ''
+    roleLabel
 ) {
     const header = document.createElement('div');
     header.className = 'agent-message-header';
@@ -11377,16 +11355,6 @@ function buildAgentTimelineHeader(
     role.className = 'agent-message-role';
     role.textContent = roleLabel;
     header.appendChild(role);
-
-    if (timeLabel) {
-        const time = document.createElement('div');
-        time.className = 'agent-message-time';
-        time.textContent = timeLabel;
-        if (createdAt) {
-            time.dataset.createdAt = createdAt;
-        }
-        header.appendChild(time);
-    }
 
     return header;
 }

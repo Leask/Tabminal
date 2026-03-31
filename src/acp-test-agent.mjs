@@ -582,6 +582,53 @@ class TabminalTestAgent {
             }
 
             if (
+                commandName === 'inline-order'
+                || /synthetic-inline-order/i.test(promptText)
+            ) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'inline-order-message',
+                        content: {
+                            type: 'text',
+                            text: 'Before tool. '
+                        }
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call',
+                        toolCallId: 'inline-order-tool',
+                        title: 'Inline order tool',
+                        kind: 'execute',
+                        status: 'pending'
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'tool_call_update',
+                        toolCallId: 'inline-order-tool',
+                        status: 'completed'
+                    }
+                });
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'inline-order-message',
+                        content: {
+                            type: 'text',
+                            text: 'After tool.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
+            if (
                 commandName === 'demo'
                 || commandName === 'diff'
                 || /diff-smoke/i.test(promptText)

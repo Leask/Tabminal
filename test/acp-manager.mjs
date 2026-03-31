@@ -417,6 +417,24 @@ async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
 }
 
 describe('AcpManager', () => {
+    it('uses the platform-specific Codex ACP package on supported platforms', async () => {
+        const manager = new AcpManager();
+        try {
+            const codex = (await manager.listDefinitions()).find(
+                (definition) => definition.id === 'codex'
+            );
+            assert.ok(codex);
+            if (process.platform === 'darwin' && process.arch === 'arm64') {
+                assert.match(
+                    codex.commandLabel,
+                    /@zed-industries\/codex-acp-darwin-arm64@latest/
+                );
+            }
+        } finally {
+            await manager.dispose().catch(() => {});
+        }
+    });
+
     it('starts a new synthetic restore turn when replay reaches a new user prompt', () => {
         const capture = createRestoreCaptureState([]);
         const ingest = (role, text) => {
@@ -570,6 +588,60 @@ describe('AcpManager', () => {
         );
     });
 
+    it('moves a replayed continued message to the latest shared timeline order', () => {
+        const capture = createRestoreCaptureState([]);
+        const orders = [101, 102, 103];
+        capture.nextTimelineOrder = () => orders.shift();
+
+        captureRestoreReplayChunk(
+            capture,
+            {
+                sessionUpdate: 'agent_message_chunk',
+                messageId: 'message-1'
+            },
+            'assistant',
+            'message',
+            'Before tool. '
+        );
+
+        const tool = buildRestoredToolCall(
+            null,
+            null,
+            {
+                toolCallId: 'tool-1',
+                status: 'completed'
+            },
+            () => capture.nextTimelineOrder(),
+            {
+                allowEmptyCreatedAt: true
+            }
+        );
+
+        captureRestoreReplayChunk(
+            capture,
+            {
+                sessionUpdate: 'agent_message_chunk',
+                messageId: 'message-1'
+            },
+            'assistant',
+            'message',
+            'After tool.'
+        );
+
+        assert.deepEqual(
+            {
+                text: capture.messages[0].text,
+                order: capture.messages[0].order,
+                toolOrder: tool.order
+            },
+            {
+                text: 'Before tool. After tool.',
+                order: 103,
+                toolOrder: 102
+            }
+        );
+    });
+
     it('preserves baseline tool timestamps during restore replay', () => {
         const nextTool = buildRestoredToolCall(
             null,
@@ -603,6 +675,46 @@ describe('AcpManager', () => {
                 updatedAt: '2026-03-23T00:01:04.000Z',
                 order: 77,
                 title: 'Read file',
+                status: 'completed'
+            }
+        );
+    });
+
+    it('does not invent a new tool timestamp on follow-up restore updates', () => {
+        const firstTool = buildRestoredToolCall(
+            null,
+            null,
+            {
+                toolCallId: 'tool-1',
+                status: 'pending'
+            },
+            () => 77,
+            {
+                allowEmptyCreatedAt: true
+            }
+        );
+
+        const updatedTool = buildRestoredToolCall(
+            firstTool,
+            null,
+            {
+                toolCallId: 'tool-1',
+                status: 'completed'
+            },
+            () => 78
+        );
+
+        assert.deepEqual(
+            {
+                createdAt: firstTool.createdAt,
+                updatedCreatedAt: updatedTool.createdAt,
+                order: updatedTool.order,
+                status: updatedTool.status
+            },
+            {
+                createdAt: '',
+                updatedCreatedAt: '',
+                order: 78,
                 status: 'completed'
             }
         );
@@ -1916,7 +2028,17 @@ describe('AcpManager', () => {
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
-                return current && !current.busy ? current : null;
+                if (!current) return null;
+                const hasBefore = current.messages.some((message) => (
+                    message.text === 'Before tool.'
+                ));
+                const hasAfter = current.messages.some((message) => (
+                    message.text === 'After tool.'
+                ));
+                const hasTool = current.toolCalls.some((tool) => (
+                    tool.toolCallId === 'synthetic-tool'
+                ));
+                return hasBefore && hasAfter && hasTool ? current : null;
             }, 12000);
             assert.equal(settledTab.status, 'ready');
             assert.ok(
@@ -1970,7 +2092,15 @@ describe('AcpManager', () => {
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
-                return current && !current.busy ? current : null;
+                if (!current) return null;
+                const hasMessage = current.messages.some((message) => (
+                    message.streamKey === 'inline-order-message'
+                    && message.text === 'Before tool. After tool.'
+                ));
+                const hasTool = current.toolCalls.some((tool) => (
+                    tool.toolCallId === 'inline-order-tool'
+                ));
+                return hasMessage && hasTool ? current : null;
             }, 12000);
 
             assert.equal(settledTab.title, 'plan');
@@ -2034,7 +2164,17 @@ describe('AcpManager', () => {
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
-                return current && !current.busy ? current : null;
+                if (!current) return null;
+                const hasBefore = current.messages.some((message) => (
+                    message.text === 'Before tool.'
+                ));
+                const hasAfter = current.messages.some((message) => (
+                    message.text === 'After tool.'
+                ));
+                const hasTool = current.toolCalls.some((tool) => (
+                    tool.toolCallId === 'synthetic-tool'
+                ));
+                return hasBefore && hasAfter && hasTool ? current : null;
             }, 12000);
             assert.equal(settledTab.status, 'ready');
         } finally {
@@ -2066,12 +2206,22 @@ describe('AcpManager', () => {
                 terminalSessionId: 'term-1'
             });
 
-            await manager.sendPrompt(tab.id, 'synthetic-order');
+            await manager.sendPrompt(tab.id, '/order');
 
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
-                return current && !current.busy ? current : null;
+                if (!current) return null;
+                const hasBefore = current.messages.some((message) => (
+                    message.text === 'Before tool.'
+                ));
+                const hasAfter = current.messages.some((message) => (
+                    message.text === 'After tool.'
+                ));
+                const hasTool = current.toolCalls.some((tool) => (
+                    tool.toolCallId === 'synthetic-tool'
+                ));
+                return hasBefore && hasAfter && hasTool ? current : null;
             }, 12000);
 
             const beforeMessage = settledTab.messages.find((message) => (
@@ -2089,6 +2239,73 @@ describe('AcpManager', () => {
             assert.ok(toolCall);
             assert.ok(beforeMessage.order < toolCall.order);
             assert.ok(toolCall.order < afterMessage.order);
+        } finally {
+            await manager.dispose();
+        }
+    });
+
+    it('moves a continued assistant message order after later tool calls', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, '/inline-order');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                if (!current) return null;
+                const hasMessage = current.messages.some((message) => (
+                    message.streamKey === 'inline-order-message'
+                    && message.text === 'Before tool. After tool.'
+                ));
+                const hasTool = current.toolCalls.some((tool) => (
+                    tool.toolCallId === 'inline-order-tool'
+                ));
+                return hasMessage && hasTool ? current : null;
+            }, 12000);
+
+            const assistantMessage = settledTab.messages.find((message) => (
+                message.streamKey === 'inline-order-message'
+            ));
+            const toolCall = settledTab.toolCalls.find((tool) => (
+                tool.toolCallId === 'inline-order-tool'
+            ));
+            const chunkEvent = events.find((event) => (
+                event.type === 'message_chunk'
+                && event.streamKey === 'inline-order-message'
+            ));
+
+            assert.ok(assistantMessage);
+            assert.ok(toolCall);
+            assert.ok(chunkEvent);
+            assert.equal(
+                assistantMessage.text,
+                'Before tool. After tool.'
+            );
+            assert.ok(assistantMessage.order > toolCall.order);
+            assert.equal(chunkEvent.order, assistantMessage.order);
         } finally {
             await manager.dispose();
         }

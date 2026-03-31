@@ -319,6 +319,28 @@ function hasGhCopilotCliInstalled() {
     return ghCopilotCliInstalledCache;
 }
 
+function getCodexAcpPlatformPackage() {
+    const suffixByPlatform = {
+        darwin: {
+            arm64: 'darwin-arm64',
+            x64: 'darwin-x64'
+        },
+        linux: {
+            arm64: 'linux-arm64',
+            x64: 'linux-x64'
+        },
+        win32: {
+            arm64: 'win32-arm64',
+            x64: 'win32-x64'
+        }
+    };
+    const platformSuffix = suffixByPlatform[process.platform]?.[process.arch];
+    if (!platformSuffix) {
+        return '';
+    }
+    return `@zed-industries/codex-acp-${platformSuffix}`;
+}
+
 function readGhAuthToken() {
     if (typeof ghAuthTokenCache === 'string') {
         return ghAuthTokenCache;
@@ -479,6 +501,10 @@ function makeBuiltInDefinitions() {
     const hasGeminiBinary = commandExists('gemini');
     const hasCopilotBinary = commandExists('copilot');
     const hasGhCopilot = hasGhCopilotWrapper();
+    const codexAcpPlatformPackage = getCodexAcpPlatformPackage();
+    const codexAcpPlatformBinary = codexAcpPlatformPackage
+        ? codexAcpPlatformPackage.split('/').pop()
+        : '';
     const definitions = [
         {
             id: 'gemini',
@@ -499,8 +525,17 @@ function makeBuiltInDefinitions() {
             description: 'Codex ACP adapter',
             websiteUrl: 'https://openai.com/codex/',
             command: NPX_COMMAND,
-            args: ['@zed-industries/codex-acp@latest'],
-            commandLabel: 'npx @zed-industries/codex-acp@latest'
+            args: codexAcpPlatformPackage
+                ? [
+                    '-p',
+                    `${codexAcpPlatformPackage}@latest`,
+                    codexAcpPlatformBinary
+                ]
+                : ['@zed-industries/codex-acp@latest'],
+            commandLabel: codexAcpPlatformPackage
+                ? `npx -p ${codexAcpPlatformPackage}@latest `
+                    + `${codexAcpPlatformBinary}`
+                : 'npx @zed-industries/codex-acp@latest'
         },
         {
             id: 'claude',
@@ -1312,8 +1347,18 @@ export function createRestoreCaptureState(messages = [], options = {}) {
     const toolCalls = Array.isArray(options.toolCalls)
         ? options.toolCalls
         : [];
+    const baselineMessages = normalizeAgentTranscriptMessages(messages);
+    const baselineMessagesByStreamKey = new Map();
+    for (const message of baselineMessages) {
+        const streamKey = String(message?.streamKey || '').trim();
+        if (!streamKey) {
+            continue;
+        }
+        baselineMessagesByStreamKey.set(streamKey, message);
+    }
     return {
-        baselineMessages: normalizeAgentTranscriptMessages(messages),
+        baselineMessages,
+        baselineMessagesByStreamKey,
         baselineToolCalls: new Map(
             toolCalls
                 .map((entry) => normalizePersistedTimelineEntry(entry, 0))
@@ -1419,6 +1464,44 @@ function getRestoreCaptureStreamKey(capture, update, role, kind, text = '') {
     return streamKey;
 }
 
+function findMessageIndexByStreamKey(
+    messages = [],
+    streamKey = '',
+    role = '',
+    kind = '',
+    options = {}
+) {
+    const normalizedStreamKey = String(streamKey || '').trim();
+    if (!normalizedStreamKey) {
+        return -1;
+    }
+    if (!options.searchWholeHistory) {
+        const lastIndex = messages.length - 1;
+        if (lastIndex < 0) {
+            return -1;
+        }
+        const lastMessage = messages[lastIndex];
+        return (
+            String(lastMessage?.streamKey || '') === normalizedStreamKey
+            && String(lastMessage?.role || '') === String(role || '')
+            && String(lastMessage?.kind || '') === String(kind || '')
+        )
+            ? lastIndex
+            : -1;
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (
+            String(message?.streamKey || '') === normalizedStreamKey
+            && String(message?.role || '') === String(role || '')
+            && String(message?.kind || '') === String(kind || '')
+        ) {
+            return index;
+        }
+    }
+    return -1;
+}
+
 export function captureRestoreReplayChunk(capture, update, role, kind, text) {
     if (!capture) return false;
     const chunk = String(text || '');
@@ -1430,20 +1513,29 @@ export function captureRestoreReplayChunk(capture, update, role, kind, text) {
         kind,
         chunk
     );
-    const last = capture.messages[capture.messages.length - 1] || null;
-    if (
-        last
-        && last.streamKey === streamKey
-        && last.role === role
-        && last.kind === kind
-    ) {
-        last.text = mergeAgentMessageText(last.text, chunk);
+    const existingIndex = findMessageIndexByStreamKey(
+        capture.messages,
+        streamKey,
+        role,
+        kind,
+        {
+            searchWholeHistory: !!update?.messageId
+        }
+    );
+    if (existingIndex !== -1) {
+        const existing = capture.messages[existingIndex];
+        existing.text = mergeAgentMessageText(existing.text, chunk);
+        if (typeof capture.nextTimelineOrder === 'function') {
+            existing.order = capture.nextTimelineOrder();
+        }
         return true;
     }
     if (!update?.messageId) {
         capture.messageCounter += 1;
     }
-    const baselineMessage = capture.baselineMessages[capture.messages.length] || null;
+    const baselineMessage = capture.baselineMessagesByStreamKey.get(streamKey)
+        || capture.baselineMessages[capture.messages.length]
+        || null;
     const canReuseBaseline = !!(
         baselineMessage
         && baselineMessage.role === role
@@ -1535,18 +1627,32 @@ export function buildRestoredToolCall(
     const persisted = cloneSerializable(baseline, {}) || {};
     const current = cloneSerializable(previous, {}) || {};
     const allowEmptyCreatedAt = options.allowEmptyCreatedAt === true;
-    const nextOrder = normalizePersistedTimelineOrder(current.order, 0)
-        || (
-            typeof nextTimelineOrder === 'function'
-                ? nextTimelineOrder()
-                : normalizePersistedTimelineOrder(persisted.order, 0)
-        )
+    const hasCurrentCreatedAt = Object.prototype.hasOwnProperty.call(
+        current,
+        'createdAt'
+    );
+    const hasPersistedCreatedAt = Object.prototype.hasOwnProperty.call(
+        persisted,
+        'createdAt'
+    );
+    const nextOrder = (
+        typeof nextTimelineOrder === 'function'
+            ? nextTimelineOrder()
+            : normalizePersistedTimelineOrder(current.order, 0)
+    )
+        || normalizePersistedTimelineOrder(persisted.order, 0)
         || 1;
     const inheritedCreatedAt = String(
         current.createdAt || persisted.createdAt || ''
     ).trim();
     const createdAt = inheritedCreatedAt
-        || (allowEmptyCreatedAt ? '' : new Date().toISOString());
+        || (
+            allowEmptyCreatedAt
+            || hasCurrentCreatedAt
+            || hasPersistedCreatedAt
+                ? ''
+                : new Date().toISOString()
+        );
     const nextToolCall = {
         ...persisted,
         ...current,
@@ -1644,6 +1750,13 @@ function normalizePersistedTerminalSummary(summary = {}) {
             }
             : null
     };
+}
+
+function compareTimelineOrder(left = {}, right = {}) {
+    return (
+        normalizePersistedTimelineOrder(left?.order, 0)
+        - normalizePersistedTimelineOrder(right?.order, 0)
+    );
 }
 
 export function getNextSyntheticStreamTurn(messages = []) {
@@ -2659,6 +2772,27 @@ class AcpRuntime extends EventEmitter {
 
     serializeTab(tab) {
         tab.messages = normalizeAgentTranscriptMessages(tab.messages);
+        const messages = cloneSerializable(tab.messages, []).sort(
+            compareTimelineOrder
+        );
+        const toolCalls = Array.from(tab.toolCalls.values())
+            .map((item) => cloneSerializable(item, {}))
+            .sort(compareTimelineOrder);
+        const permissions = Array.from(tab.permissions.values())
+            .map((item) => ({
+                id: item.id,
+                sessionId: item.sessionId,
+                toolCall: item.toolCall,
+                options: item.options,
+                status: item.status,
+                createdAt: item.createdAt || '',
+                order: item.order,
+                selectedOptionId: item.selectedOptionId || ''
+            }))
+            .sort(compareTimelineOrder);
+        const plan = Array.isArray(tab.plan)
+            ? cloneSerializable(tab.plan, []).sort(compareTimelineOrder)
+            : [];
         return {
             id: tab.id,
             runtimeId: tab.runtimeId,
@@ -2679,19 +2813,10 @@ class AcpRuntime extends EventEmitter {
             availableCommands: tab.availableCommands,
             sessionCapabilities: this.#getSessionCapabilities(),
             configOptions: tab.configOptions,
-            messages: tab.messages,
-            toolCalls: Array.from(tab.toolCalls.values()),
-            permissions: Array.from(tab.permissions.values()).map((item) => ({
-                id: item.id,
-                sessionId: item.sessionId,
-                toolCall: item.toolCall,
-                options: item.options,
-                status: item.status,
-                createdAt: item.createdAt || '',
-                order: item.order,
-                selectedOptionId: item.selectedOptionId || ''
-            })),
-            plan: Array.isArray(tab.plan) ? tab.plan : [],
+            messages,
+            toolCalls,
+            permissions,
+            plan,
             usage: serializeUsageState(tab.usage),
             terminals: Array.from(tab.terminals.values())
         };
@@ -3257,23 +3382,30 @@ class AcpRuntime extends EventEmitter {
             };
         }
         const streamKey = this.#getStreamKey(tab, update, role, kind);
-        const last = tab.messages[tab.messages.length - 1] || null;
+        const existingIndex = findMessageIndexByStreamKey(
+            tab.messages,
+            streamKey,
+            role,
+            kind,
+            {
+                searchWholeHistory: !!update?.messageId
+            }
+        );
 
-        if (
-            last
-            && last.streamKey === streamKey
-            && last.role === role
-            && last.kind === kind
-        ) {
-            const nextText = mergeAgentMessageText(last.text, text);
-            const appendedText = nextText.slice(last.text.length);
-            last.text = nextText;
+        if (existingIndex !== -1) {
+            const existing = tab.messages[existingIndex];
+            const nextText = mergeAgentMessageText(existing.text, text);
+            const appendedText = nextText.slice(existing.text.length);
+            const nextOrder = this.#nextTimelineOrder(tab);
+            existing.text = nextText;
+            existing.order = nextOrder;
             this.#broadcast(tab, {
                 type: 'message_chunk',
                 streamKey,
                 role,
                 kind,
-                text: appendedText
+                text: appendedText,
+                order: nextOrder
             });
             return {
                 didChange: true,
