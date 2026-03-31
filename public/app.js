@@ -4260,20 +4260,29 @@ class EditorManager {
         return String(session?.cwd || session?.initialCwd || '').trim();
     }
 
-    async ensureAgentMessageMarkdownCache(agentTab, message) {
-        if (!message?.text || isAgentMessageStreaming(agentTab, message)) {
-            return '';
+    async enhanceAgentMarkdownBody(agentTab, message, body) {
+        if (!(body instanceof HTMLElement) || !message?.text) {
+            return;
+        }
+        if (isAgentMessageStreaming(agentTab, message)) {
+            return;
         }
         const session = this.currentSession;
         if (!session) {
-            return '';
+            return;
         }
 
         const sourceText = String(message.text || '');
         const cachedMarkdown = getAgentMessageMarkdownCache(message);
         if (cachedMarkdown) {
-            return cachedMarkdown;
+            body.classList.remove('plain');
+            body.classList.add('markdown');
+            body.innerHTML = cachedMarkdown;
+            return;
         }
+
+        const renderToken = `${Date.now()}:${Math.random()}`;
+        body.dataset.markdownRenderToken = renderToken;
 
         try {
             const { renderer } = await loadMarkdownPreviewBundle();
@@ -4281,7 +4290,7 @@ class EditorManager {
                 String(message.text || '') !== sourceText
                 || isAgentMessageStreaming(agentTab, message)
             ) {
-                return '';
+                return;
             }
             const rendered = renderer.render(sourceText);
             const sanitized = DOMPurify.sanitize(rendered, {
@@ -4305,92 +4314,18 @@ class EditorManager {
             const nextMarkdownHtml = template.innerHTML;
             message.markdownRenderSource = sourceText;
             message.markdownRenderHtml = nextMarkdownHtml;
-            return nextMarkdownHtml;
-        } catch {
-            return '';
-        }
-    }
-
-    findNextVisibleAgentMarkdownCandidate(agentTab) {
-        if (!agentTab) {
-            return null;
-        }
-        const timeline = getAgentTimelineItems(agentTab);
-        const transcriptWindow = getAgentTranscriptWindow(
-            agentTab,
-            timeline.length,
-            { pinToBottom: false }
-        );
-        const visibleTimeline = timeline.slice(
-            transcriptWindow.start,
-            transcriptWindow.end
-        );
-        for (let index = visibleTimeline.length - 1; index >= 0; index -= 1) {
-            const entry = visibleTimeline[index];
-            if (entry?.type !== 'message') {
-                continue;
-            }
-            const message = entry.value;
             if (
-                message?.role === 'assistant'
-                && message?.kind === 'message'
-                && message?.text
-                && !getAgentMessageMarkdownCache(message)
-                && !isAgentMessageStreaming(agentTab, message)
+                !body.isConnected
+                || body.dataset.markdownRenderToken !== renderToken
             ) {
-                return message;
+                return;
             }
+            body.classList.remove('plain');
+            body.classList.add('markdown');
+            body.replaceChildren(template.content);
+        } catch {
+            // Keep the lightweight fallback rendering.
         }
-        return null;
-    }
-
-    scheduleVisibleAgentMarkdownUpgrade(agentTab) {
-        if (
-            !agentTab
-            || agentTab.busy
-            || !isAgentTabVisible(agentTab)
-            || agentTab.markdownUpgradeInFlight
-            || agentTab.markdownUpgradeTimer
-        ) {
-            return;
-        }
-        if (!this.findNextVisibleAgentMarkdownCandidate(agentTab)) {
-            return;
-        }
-        agentTab.markdownUpgradeTimer = setTimeout(() => {
-            agentTab.markdownUpgradeTimer = null;
-            void this.runVisibleAgentMarkdownUpgrade(agentTab);
-        }, 120);
-    }
-
-    async runVisibleAgentMarkdownUpgrade(agentTab) {
-        if (
-            !agentTab
-            || agentTab.busy
-            || agentTab.markdownUpgradeInFlight
-            || !isAgentTabVisible(agentTab)
-        ) {
-            return;
-        }
-        const candidate = this.findNextVisibleAgentMarkdownCandidate(agentTab);
-        if (!candidate) {
-            return;
-        }
-        agentTab.markdownUpgradeInFlight = true;
-        try {
-            const renderedHtml = await this.ensureAgentMessageMarkdownCache(
-                agentTab,
-                candidate
-            );
-            if (renderedHtml && isAgentTabVisible(agentTab)) {
-                this.renderAgentPanel(agentTab, {
-                    reason: 'markdown-upgrade'
-                });
-            }
-        } finally {
-            agentTab.markdownUpgradeInFlight = false;
-        }
-        this.scheduleVisibleAgentMarkdownUpgrade(agentTab);
     }
 
     scrollMarkdownPreviewHash(hash) {
@@ -5790,7 +5725,10 @@ class EditorManager {
                     entry,
                     timelineIndex
                 );
-                const renderSignature = getAgentTimelineEntrySignature(entry);
+                const renderSignature = getAgentTimelineRenderSignature(
+                    agentTab,
+                    entry
+                );
                 const turnStart = timelineIndex > 0
                     && entry.type === 'message'
                     && String(entry.value?.role || '').toLowerCase()
@@ -5841,9 +5779,6 @@ class EditorManager {
         }
         this.updateAgentScrollBottomButton();
         this.rememberAgentTranscriptLayout();
-        if (!agentTab.busy) {
-            this.scheduleVisibleAgentMarkdownUpgrade(agentTab);
-        }
         this.agentTools.innerHTML = '';
         this.agentTools.style.display = 'none';
         this.agentPermissions.innerHTML = '';
@@ -5885,7 +5820,10 @@ class EditorManager {
             entry,
             timelineIndex
         );
-        node.dataset.renderSignature = getAgentTimelineEntrySignature(entry);
+        node.dataset.renderSignature = getAgentTimelineRenderSignature(
+            agentTab,
+            entry
+        );
         return node;
     }
 
@@ -6309,6 +6247,11 @@ class EditorManager {
                 } else {
                     body.classList.add('plain');
                     body.textContent = message.text || '';
+                    void this.enhanceAgentMarkdownBody(
+                        agentTab,
+                        message,
+                        body
+                    );
                 }
             } else {
                 body.classList.add('plain');
@@ -9309,8 +9252,6 @@ class AgentTab {
         this.historyWindowEnd = -1;
         this.historyWindowLoading = false;
         this.streamingAssistantStreamKey = '';
-        this.markdownUpgradeTimer = null;
-        this.markdownUpgradeInFlight = false;
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
@@ -9667,9 +9608,6 @@ class AgentTab {
         }
         this.#syncBusyWatchdog();
         this.notifyUi();
-        if (!this.busy && isAgentTabVisible(this)) {
-            editorManager?.scheduleVisibleAgentMarkdownUpgrade?.(this);
-        }
         if (shouldAutostartQueuedPrompt) {
             this.lastCompletedRunCounter = this.runCounter;
             void drainQueuedAgentPrompt(this);
@@ -11554,11 +11492,22 @@ function getAgentTimelineEntrySignature(entry) {
             value?.kind || '',
             value?.createdAt || '',
             hashUiText(value?.text || ''),
-            getAgentMessageMarkdownCache(value) ? 'markdown' : 'plain',
             hashUiText(JSON.stringify(attachments))
         ].join(':');
     }
     return `${type}:${hashUiText(JSON.stringify(value || null))}`;
+}
+
+function getAgentTimelineRenderSignature(agentTab, entry) {
+    const base = getAgentTimelineEntrySignature(entry);
+    if (entry?.type !== 'message') {
+        return base;
+    }
+    return `${base}:${
+        isAgentMessageStreaming(agentTab, entry.value)
+            ? 'streaming'
+            : 'settled'
+    }`;
 }
 
 function formatWorkspaceTabTitle(
