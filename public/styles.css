@@ -2923,8 +2923,26 @@ kbd {
     margin: 0 0 8px;
 }
 
+.agent-message-body.markdown h1,
+.agent-message-body.markdown h2,
+.agent-message-body.markdown h3,
+.agent-message-body.markdown h4,
+.agent-message-body.markdown h5,
+.agent-message-body.markdown h6 {
+    margin: 0 0 10px;
+    color: var(--text-highlight);
+    line-height: 1.35;
+}
+
 .agent-message-body.markdown ul {
     padding-left: 18px;
+}
+
+.agent-message-body.markdown blockquote {
+    margin: 0 0 10px;
+    padding: 2px 0 2px 12px;
+    border-left: 3px solid rgba(38, 139, 210, 0.34);
+    color: var(--text-muted);
 }
 
 .agent-message-body.markdown code {
@@ -2960,6 +2978,50 @@ kbd {
     text-underline-offset: 2px;
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+
+.agent-message-body.markdown img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 0 10px;
+    border-radius: 8px;
+}
+
+.agent-message-body.markdown table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    margin: 0 0 10px;
+}
+
+.agent-message-body.markdown th,
+.agent-message-body.markdown td {
+    border: 1px solid rgba(131, 148, 150, 0.2);
+    padding: 6px 8px;
+    text-align: left;
+}
+
+.agent-message-body.markdown hr {
+    border: 0;
+    border-top: 1px solid rgba(131, 148, 150, 0.18);
+    margin: 10px 0;
+}
+
+.agent-message-body.markdown .task-list-item {
+    list-style: none;
+}
+
+.agent-message-body.markdown .task-list-item input {
+    margin-right: 8px;
+}
+
+.agent-message-body.markdown .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin: 0 0 10px;
 }
 
 .agent-message-attachments {

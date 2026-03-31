@@ -419,6 +419,20 @@ function resolveMarkdownLocalTarget(baseFilePath, href) {
     }
 }
 
+function buildMarkdownContextBasePath(filePath = '', baseDirectory = '') {
+    const nextFilePath = String(filePath || '').trim();
+    if (nextFilePath) {
+        return nextFilePath;
+    }
+    const nextBaseDirectory = String(baseDirectory || '')
+        .trim()
+        .replace(/\/+$/, '');
+    if (!nextBaseDirectory) {
+        return '';
+    }
+    return `${nextBaseDirectory}/__tabminal__.md`;
+}
+
 function slugifyMarkdownHeading(text) {
     return String(text || '')
         .trim()
@@ -1537,6 +1551,24 @@ class EditorManager {
         this.agentTranscript = document.createElement('div');
         this.agentTranscript.className = 'agent-panel-transcript';
         this.agentTranscript.addEventListener('click', (event) => {
+            const markdownLink = event.target.closest(
+                'a[data-markdown-local-path]'
+            );
+            if (markdownLink) {
+                const filePath = String(
+                    markdownLink.dataset.markdownLocalPath || ''
+                ).trim();
+                if (!filePath) {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                void this.openLocalMarkdownLink(
+                    filePath,
+                    String(markdownLink.dataset.markdownLocalHash || '')
+                );
+                return;
+            }
             const anchor = event.target.closest('a');
             if (!anchor) return;
             const href = anchor.getAttribute('href') || '';
@@ -4206,6 +4238,64 @@ class EditorManager {
         }
     }
 
+    getAgentMarkdownBaseDirectory(agentTab, message) {
+        const messageCwd = String(message?.cwd || '').trim();
+        if (messageCwd) {
+            return messageCwd;
+        }
+        const tabCwd = String(agentTab?.cwd || '').trim();
+        if (tabCwd) {
+            return tabCwd;
+        }
+        const session = this.currentSession;
+        return String(session?.cwd || session?.initialCwd || '').trim();
+    }
+
+    async enhanceAgentMarkdownBody(agentTab, message, body) {
+        if (!(body instanceof HTMLElement) || !message?.text) {
+            return;
+        }
+        const session = this.currentSession;
+        if (!session) {
+            return;
+        }
+
+        const renderToken = `${Date.now()}:${Math.random()}`;
+        body.dataset.markdownRenderToken = renderToken;
+
+        try {
+            const { renderer } = await loadMarkdownPreviewBundle();
+            if (
+                !body.isConnected
+                || body.dataset.markdownRenderToken !== renderToken
+            ) {
+                return;
+            }
+            const rendered = renderer.render(String(message.text || ''));
+            const sanitized = DOMPurify.sanitize(rendered, {
+                USE_PROFILES: {
+                    html: true,
+                    mathMl: true,
+                    svg: true
+                }
+            });
+            const template = document.createElement('template');
+            template.innerHTML = sanitized;
+            const basePath = buildMarkdownContextBasePath(
+                '',
+                this.getAgentMarkdownBaseDirectory(agentTab, message)
+            );
+            this.decorateMarkdownPreviewContent(
+                template.content,
+                basePath,
+                session
+            );
+            body.replaceChildren(template.content);
+        } catch {
+            // Keep the lightweight fallback rendering.
+        }
+    }
+
     scrollMarkdownPreviewHash(hash) {
         const nextHash = String(hash || '').trim();
         if (!nextHash || !this.markdownPreviewScroll) {
@@ -5967,6 +6057,7 @@ class EditorManager {
             ) {
                 body.classList.add('markdown');
                 body.innerHTML = renderAgentMessageMarkdown(message.text || '');
+                void this.enhanceAgentMarkdownBody(agentTab, message, body);
             } else {
                 body.classList.add('plain');
                 body.textContent = message.text || '';
