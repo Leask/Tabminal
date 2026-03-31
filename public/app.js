@@ -106,7 +106,8 @@ const RECONNECT_RETRY_MS = 5000;
 const FILE_TREE_REFRESH_INTERVAL_MS = 3000;
 const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
 const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 100;
-const AGENT_TRANSCRIPT_LOAD_MORE_BATCH = 100;
+const AGENT_TRANSCRIPT_WINDOW_STEP = 50;
+const AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE = 5;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
@@ -1584,7 +1585,14 @@ class EditorManager {
                 activeAgentTab
                 && this.agentTranscript.scrollTop <= 24
             ) {
+                activeAgentTab.scrollToBottomOnNextRender = false;
                 void this.loadOlderAgentTimeline(activeAgentTab);
+            } else if (
+                activeAgentTab
+                && this.isAgentTranscriptNearBottom(24)
+            ) {
+                activeAgentTab.scrollToBottomOnNextRender = false;
+                void this.loadNewerAgentTimeline(activeAgentTab);
             }
             this.updateAgentScrollBottomButton();
             this.rememberAgentTranscriptLayout();
@@ -5574,7 +5582,9 @@ class EditorManager {
         this.hideMarkdownPreview();
         this.emptyState.style.display = 'none';
         this.agentContainer.style.display = 'flex';
-        this.renderAgentPanel(agentTab);
+        this.renderAgentPanel(agentTab, {
+            reason: isRestore ? 'activate-restore' : 'activate'
+        });
     }
 
     async closeAgentTab(agentTabKey) {
@@ -5651,20 +5661,29 @@ class EditorManager {
 
         this.agentTranscript.innerHTML = '';
         const timeline = getAgentTimelineItems(agentTab);
-        const visibleCount = getAgentTranscriptVisibleCount(
-            agentTab,
-            timeline.length
+        const shouldPinToBottom = wasNearBottom || (
+            agentTab.scrollToBottomOnNextRender
+            && isAgentTranscriptWindowNearLatest(
+                agentTab,
+                timeline.length
+            )
         );
-        const hiddenCount = Math.max(0, timeline.length - visibleCount);
-        const visibleTimeline = hiddenCount > 0
-            ? timeline.slice(-visibleCount)
-            : timeline;
+        const transcriptWindow = getAgentTranscriptWindow(
+            agentTab,
+            timeline.length,
+            { pinToBottom: shouldPinToBottom }
+        );
+        const visibleTimeline = timeline.slice(
+            transcriptWindow.start,
+            transcriptWindow.end
+        );
         if (timeline.length === 0) {
             this.agentTranscript.appendChild(
                 this.buildAgentEmptyState(agentTab)
             );
         } else {
             for (const [index, entry] of visibleTimeline.entries()) {
+                const timelineIndex = transcriptWindow.start + index;
                 let node = null;
                 if (entry.type === 'message') {
                     node = this.buildAgentMessageNode(agentTab, entry.value);
@@ -5682,8 +5701,12 @@ class EditorManager {
                     );
                 }
                 if (node) {
+                    node.dataset.timelineKey = getAgentTimelineItemKey(
+                        entry,
+                        timelineIndex
+                    );
                     if (
-                        index > 0
+                        timelineIndex > 0
                         && entry.type === 'message'
                         && String(entry.value?.role || '').toLowerCase()
                             === 'user'
@@ -5694,22 +5717,19 @@ class EditorManager {
                 }
             }
         }
-        const shouldPinToBottom = agentTab.scrollToBottomOnNextRender
-            || wasNearBottom;
-        if (options.preserveOlderAnchor) {
-            const previousScrollHeight = Number.isFinite(
-                options.preserveOlderAnchor.scrollHeight
-            )
-                ? options.preserveOlderAnchor.scrollHeight
-                : 0;
-            const delta = this.agentTranscript.scrollHeight
-                - previousScrollHeight;
-            this.agentTranscript.scrollTop = previousScrollTop + delta;
+        if (options.preserveTranscriptAnchor) {
+            const restored = this.restoreAgentTranscriptAnchor(
+                options.preserveTranscriptAnchor
+            );
+            if (!restored) {
+                this.agentTranscript.scrollTop = previousScrollTop;
+            }
         } else if (shouldPinToBottom) {
             this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
             agentTab.scrollToBottomOnNextRender = false;
         } else {
             this.agentTranscript.scrollTop = previousScrollTop;
+            agentTab.scrollToBottomOnNextRender = false;
         }
         this.updateAgentScrollBottomButton();
         this.rememberAgentTranscriptLayout();
@@ -5728,29 +5748,91 @@ class EditorManager {
     }
 
     async loadOlderAgentTimeline(agentTab) {
-        if (!agentTab || agentTab.historyLoadingOlder) {
+        if (!agentTab || agentTab.historyWindowLoading) {
             return;
         }
-        const total = getAgentTimelineItems(agentTab).length;
-        const visibleCount = getAgentTranscriptVisibleCount(agentTab, total);
-        if (visibleCount >= total) {
+        const timeline = getAgentTimelineItems(agentTab);
+        const transcriptWindow = getAgentTranscriptWindow(
+            agentTab,
+            timeline.length
+        );
+        if (transcriptWindow.start <= 0) {
             return;
         }
-
-        agentTab.historyLoadingOlder = true;
-        const previousLayout = this.captureAgentTranscriptLayout();
-        agentTab.historyVisibleCount = Math.min(
-            total,
-            visibleCount + AGENT_TRANSCRIPT_LOAD_MORE_BATCH
+        agentTab.scrollToBottomOnNextRender = false;
+        const currentWindowSize = transcriptWindow.end
+            - transcriptWindow.start;
+        const step = Math.min(
+            AGENT_TRANSCRIPT_WINDOW_STEP,
+            transcriptWindow.start
+        );
+        const nextStart = Math.max(0, transcriptWindow.start - step);
+        const anchor = this.captureAgentTranscriptAnchor(
+            getAgentTimelineItemKey(
+                timeline[transcriptWindow.start],
+                transcriptWindow.start
+            )
+        );
+        agentTab.historyWindowLoading = true;
+        agentTab.historyWindowStart = nextStart;
+        agentTab.historyWindowEnd = Math.min(
+            timeline.length,
+            nextStart + currentWindowSize
         );
         try {
             this.renderAgentPanel(agentTab, {
-                preserveOlderAnchor: {
-                    scrollHeight: previousLayout?.scrollHeight || 0
-                }
+                reason: 'history-older',
+                preserveTranscriptAnchor: anchor
             });
         } finally {
-            agentTab.historyLoadingOlder = false;
+            agentTab.historyWindowLoading = false;
+        }
+    }
+
+    async loadNewerAgentTimeline(agentTab) {
+        if (!agentTab || agentTab.historyWindowLoading) {
+            return;
+        }
+        const timeline = getAgentTimelineItems(agentTab);
+        const transcriptWindow = getAgentTranscriptWindow(
+            agentTab,
+            timeline.length
+        );
+        if (transcriptWindow.end >= timeline.length) {
+            return;
+        }
+        agentTab.scrollToBottomOnNextRender = false;
+        const currentWindowSize = transcriptWindow.end
+            - transcriptWindow.start;
+        const step = Math.min(
+            AGENT_TRANSCRIPT_WINDOW_STEP,
+            timeline.length - transcriptWindow.end
+        );
+        const nextEnd = Math.min(
+            timeline.length,
+            transcriptWindow.end + step
+        );
+        const nextStart = Math.max(0, nextEnd - currentWindowSize);
+        const anchorIndex = Math.max(
+            transcriptWindow.start,
+            transcriptWindow.end - 1
+        );
+        const anchor = this.captureAgentTranscriptAnchor(
+            getAgentTimelineItemKey(
+                timeline[anchorIndex],
+                anchorIndex
+            )
+        );
+        agentTab.historyWindowLoading = true;
+        agentTab.historyWindowStart = nextStart;
+        agentTab.historyWindowEnd = nextEnd;
+        try {
+            this.renderAgentPanel(agentTab, {
+                reason: 'history-newer',
+                preserveTranscriptAnchor: anchor
+            });
+        } finally {
+            agentTab.historyWindowLoading = false;
         }
     }
 
@@ -6970,6 +7052,51 @@ class EditorManager {
         };
     }
 
+    findAgentTranscriptNodeByKey(timelineKey = '') {
+        if (!this.agentTranscript || !timelineKey) {
+            return null;
+        }
+        for (const node of this.agentTranscript.children) {
+            if (node?.dataset?.timelineKey === timelineKey) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    captureAgentTranscriptAnchor(timelineKey = '') {
+        const node = this.findAgentTranscriptNodeByKey(timelineKey);
+        if (!node || !this.agentTranscript) {
+            return null;
+        }
+        return {
+            timelineKey,
+            scrollTop: this.agentTranscript.scrollTop,
+            offsetTop: node.offsetTop
+        };
+    }
+
+    restoreAgentTranscriptAnchor(anchor = null) {
+        if (!anchor || !this.agentTranscript) {
+            return false;
+        }
+        const node = this.findAgentTranscriptNodeByKey(
+            anchor.timelineKey || ''
+        );
+        if (!node) {
+            return false;
+        }
+        const previousOffsetTop = Number.isFinite(anchor.offsetTop)
+            ? anchor.offsetTop
+            : 0;
+        const previousScrollTop = Number.isFinite(anchor.scrollTop)
+            ? anchor.scrollTop
+            : 0;
+        this.agentTranscript.scrollTop = previousScrollTop
+            + (node.offsetTop - previousOffsetTop);
+        return true;
+    }
+
     rememberAgentTranscriptLayout() {
         this.agentTranscriptLayout = this.captureAgentTranscriptLayout();
     }
@@ -6990,6 +7117,32 @@ class EditorManager {
     }
 
     scrollAgentTranscriptToBottom() {
+        const activeTab = getActiveAgentTab();
+        if (activeTab) {
+            const total = getAgentTimelineItems(activeTab).length;
+            const transcriptWindow = getAgentTranscriptWindow(
+                activeTab,
+                total,
+                { pinToBottom: false }
+            );
+            const latestWindow = getAgentTranscriptWindow(
+                null,
+                total,
+                { pinToBottom: true }
+            );
+            const alreadyLatest = transcriptWindow.start === latestWindow.start
+                && transcriptWindow.end === latestWindow.end;
+            if (!alreadyLatest) {
+                activeTab.historyWindowStart = latestWindow.start;
+                activeTab.historyWindowEnd = latestWindow.end;
+                activeTab.scrollToBottomOnNextRender = true;
+                this.renderAgentPanel(activeTab, {
+                    reason: 'scroll-latest'
+                });
+                return;
+            }
+            activeTab.scrollToBottomOnNextRender = false;
+        }
         if (!this.agentTranscript) return;
         this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
         this.updateAgentScrollBottomButton();
@@ -8927,8 +9080,9 @@ class AgentTab {
         this.scrollToBottomOnNextRender = true;
         this.busySyncTimer = null;
         this.planHistory = [];
-        this.historyVisibleCount = 0;
-        this.historyLoadingOlder = false;
+        this.historyWindowStart = -1;
+        this.historyWindowEnd = -1;
+        this.historyWindowLoading = false;
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
@@ -11062,28 +11216,89 @@ function getAgentTimelineItems(agentTab) {
     return items;
 }
 
-function getAgentTranscriptVisibleCount(agentTab, totalCount = 0) {
+function getAgentTimelineItemKey(entry, absoluteIndex = 0) {
+    if (!entry) {
+        return `unknown:${absoluteIndex}`;
+    }
+    const order = Number.isFinite(entry.order) ? entry.order : -1;
+    return `${entry.type}:${order}:${absoluteIndex}`;
+}
+
+function getAgentTranscriptWindow(
+    agentTab,
+    totalCount = 0,
+    options = {}
+) {
     const total = Number.isFinite(totalCount)
         ? Math.max(0, totalCount)
         : 0;
-    const baseline = Math.min(total, AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS);
+    const windowSize = Math.min(total, AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS);
+    const latestStart = Math.max(0, total - windowSize);
+    const latestWindow = {
+        start: latestStart,
+        end: total
+    };
     if (!agentTab) {
-        return baseline;
+        return latestWindow;
+    }
+    if (windowSize === 0) {
+        agentTab.historyWindowStart = 0;
+        agentTab.historyWindowEnd = 0;
+        return { start: 0, end: 0 };
+    }
+    if (options.pinToBottom) {
+        agentTab.historyWindowStart = latestWindow.start;
+        agentTab.historyWindowEnd = latestWindow.end;
+        return latestWindow;
+    }
+    let start = Number.isFinite(agentTab.historyWindowStart)
+        ? Math.max(0, Math.floor(agentTab.historyWindowStart))
+        : latestWindow.start;
+    let end = Number.isFinite(agentTab.historyWindowEnd)
+        ? Math.max(start, Math.floor(agentTab.historyWindowEnd))
+        : latestWindow.end;
+    if (end > total) {
+        end = total;
+    }
+    if (end - start !== windowSize) {
+        if (total <= windowSize) {
+            start = 0;
+            end = total;
+        } else if (end >= total) {
+            end = total;
+            start = latestWindow.start;
+        } else if (start <= 0) {
+            start = 0;
+            end = windowSize;
+        } else {
+            end = Math.min(total, start + windowSize);
+            start = Math.max(0, end - windowSize);
+        }
+    }
+    agentTab.historyWindowStart = start;
+    agentTab.historyWindowEnd = end;
+    return { start, end };
+}
+
+function isAgentTranscriptWindowNearLatest(agentTab, totalCount = 0) {
+    const total = Number.isFinite(totalCount)
+        ? Math.max(0, totalCount)
+        : 0;
+    if (!agentTab) {
+        return true;
     }
     if (
-        !Number.isFinite(agentTab.historyVisibleCount)
-        || agentTab.historyVisibleCount <= 0
+        !Number.isFinite(agentTab.historyWindowStart)
+        || !Number.isFinite(agentTab.historyWindowEnd)
+        || agentTab.historyWindowStart < 0
+        || agentTab.historyWindowEnd < 0
     ) {
-        agentTab.historyVisibleCount = baseline;
-        return agentTab.historyVisibleCount;
+        return true;
     }
-    if (agentTab.historyVisibleCount < baseline) {
-        agentTab.historyVisibleCount = baseline;
-    }
-    if (agentTab.historyVisibleCount > total) {
-        agentTab.historyVisibleCount = total;
-    }
-    return agentTab.historyVisibleCount;
+    return agentTab.historyWindowEnd >= Math.max(
+        0,
+        total - AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE
+    );
 }
 
 function normalizePlanStatusClass(status = '') {
