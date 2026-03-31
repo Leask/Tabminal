@@ -1529,10 +1529,12 @@ export function buildRestoredToolCall(
     previous = null,
     baseline = null,
     update = {},
-    nextTimelineOrder = null
+    nextTimelineOrder = null,
+    options = {}
 ) {
     const persisted = cloneSerializable(baseline, {}) || {};
     const current = cloneSerializable(previous, {}) || {};
+    const allowEmptyCreatedAt = options.allowEmptyCreatedAt === true;
     const nextOrder = normalizePersistedTimelineOrder(current.order, 0)
         || (
             typeof nextTimelineOrder === 'function'
@@ -1540,9 +1542,11 @@ export function buildRestoredToolCall(
                 : normalizePersistedTimelineOrder(persisted.order, 0)
         )
         || 1;
-    const createdAt = String(
+    const inheritedCreatedAt = String(
         current.createdAt || persisted.createdAt || ''
-    ).trim() || new Date().toISOString();
+    ).trim();
+    const createdAt = inheritedCreatedAt
+        || (allowEmptyCreatedAt ? '' : new Date().toISOString());
     const nextToolCall = {
         ...persisted,
         ...current,
@@ -3148,7 +3152,10 @@ class AcpRuntime extends EventEmitter {
                     previous,
                     baseline,
                     update,
-                    () => this.#nextTimelineOrder(tab)
+                    () => this.#nextTimelineOrder(tab),
+                    {
+                        allowEmptyCreatedAt: !!tab.restoreCapture
+                    }
                 );
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
@@ -3165,7 +3172,10 @@ class AcpRuntime extends EventEmitter {
                     previous,
                     baseline,
                     update,
-                    () => this.#nextTimelineOrder(tab)
+                    () => this.#nextTimelineOrder(tab),
+                    {
+                        allowEmptyCreatedAt: !!tab.restoreCapture
+                    }
                 );
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
