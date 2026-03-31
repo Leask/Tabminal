@@ -2480,6 +2480,7 @@ kbd {
     justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
 .agent-tool-call-title,
@@ -2487,12 +2488,18 @@ kbd {
     color: var(--text-highlight);
     font-weight: 600;
     font-size: 12px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .agent-tool-call-meta {
     color: var(--text-muted);
     font-size: 10px;
     margin-top: 4px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .agent-path-links {
@@ -2927,6 +2934,8 @@ kbd {
     border: 1px solid rgba(131, 148, 150, 0.18);
     border-radius: 6px;
     padding: 1px 4px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .agent-message-body.markdown pre {
@@ -2949,6 +2958,8 @@ kbd {
     color: var(--accent-primary);
     text-decoration: underline;
     text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .agent-message-attachments {

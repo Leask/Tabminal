@@ -105,6 +105,8 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const FILE_TREE_REFRESH_INTERVAL_MS = 3000;
 const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
+const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 100;
+const AGENT_TRANSCRIPT_LOAD_MORE_BATCH = 100;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
@@ -1545,6 +1547,13 @@ class EditorManager {
             void this.openFile(href);
         });
         this.agentTranscript.addEventListener('scroll', () => {
+            const activeAgentTab = getActiveAgentTab();
+            if (
+                activeAgentTab
+                && this.agentTranscript.scrollTop <= 24
+            ) {
+                void this.loadOlderAgentTimeline(activeAgentTab);
+            }
             this.updateAgentScrollBottomButton();
             this.rememberAgentTranscriptLayout();
         });
@@ -5485,7 +5494,7 @@ class EditorManager {
         removeAgentTab(agentTabKey);
     }
 
-    renderAgentPanel(agentTab) {
+    renderAgentPanel(agentTab, options = {}) {
         this.disposeAgentEmbeddedEditors();
         const previousLayout = this.captureAgentTranscriptLayout();
         const previousScrollTop = previousLayout?.scrollTop || 0;
@@ -5552,12 +5561,20 @@ class EditorManager {
 
         this.agentTranscript.innerHTML = '';
         const timeline = getAgentTimelineItems(agentTab);
+        const visibleCount = getAgentTranscriptVisibleCount(
+            agentTab,
+            timeline.length
+        );
+        const hiddenCount = Math.max(0, timeline.length - visibleCount);
+        const visibleTimeline = hiddenCount > 0
+            ? timeline.slice(-visibleCount)
+            : timeline;
         if (timeline.length === 0) {
             this.agentTranscript.appendChild(
                 this.buildAgentEmptyState(agentTab)
             );
         } else {
-            for (const [index, entry] of timeline.entries()) {
+            for (const [index, entry] of visibleTimeline.entries()) {
                 let node = null;
                 if (entry.type === 'message') {
                     node = this.buildAgentMessageNode(agentTab, entry.value);
@@ -5589,7 +5606,16 @@ class EditorManager {
         }
         const shouldPinToBottom = agentTab.scrollToBottomOnNextRender
             || wasNearBottom;
-        if (shouldPinToBottom) {
+        if (options.preserveOlderAnchor) {
+            const previousScrollHeight = Number.isFinite(
+                options.preserveOlderAnchor.scrollHeight
+            )
+                ? options.preserveOlderAnchor.scrollHeight
+                : 0;
+            const delta = this.agentTranscript.scrollHeight
+                - previousScrollHeight;
+            this.agentTranscript.scrollTop = previousScrollTop + delta;
+        } else if (shouldPinToBottom) {
             this.agentTranscript.scrollTop = this.agentTranscript.scrollHeight;
             agentTab.scrollToBottomOnNextRender = false;
         } else {
@@ -5609,6 +5635,33 @@ class EditorManager {
         this.refreshAgentTimelineTimestamps();
         this.refreshAgentUsageHud();
         this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
+    }
+
+    async loadOlderAgentTimeline(agentTab) {
+        if (!agentTab || agentTab.historyLoadingOlder) {
+            return;
+        }
+        const total = getAgentTimelineItems(agentTab).length;
+        const visibleCount = getAgentTranscriptVisibleCount(agentTab, total);
+        if (visibleCount >= total) {
+            return;
+        }
+
+        agentTab.historyLoadingOlder = true;
+        const previousLayout = this.captureAgentTranscriptLayout();
+        agentTab.historyVisibleCount = Math.min(
+            total,
+            visibleCount + AGENT_TRANSCRIPT_LOAD_MORE_BATCH
+        );
+        try {
+            this.renderAgentPanel(agentTab, {
+                preserveOlderAnchor: {
+                    scrollHeight: previousLayout?.scrollHeight || 0
+                }
+            });
+        } finally {
+            agentTab.historyLoadingOlder = false;
+        }
     }
 
     refreshAgentTimelineTimestamps() {
@@ -5999,9 +6052,27 @@ class EditorManager {
                     toolStatusClass
                 );
                 details.appendChild(summary);
-                details.appendChild(
-                    this.buildAgentSectionBody(details, section)
-                );
+                const bodyHost = document.createElement('div');
+                bodyHost.className = 'agent-tool-call-section-content';
+                const mountBody = () => {
+                    if (bodyHost.dataset.mounted === 'true') {
+                        return;
+                    }
+                    bodyHost.dataset.mounted = 'true';
+                    bodyHost.appendChild(
+                        this.buildAgentSectionBody(details, section)
+                    );
+                };
+                details.appendChild(bodyHost);
+                if (details.open) {
+                    queueMicrotask(mountBody);
+                } else {
+                    details.addEventListener('toggle', () => {
+                        if (details.open) {
+                            mountBody();
+                        }
+                    }, { once: true });
+                }
                 sectionContainer.appendChild(details);
             }
             node.appendChild(sectionContainer);
@@ -6093,9 +6164,27 @@ class EditorManager {
                     permission.status || 'pending'
                 );
                 details.appendChild(summary);
-                details.appendChild(
-                    this.buildAgentSectionBody(details, section)
-                );
+                const bodyHost = document.createElement('div');
+                bodyHost.className = 'agent-tool-call-section-content';
+                const mountBody = () => {
+                    if (bodyHost.dataset.mounted === 'true') {
+                        return;
+                    }
+                    bodyHost.dataset.mounted = 'true';
+                    bodyHost.appendChild(
+                        this.buildAgentSectionBody(details, section)
+                    );
+                };
+                details.appendChild(bodyHost);
+                if (details.open) {
+                    queueMicrotask(mountBody);
+                } else {
+                    details.addEventListener('toggle', () => {
+                        if (details.open) {
+                            mountBody();
+                        }
+                    }, { once: true });
+                }
                 sectionContainer.appendChild(details);
             }
             card.appendChild(sectionContainer);
@@ -8747,6 +8836,8 @@ class AgentTab {
         this.scrollToBottomOnNextRender = true;
         this.busySyncTimer = null;
         this.planHistory = [];
+        this.historyVisibleCount = 0;
+        this.historyLoadingOlder = false;
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
@@ -10878,6 +10969,30 @@ function getAgentTimelineItems(agentTab) {
     });
 
     return items;
+}
+
+function getAgentTranscriptVisibleCount(agentTab, totalCount = 0) {
+    const total = Number.isFinite(totalCount)
+        ? Math.max(0, totalCount)
+        : 0;
+    const baseline = Math.min(total, AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS);
+    if (!agentTab) {
+        return baseline;
+    }
+    if (
+        !Number.isFinite(agentTab.historyVisibleCount)
+        || agentTab.historyVisibleCount <= 0
+    ) {
+        agentTab.historyVisibleCount = baseline;
+        return agentTab.historyVisibleCount;
+    }
+    if (agentTab.historyVisibleCount < baseline) {
+        agentTab.historyVisibleCount = baseline;
+    }
+    if (agentTab.historyVisibleCount > total) {
+        agentTab.historyVisibleCount = total;
+    }
+    return agentTab.historyVisibleCount;
 }
 
 function normalizePlanStatusClass(status = '') {
