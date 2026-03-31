@@ -108,6 +108,7 @@ const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
 const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 100;
 const AGENT_TRANSCRIPT_WINDOW_STEP = 50;
 const AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE = 5;
+const WORKSPACE_TAB_TITLE_MAX_LENGTH = 20;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
 const WORKSPACE_DEVICE_ID_STORAGE_KEY = 'tabminal_workspace_device_id';
@@ -5278,7 +5279,10 @@ class EditorManager {
             );
 
             const label = document.createElement('span');
-            label.textContent = getAgentDisplayLabel(agentTab);
+            tab.title = String(getAgentDisplayLabel(agentTab) || '').trim();
+            label.textContent = formatWorkspaceTabTitle(
+                getAgentDisplayLabel(agentTab)
+            );
 
             const closeBtn = document.createElement('span');
             closeBtn.className = 'close-btn';
@@ -8648,10 +8652,11 @@ class Session {
 
         const titleEl = tab.querySelector('.title');
         const titleTextEl = tab.querySelector('.tab-title-text');
+        const displayTitle = formatWorkspaceTabTitle(this.title);
         if (titleTextEl) {
-            titleTextEl.textContent = this.title;
+            titleTextEl.textContent = displayTitle;
         } else if (titleEl) {
-            titleEl.textContent = this.title;
+            titleEl.textContent = displayTitle;
         }
 
         const titleIconEl = tab.querySelector('.tab-status-icon');
@@ -11222,6 +11227,21 @@ function getAgentTimelineItemKey(entry, absoluteIndex = 0) {
     }
     const order = Number.isFinite(entry.order) ? entry.order : -1;
     return `${entry.type}:${order}:${absoluteIndex}`;
+}
+
+function formatWorkspaceTabTitle(
+    value,
+    maxLength = WORKSPACE_TAB_TITLE_MAX_LENGTH
+) {
+    const text = String(value || '');
+    const characters = Array.from(text);
+    if (characters.length <= maxLength) {
+        return text;
+    }
+    if (maxLength <= 3) {
+        return '.'.repeat(Math.max(0, maxLength));
+    }
+    return `${characters.slice(0, maxLength - 3).join('')}...`;
 }
 
 function getAgentTranscriptWindow(
