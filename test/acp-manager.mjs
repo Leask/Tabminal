@@ -9,9 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
     AcpManager,
+    buildRestoredToolCall,
+    captureRestoreReplayChunk,
     buildTerminalSpawnRequest,
-    consumeRestoredMessageReplay,
-    createRestoreReplayState,
+    createRestoreCaptureState,
+    finalizeRestoreCaptureMessages,
+    getNextSyntheticStreamTurn,
+    normalizeAgentTranscriptMessages,
     mergeAgentMessageText
 } from '../src/acp-manager.mjs';
 
@@ -413,60 +417,293 @@ async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
 }
 
 describe('AcpManager', () => {
-    it('consumes replayed restore transcript chunks in order', () => {
-        const replay = createRestoreReplayState([
-            {
-                role: 'user',
-                kind: 'message',
-                text: 'what can you do for me?'
-            },
-            {
-                role: 'assistant',
-                kind: 'message',
-                text: 'I can inspect the repo and make changes.'
-            }
-        ]);
+    it('starts a new synthetic restore turn when replay reaches a new user prompt', () => {
+        const capture = createRestoreCaptureState([]);
+        const ingest = (role, text) => {
+            captureRestoreReplayChunk(
+                capture,
+                {
+                    sessionUpdate: `${role}_message_chunk`
+                },
+                role,
+                'message',
+                text
+            );
+        };
 
-        assert.equal(
-            consumeRestoredMessageReplay(
-                replay,
-                'user',
-                'message',
-                'what can you do for me?'
-            ),
-            true
+        ingest('user', 'prompt one');
+        ingest('assistant', 'reply one');
+        ingest('user', 'prompt two');
+        ingest('assistant', 'reply two');
+
+        assert.deepEqual(
+            capture.messages.map((message) => ({
+                role: message.role,
+                text: message.text,
+                streamKey: message.streamKey
+            })),
+            [
+                {
+                    role: 'user',
+                    text: 'prompt one',
+                    streamKey: 'synthetic:0:user_message_chunk:user:message'
+                },
+                {
+                    role: 'assistant',
+                    text: 'reply one',
+                    streamKey: 'synthetic:0:assistant_message_chunk:assistant:message'
+                },
+                {
+                    role: 'user',
+                    text: 'prompt two',
+                    streamKey: 'synthetic:1:user_message_chunk:user:message'
+                },
+                {
+                    role: 'assistant',
+                    text: 'reply two',
+                    streamKey: 'synthetic:1:assistant_message_chunk:assistant:message'
+                }
+            ]
         );
-        assert.equal(
-            consumeRestoredMessageReplay(
-                replay,
-                'assistant',
-                'message',
-                'I can inspect the repo and make changes.'
-            ),
-            true
-        );
-        assert.equal(replay.exhausted, true);
     });
 
-    it('stops consuming when restore replay diverges', () => {
-        const replay = createRestoreReplayState([
+    it('reuses baseline message metadata for matching restore replay entries', () => {
+        const baseline = normalizeAgentTranscriptMessages([
             {
+                id: 'user-1',
+                streamKey: 'synthetic:42:user_message_chunk:user:message',
                 role: 'user',
                 kind: 'message',
-                text: 'what can you do for me?'
+                text: 'prompt one',
+                createdAt: '2026-03-30T00:00:00.000Z'
+            },
+            {
+                id: 'assistant-1',
+                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                role: 'assistant',
+                kind: 'message',
+                text: 'reply one',
+                createdAt: '2026-03-30T00:00:01.000Z'
             }
         ]);
+        const tab = {
+            messages: structuredClone(baseline),
+            restoreCapture: createRestoreCaptureState(baseline),
+            toolCalls: new Map(),
+            permissions: new Map(),
+            timelineCounter: baseline.length,
+            messageCounter: baseline.length
+        };
 
-        assert.equal(
-            consumeRestoredMessageReplay(
-                replay,
-                'assistant',
-                'message',
-                'different text'
-            ),
-            false
+        captureRestoreReplayChunk(
+            tab.restoreCapture,
+            { sessionUpdate: 'user_message_chunk' },
+            'user',
+            'message',
+            'prompt one'
         );
-        assert.equal(replay.exhausted, true);
+        captureRestoreReplayChunk(
+            tab.restoreCapture,
+            { sessionUpdate: 'agent_message_chunk' },
+            'assistant',
+            'message',
+            'reply one'
+        );
+
+        assert.equal(finalizeRestoreCaptureMessages(tab), false);
+        assert.deepEqual(
+            tab.messages.map((message) => ({
+                id: message.id,
+                streamKey: message.streamKey,
+                createdAt: message.createdAt,
+                role: message.role,
+                text: message.text
+            })),
+            [
+                {
+                    id: 'user-1',
+                    streamKey: 'synthetic:42:user_message_chunk:user:message',
+                    createdAt: '2026-03-30T00:00:00.000Z',
+                    role: 'user',
+                    text: 'prompt one'
+                },
+                {
+                    id: 'assistant-1',
+                    streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                    createdAt: '2026-03-30T00:00:01.000Z',
+                    role: 'assistant',
+                    text: 'reply one'
+                }
+            ]
+        );
+    });
+
+    it('assigns restore replay message orders from the shared timeline', () => {
+        const capture = createRestoreCaptureState([]);
+        const orders = [101, 103];
+        capture.nextTimelineOrder = () => orders.shift();
+
+        captureRestoreReplayChunk(
+            capture,
+            { sessionUpdate: 'user_message_chunk' },
+            'user',
+            'message',
+            'prompt one'
+        );
+        captureRestoreReplayChunk(
+            capture,
+            { sessionUpdate: 'agent_message_chunk' },
+            'assistant',
+            'message',
+            'reply one'
+        );
+
+        assert.deepEqual(
+            capture.messages.map((message) => ({
+                role: message.role,
+                order: message.order
+            })),
+            [
+                { role: 'user', order: 101 },
+                { role: 'assistant', order: 103 }
+            ]
+        );
+    });
+
+    it('preserves baseline tool timestamps during restore replay', () => {
+        const nextTool = buildRestoredToolCall(
+            null,
+            {
+                toolCallId: 'tool-1',
+                title: 'Read file',
+                status: 'completed',
+                createdAt: '2026-03-23T00:01:01.000Z',
+                updatedAt: '2026-03-23T00:01:04.000Z',
+                content: [{ type: 'terminal', terminalId: 'terminal-1' }]
+            },
+            {
+                toolCallId: 'tool-1',
+                status: 'completed'
+            },
+            () => 77
+        );
+
+        assert.deepEqual(
+            {
+                toolCallId: nextTool.toolCallId,
+                createdAt: nextTool.createdAt,
+                updatedAt: nextTool.updatedAt,
+                order: nextTool.order,
+                title: nextTool.title,
+                status: nextTool.status
+            },
+            {
+                toolCallId: 'tool-1',
+                createdAt: '2026-03-23T00:01:01.000Z',
+                updatedAt: '2026-03-23T00:01:04.000Z',
+                order: 77,
+                title: 'Read file',
+                status: 'completed'
+            }
+        );
+    });
+
+    it('replaces polluted baseline transcript with authoritative restore replay', () => {
+        const pollutedBaseline = normalizeAgentTranscriptMessages([
+            {
+                id: 'u1',
+                streamKey: 'synthetic:40:user_message_chunk:user:message',
+                role: 'user',
+                kind: 'message',
+                text: 'prompt one'
+            },
+            {
+                id: 'a1',
+                streamKey: 'synthetic:40:agent_message_chunk:assistant:message',
+                role: 'assistant',
+                kind: 'message',
+                text: 'reply one'
+            },
+            {
+                id: 'u2',
+                streamKey: 'synthetic:40:user_message_chunk:user:message',
+                role: 'user',
+                kind: 'message',
+                text: 'prompt one'
+            },
+            {
+                id: 'a2',
+                streamKey: 'synthetic:40:agent_message_chunk:assistant:message',
+                role: 'assistant',
+                kind: 'message',
+                text: 'reply one'
+            }
+        ]);
+        const ingestReplayIntoTab = (tab) => {
+            const ingest = (role, text) => {
+                captureRestoreReplayChunk(
+                    tab.restoreCapture,
+                    {
+                        sessionUpdate: `${role}_message_chunk`
+                    },
+                    role,
+                    'message',
+                    text
+                );
+            };
+            ingest('user', 'prompt one');
+            ingest('assistant', 'reply one');
+            ingest('user', 'prompt two');
+            ingest('assistant', 'reply two');
+        };
+        const tab = {
+            messages: structuredClone(pollutedBaseline),
+            restoreCapture: createRestoreCaptureState(pollutedBaseline),
+            toolCalls: new Map(),
+            permissions: new Map(),
+            timelineCounter: pollutedBaseline.length,
+            messageCounter: pollutedBaseline.length
+        };
+
+        ingestReplayIntoTab(tab);
+
+        assert.equal(finalizeRestoreCaptureMessages(tab), true);
+        assert.deepEqual(
+            tab.messages.map((message) => ({
+                role: message.role,
+                text: message.text
+            })),
+            [
+                { role: 'user', text: 'prompt one' },
+                { role: 'assistant', text: 'reply one' },
+                { role: 'user', text: 'prompt two' },
+                { role: 'assistant', text: 'reply two' }
+            ]
+        );
+
+        const secondPass = {
+            messages: structuredClone(tab.messages),
+            restoreCapture: createRestoreCaptureState(tab.messages),
+            toolCalls: new Map(),
+            permissions: new Map(),
+            timelineCounter: tab.messages.length,
+            messageCounter: tab.messages.length
+        };
+        ingestReplayIntoTab(secondPass);
+
+        assert.equal(finalizeRestoreCaptureMessages(secondPass), false);
+        assert.deepEqual(
+            secondPass.messages.map((message) => ({
+                role: message.role,
+                text: message.text,
+                streamKey: message.streamKey
+            })),
+            tab.messages.map((message) => ({
+                role: message.role,
+                text: message.text,
+                streamKey: message.streamKey
+            }))
+        );
     });
 
     function createManager() {
@@ -795,6 +1032,31 @@ describe('AcpManager', () => {
         assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
     });
 
+    it('reuses an existing open tab for the same ACP session', async () => {
+        const { manager, getPersistedTabs } = createManager();
+
+        const first = await manager.resumeTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1',
+            sessionId: 'hist-1',
+            title: 'Previous run'
+        });
+        const second = await manager.resumeTab({
+            agentId: 'codex',
+            cwd: '/tmp/other-project',
+            terminalSessionId: 'term-2',
+            sessionId: 'hist-1',
+            title: 'Duplicate open'
+        });
+
+        assert.equal(second.id, first.id);
+        assert.equal(manager.tabs.size, 1);
+        assert.equal(getPersistedTabs().length, 1);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
+    });
+
     it('restores persisted tabs when linked terminal sessions exist', async () => {
         const { manager, getPersistedTabs } = createManager();
         const persisted = [{
@@ -817,6 +1079,104 @@ describe('AcpManager', () => {
         assert.equal(getPersistedTabs()[0].cwd, '/tmp/project');
         assert.equal(getPersistedTabs()[0].acpSessionId, 'acp-restored');
         assert.equal(getPersistedTabs()[0].terminalSessionId, 'term-1');
+    });
+
+    it('dedupes persisted tabs that share an ACP session id', async () => {
+        const { manager, getPersistedTabs } = createManager();
+        await manager.saveTabs([
+            {
+                id: 'debug-restore',
+                agentId: 'codex',
+                cwd: '/tmp/debug',
+                acpSessionId: 'acp-shared',
+                terminalSessionId: '',
+                createdAt: '2026-03-31T08:34:04.316Z',
+                title: 'debug restore',
+                messages: [
+                    {
+                        id: 'message-old',
+                        streamKey:
+                            'synthetic:10:agent_message_chunk:assistant:message',
+                        role: 'assistant',
+                        kind: 'message',
+                        text: 'latest transcript',
+                        order: 2
+                    }
+                ],
+                toolCalls: [
+                    {
+                        toolCallId: 'tool-latest',
+                        createdAt: '2026-03-31T08:40:00.000Z',
+                        order: 3,
+                        title: 'Latest tool'
+                    }
+                ]
+            },
+            {
+                id: 'linked-tab',
+                agentId: 'codex',
+                cwd: '/tmp/project',
+                acpSessionId: 'acp-shared',
+                terminalSessionId: 'term-1',
+                createdAt: '2026-03-31T12:02:07.976Z',
+                title: 'Project tab',
+                messages: [
+                    {
+                        id: 'message-older',
+                        streamKey:
+                            'synthetic:8:agent_message_chunk:assistant:message',
+                        role: 'assistant',
+                        kind: 'message',
+                        text: 'older transcript',
+                        order: 2
+                    }
+                ]
+            }
+        ]);
+
+        await manager.restoreTabs(new Set(['term-1']));
+
+        assert.equal(manager.tabs.size, 1);
+        assert.equal(manager.tabs.has('linked-tab'), true);
+        const restored = manager.tabs.get('linked-tab')?.serialize();
+        assert.ok(restored);
+        assert.equal(restored.terminalSessionId, 'term-1');
+        assert.equal(restored.cwd, '/tmp/project');
+        assert.equal(restored.title, 'Project tab');
+        assert.equal(restored.messages.length, 1);
+        assert.equal(
+            restored.messages[0].streamKey,
+            'synthetic:10:agent_message_chunk:assistant:message'
+        );
+        assert.equal(getPersistedTabs().length, 1);
+        assert.equal(getPersistedTabs()[0].id, 'linked-tab');
+        assert.equal(getPersistedTabs()[0].terminalSessionId, 'term-1');
+        assert.equal(
+            getPersistedTabs()[0].messages[0].streamKey,
+            'synthetic:10:agent_message_chunk:assistant:message'
+        );
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.restoredTabs, ['linked-tab']);
+    });
+
+    it('restores synthetic stream turn above persisted synthetic messages', async () => {
+        assert.equal(getNextSyntheticStreamTurn([]), 0);
+        assert.equal(getNextSyntheticStreamTurn([
+            {
+                streamKey: 'synthetic:7:agent_message_chunk:assistant:message'
+            }
+        ]), 8);
+        assert.equal(getNextSyntheticStreamTurn([
+            {
+                streamKey: 'synthetic:7:agent_message_chunk:assistant:message'
+            },
+            {
+                streamKey: 'plain-message-id'
+            },
+            {
+                streamKey: 'synthetic:12:agent_message_chunk:assistant:message'
+            }
+        ]), 13);
     });
 
     it('drops persisted tabs whose terminal session no longer exists', async () => {
@@ -1734,6 +2094,181 @@ describe('AcpManager', () => {
         }
     });
 
+    it('reproduces cumulative assistant chunks at the backend bridge layer', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, '/cumulative-debug');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            }, 12000);
+
+            const syntheticMessage = settledTab.messages.find((message) => (
+                message.streamKey?.startsWith(
+                    'synthetic:'
+                )
+            ));
+            assert.ok(syntheticMessage);
+            assert.equal(syntheticMessage.text, 'Alpha Beta');
+
+            const openEvent = events.find((event) => (
+                event.type === 'message_open'
+                && event.message?.streamKey?.startsWith('synthetic:')
+            ));
+            const chunkEvent = events.find((event) => (
+                event.type === 'message_chunk'
+                && event.streamKey?.startsWith('synthetic:')
+            ));
+
+            assert.ok(openEvent);
+            assert.ok(chunkEvent);
+            assert.equal(openEvent.message.text, 'Alpha');
+            assert.equal(chunkEvent.text, ' Beta');
+        } finally {
+            await manager.dispose();
+        }
+    });
+
+    it('deduplicates an identical synthetic restart without message ids', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, '/restart-debug');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            }, 12000);
+
+            const syntheticMessages = settledTab.messages.filter((message) => (
+                String(message.streamKey || '').startsWith('synthetic:')
+            ));
+            assert.equal(syntheticMessages.length, 1);
+            assert.equal(
+                syntheticMessages[0].text,
+                'Report A\nline 1\nline 2\n'
+            );
+
+            const opens = events.filter((event) => (
+                event.type === 'message_open'
+                && String(event.message?.streamKey || '').startsWith(
+                    'synthetic:'
+                )
+            ));
+            const chunks = events.filter((event) => (
+                event.type === 'message_chunk'
+                && String(event.streamKey || '').startsWith('synthetic:')
+            ));
+            assert.equal(opens.length, 1);
+            assert.equal(chunks.length, 3);
+        } finally {
+            await manager.dispose();
+        }
+    });
+
+    it('conflates restarted assistant text with slight drift into one synthetic message', async () => {
+        const manager = new AcpManager({
+            loadTabs: async () => [],
+            saveTabs: async () => {}
+        });
+        const agentPath = fileURLToPath(
+            new URL('../src/acp-test-agent.mjs', import.meta.url)
+        );
+        manager.definitions = [{
+            id: 'test-agent',
+            label: 'ACP Test Agent',
+            description: 'Local ACP smoke-test agent',
+            command: process.execPath,
+            args: [agentPath],
+            commandLabel: `${process.execPath} ${agentPath}`
+        }];
+
+        try {
+            const tab = await manager.createTab({
+                agentId: 'test-agent',
+                cwd: process.cwd(),
+                terminalSessionId: 'term-1'
+            });
+            const { events, socket } = createSocketRecorder();
+            manager.attachSocket(tab.id, socket);
+
+            await manager.sendPrompt(tab.id, '/restart-drift-debug');
+
+            const settledTab = await waitForValue(async () => {
+                const state = await manager.listState();
+                const current = state.tabs.find((entry) => entry.id === tab.id);
+                return current && !current.busy ? current : null;
+            }, 12000);
+
+            const syntheticMessages = settledTab.messages.filter((message) => (
+                String(message.streamKey || '').startsWith('synthetic:')
+            ));
+            assert.equal(syntheticMessages.length, 1);
+            assert.equal(
+                syntheticMessages[0].text,
+                '時間戳：1\nDataset A\nDataset B\n時間戳：2\nDataset A\n'
+            );
+
+            const opens = events.filter((event) => (
+                event.type === 'message_open'
+                && String(event.message?.streamKey || '').startsWith(
+                    'synthetic:'
+                )
+            ));
+            assert.equal(opens.length, 1);
+        } finally {
+            await manager.dispose();
+        }
+    });
+
     it('captures plan usage and terminal summaries from real ACP updates', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
@@ -1955,6 +2490,147 @@ describe('AcpManager', () => {
         assert.equal(
             mergeAgentMessageText('hello', ' world'),
             'hello world'
+        );
+    });
+
+    it('deduplicates cumulative assistant chunks', () => {
+        assert.equal(
+            mergeAgentMessageText('Alpha', 'Alpha Beta'),
+            'Alpha Beta'
+        );
+        assert.equal(
+            mergeAgentMessageText('Alpha Beta', 'Beta Gamma'),
+            'Alpha Beta Gamma'
+        );
+    });
+
+    it('collapses repeated synthetic turn replay blocks', () => {
+        const messages = normalizeAgentTranscriptMessages([
+            {
+                id: 'u1',
+                role: 'user',
+                kind: 'message',
+                streamKey: 'synthetic:42:user_message_chunk:user:message',
+                text: '重新輸出一次進度表'
+            },
+            {
+                id: 'a1',
+                role: 'assistant',
+                kind: 'message',
+                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                text: '# 進度矩陣'
+            },
+            {
+                id: 'u2',
+                role: 'user',
+                kind: 'message',
+                streamKey: 'synthetic:42:user_message_chunk:user:message',
+                text: '重新輸出一次進度表'
+            },
+            {
+                id: 'a2',
+                role: 'assistant',
+                kind: 'message',
+                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                text: '# 進度矩陣'
+            },
+            {
+                id: 'u3',
+                role: 'user',
+                kind: 'message',
+                streamKey: 'synthetic:43:user_message_chunk:user:message',
+                text: '下一條'
+            },
+            {
+                id: 'a3',
+                role: 'assistant',
+                kind: 'message',
+                streamKey: 'synthetic:43:agent_message_chunk:assistant:message',
+                text: 'OK'
+            }
+        ]);
+
+        assert.deepEqual(
+            messages.map((message) => ({
+                id: message.id,
+                streamKey: message.streamKey,
+                text: message.text,
+                order: message.order
+            })),
+            [
+                {
+                    id: 'u1',
+                    streamKey: 'synthetic:42:user_message_chunk:user:message',
+                    text: '重新輸出一次進度表',
+                    order: 1
+                },
+                {
+                    id: 'a2',
+                    streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                    text: '# 進度矩陣',
+                    order: 4
+                },
+                {
+                    id: 'u3',
+                    streamKey: 'synthetic:43:user_message_chunk:user:message',
+                    text: '下一條',
+                    order: 5
+                },
+                {
+                    id: 'a3',
+                    streamKey: 'synthetic:43:agent_message_chunk:assistant:message',
+                    text: 'OK',
+                    order: 6
+                }
+            ]
+        );
+    });
+
+    it('preserves existing message orders when collapsing replay blocks', () => {
+        const messages = normalizeAgentTranscriptMessages([
+            {
+                id: 'u1',
+                role: 'user',
+                kind: 'message',
+                streamKey: 'synthetic:42:user_message_chunk:user:message',
+                text: '重新輸出一次進度表',
+                order: 101
+            },
+            {
+                id: 'a1',
+                role: 'assistant',
+                kind: 'message',
+                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                text: '# 進度矩陣',
+                order: 102
+            },
+            {
+                id: 'u2',
+                role: 'user',
+                kind: 'message',
+                streamKey: 'synthetic:42:user_message_chunk:user:message',
+                text: '重新輸出一次進度表',
+                order: 103
+            },
+            {
+                id: 'a2',
+                role: 'assistant',
+                kind: 'message',
+                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                text: '# 進度矩陣',
+                order: 104
+            }
+        ]);
+
+        assert.deepEqual(
+            messages.map((message) => ({
+                id: message.id,
+                order: message.order
+            })),
+            [
+                { id: 'u1', order: 101 },
+                { id: 'a2', order: 104 }
+            ]
         );
     });
 });

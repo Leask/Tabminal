@@ -746,6 +746,21 @@ export function mergeAgentMessageText(previousText, chunkText) {
     const chunk = String(chunkText || '');
     if (!previous) return chunk;
     if (!chunk) return previous;
+    if (previous === chunk) return previous;
+    if (chunk.startsWith(previous)) {
+        return chunk;
+    }
+    if (previous.startsWith(chunk)) {
+        return previous;
+    }
+
+    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
+    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
+        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
+            return `${previous}${chunk.slice(overlap)}`;
+        }
+    }
+
     if (/\s$/.test(previous) || /^\s/.test(chunk)) {
         return `${previous}${chunk}`;
     }
@@ -1008,108 +1023,543 @@ function cloneSerializable(value, fallback) {
     }
 }
 
+function parseIsoTimestamp(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        return 0;
+    }
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getSerializedTabContentScore(tab = {}) {
+    const messages = Array.isArray(tab.messages) ? tab.messages : [];
+    const toolCalls = Array.isArray(tab.toolCalls) ? tab.toolCalls : [];
+    const permissions = Array.isArray(tab.permissions) ? tab.permissions : [];
+    const plan = Array.isArray(tab.plan) ? tab.plan : [];
+    const terminals = Array.isArray(tab.terminals) ? tab.terminals : [];
+    return (
+        messages.length * 10000
+        + toolCalls.length * 100
+        + permissions.length * 10
+        + plan.length
+        + terminals.length
+    );
+}
+
+function getSerializedTabActivity(tab = {}) {
+    let maxSyntheticTurn = -1;
+    let maxTimestamp = parseIsoTimestamp(tab.createdAt);
+    let maxOrder = 0;
+    const visit = (item) => {
+        maxTimestamp = Math.max(
+            maxTimestamp,
+            parseIsoTimestamp(item?.createdAt),
+            parseIsoTimestamp(item?.updatedAt)
+        );
+        const order = Number(item?.order || 0);
+        if (Number.isFinite(order) && order > maxOrder) {
+            maxOrder = order;
+        }
+        const syntheticTurnKey = getSyntheticTurnKey(item?.streamKey || '');
+        const turn = syntheticTurnKey ? Number(syntheticTurnKey) : -1;
+        if (Number.isFinite(turn) && turn > maxSyntheticTurn) {
+            maxSyntheticTurn = turn;
+        }
+    };
+    for (const message of Array.isArray(tab.messages) ? tab.messages : []) {
+        visit(message);
+    }
+    for (const toolCall of Array.isArray(tab.toolCalls) ? tab.toolCalls : []) {
+        visit(toolCall);
+    }
+    for (
+        const permission of Array.isArray(tab.permissions) ? tab.permissions : []
+    ) {
+        visit(permission);
+    }
+    if (tab.usage && typeof tab.usage === 'object') {
+        visit(tab.usage);
+    }
+    return {
+        maxSyntheticTurn,
+        maxTimestamp,
+        maxOrder,
+        contentScore: getSerializedTabContentScore(tab)
+    };
+}
+
+function compareSerializedTabActivity(left = {}, right = {}) {
+    const leftActivity = getSerializedTabActivity(left);
+    const rightActivity = getSerializedTabActivity(right);
+    if (leftActivity.maxSyntheticTurn !== rightActivity.maxSyntheticTurn) {
+        return rightActivity.maxSyntheticTurn - leftActivity.maxSyntheticTurn;
+    }
+    if (leftActivity.maxTimestamp !== rightActivity.maxTimestamp) {
+        return rightActivity.maxTimestamp - leftActivity.maxTimestamp;
+    }
+    if (leftActivity.maxOrder !== rightActivity.maxOrder) {
+        return rightActivity.maxOrder - leftActivity.maxOrder;
+    }
+    if (leftActivity.contentScore !== rightActivity.contentScore) {
+        return rightActivity.contentScore - leftActivity.contentScore;
+    }
+    return 0;
+}
+
+function compareSerializedTabBase(left = {}, right = {}) {
+    const leftLinked = !!String(left.terminalSessionId || '').trim();
+    const rightLinked = !!String(right.terminalSessionId || '').trim();
+    if (leftLinked !== rightLinked) {
+        return Number(rightLinked) - Number(leftLinked);
+    }
+    const leftCreatedAt = parseIsoTimestamp(left.createdAt);
+    const rightCreatedAt = parseIsoTimestamp(right.createdAt);
+    if (leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
+    }
+    const leftTitleLength = String(left.title || '').trim().length;
+    const rightTitleLength = String(right.title || '').trim().length;
+    if (leftTitleLength !== rightTitleLength) {
+        return rightTitleLength - leftTitleLength;
+    }
+    return compareSerializedTabActivity(left, right);
+}
+
+function pickBestTitle(values = []) {
+    let best = '';
+    for (const value of values) {
+        const text = String(value || '').trim();
+        if (text.length > best.length) {
+            best = text;
+        }
+    }
+    return best;
+}
+
+function pickLongerArray(left, right) {
+    const leftItems = Array.isArray(left) ? left : [];
+    const rightItems = Array.isArray(right) ? right : [];
+    return rightItems.length > leftItems.length ? rightItems : leftItems;
+}
+
+function mergeSerializedTabGroup(group = []) {
+    if (!Array.isArray(group) || group.length === 0) {
+        return null;
+    }
+    if (group.length === 1) {
+        const only = cloneSerializable(group[0], null);
+        if (only && Array.isArray(only.messages)) {
+            only.messages = normalizeAgentTranscriptMessages(only.messages);
+        }
+        return only;
+    }
+
+    const base = [...group].sort(compareSerializedTabBase)[0];
+    const content = [...group].sort(compareSerializedTabActivity)[0];
+    const merged = cloneSerializable(base, null);
+    if (!merged) {
+        return null;
+    }
+
+    const bestTitle = pickBestTitle(group.map((entry) => entry?.title));
+    merged.title = String(merged.title || '').trim()
+        || String(content.title || '').trim()
+        || bestTitle;
+    merged.cwd = String(merged.cwd || content.cwd || '');
+    merged.terminalSessionId = String(
+        merged.terminalSessionId || content.terminalSessionId || ''
+    );
+    merged.currentModeId = String(
+        merged.currentModeId || content.currentModeId || ''
+    );
+    merged.availableModes = cloneSerializable(
+        pickLongerArray(merged.availableModes, content.availableModes),
+        []
+    );
+    merged.availableCommands = cloneSerializable(
+        pickLongerArray(merged.availableCommands, content.availableCommands),
+        []
+    );
+    merged.configOptions = cloneSerializable(
+        pickLongerArray(merged.configOptions, content.configOptions),
+        []
+    );
+    merged.messages = normalizeAgentTranscriptMessages(
+        cloneSerializable(content.messages, [])
+    );
+    merged.toolCalls = cloneSerializable(content.toolCalls, []);
+    merged.permissions = cloneSerializable(content.permissions, []);
+    merged.plan = cloneSerializable(content.plan, []);
+    merged.usage = cloneSerializable(content.usage, null);
+    merged.terminals = cloneSerializable(
+        pickLongerArray(merged.terminals, content.terminals),
+        []
+    );
+    return merged;
+}
+
+function dedupeSerializedTabs(entries = []) {
+    const groups = new Map();
+    const order = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+        const acpSessionId = String(entry.acpSessionId || '').trim();
+        const key = acpSessionId || `id:${String(entry.id || '').trim()}`;
+        if (!groups.has(key)) {
+            groups.set(key, []);
+            order.push(key);
+        }
+        groups.get(key).push(entry);
+    }
+    const deduped = [];
+    let changed = false;
+    for (const key of order) {
+        const group = groups.get(key) || [];
+        const merged = mergeSerializedTabGroup(group);
+        if (merged) {
+            deduped.push(merged);
+        }
+        if (group.length > 1) {
+            changed = true;
+        }
+    }
+    return { tabs: deduped, changed };
+}
+
 function normalizePersistedTimelineOrder(value, fallback = 0) {
     return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function normalizeReplayMessageEntry(message = {}) {
-    return {
-        role: typeof message.role === 'string'
-            ? message.role
-            : 'assistant',
-        kind: typeof message.kind === 'string'
-            ? message.kind
-            : 'message',
-        text: typeof message.text === 'string'
-            ? message.text
-            : ''
-    };
+function getSyntheticTurnKey(streamKey = '') {
+    const match = /^synthetic:(\d+):/.exec(String(streamKey || ''));
+    return match ? match[1] : '';
 }
 
-export function createRestoreReplayState(messages = []) {
-    if (!Array.isArray(messages) || messages.length === 0) {
-        return null;
-    }
-    const replayMessages = messages
-        .map((message) => normalizeReplayMessageEntry(message))
-        .filter((message) => message.text);
-    if (replayMessages.length === 0) {
-        return null;
-    }
-    return {
-        messages: replayMessages,
-        index: -1,
-        offset: 0,
-        started: false,
-        exhausted: false
-    };
+function buildMessageReplaySignature(message = {}) {
+    return [
+        String(message?.role || ''),
+        String(message?.kind || ''),
+        String(message?.streamKey || ''),
+        String(message?.text || '')
+    ].join('\u0000');
 }
 
-export function consumeRestoredMessageReplay(state, role, kind, text) {
-    if (!state || state.exhausted) {
-        return false;
-    }
-    const chunk = typeof text === 'string' ? text : '';
-    if (!chunk) {
-        return false;
+export function normalizeAgentTranscriptMessages(messages = []) {
+    const normalized = Array.isArray(messages)
+        ? messages.map((message, index) =>
+            normalizePersistedMessage(message, index + 1)
+        )
+        : [];
+    if (normalized.length <= 1) {
+        return normalized;
     }
 
-    const findReplayStart = () => {
-        for (let index = 0; index < state.messages.length; index += 1) {
-            const message = state.messages[index];
-            if (message.role !== role || message.kind !== kind) {
+    const blocks = [];
+    let index = 0;
+    while (index < normalized.length) {
+        const first = normalized[index];
+        const syntheticTurnKey = getSyntheticTurnKey(first.streamKey);
+        const block = [first];
+        index += 1;
+        if (!syntheticTurnKey) {
+            blocks.push(block);
+            continue;
+        }
+        while (index < normalized.length) {
+            const next = normalized[index];
+            if (getSyntheticTurnKey(next.streamKey) !== syntheticTurnKey) {
+                break;
+            }
+            block.push(next);
+            index += 1;
+        }
+        const dedupedBlock = [];
+        const dedupedIndexes = new Map();
+        for (const message of block) {
+            const signature = buildMessageReplaySignature(message);
+            const existingIndex = dedupedIndexes.get(signature);
+            if (existingIndex === undefined) {
+                dedupedIndexes.set(signature, dedupedBlock.length);
+                dedupedBlock.push(message);
                 continue;
             }
-            if (message.text.startsWith(chunk)) {
-                state.index = index;
-                state.offset = chunk.length;
-                state.started = true;
-                if (state.offset >= message.text.length) {
-                    state.index += 1;
-                    state.offset = 0;
-                }
-                if (state.index >= state.messages.length) {
-                    state.exhausted = true;
-                }
-                return true;
+            if (String(message.role || '') === 'assistant') {
+                dedupedBlock[existingIndex] = message;
             }
         }
-        state.exhausted = true;
-        return false;
+        blocks.push(dedupedBlock);
+    }
+
+    const dedupedBlocks = [];
+    let previousSignature = '';
+    for (const block of blocks) {
+        const signature = block
+            .map((message) => buildMessageReplaySignature(message))
+            .join('\u0001');
+        if (signature && signature === previousSignature) {
+            continue;
+        }
+        dedupedBlocks.push(block);
+        previousSignature = signature;
+    }
+
+    return dedupedBlocks.flat();
+}
+
+export function createRestoreCaptureState(messages = [], options = {}) {
+    const toolCalls = Array.isArray(options.toolCalls)
+        ? options.toolCalls
+        : [];
+    return {
+        baselineMessages: normalizeAgentTranscriptMessages(messages),
+        baselineToolCalls: new Map(
+            toolCalls
+                .map((entry) => normalizePersistedTimelineEntry(entry, 0))
+                .filter((entry) => typeof entry.toolCallId === 'string')
+                .map((entry) => [entry.toolCallId, entry])
+        ),
+        messages: [],
+        syntheticStreams: new Map(),
+        syntheticStreamTurn: getNextSyntheticStreamTurn(messages),
+        messageCounter: 0,
+        nextTimelineOrder: null
     };
+}
 
-    if (!state.started) {
-        return findReplayStart();
+function getRestoreComparableAttachment(attachment = {}) {
+    return [
+        String(attachment?.kind || ''),
+        String(attachment?.name || ''),
+        String(attachment?.path || ''),
+        String(attachment?.url || ''),
+        Number.isFinite(attachment?.size) ? attachment.size : 0,
+        Number.isFinite(attachment?.lastModified)
+            ? attachment.lastModified
+            : 0
+    ];
+}
+
+function buildRestoreComparableMessage(message = {}) {
+    return JSON.stringify({
+        role: String(message?.role || ''),
+        kind: String(message?.kind || ''),
+        text: String(message?.text || ''),
+        attachments: Array.isArray(message?.attachments)
+            ? message.attachments.map(getRestoreComparableAttachment)
+            : []
+    });
+}
+
+function areRestoreMessagesEquivalent(left = {}, right = {}) {
+    return buildRestoreComparableMessage(left)
+        === buildRestoreComparableMessage(right);
+}
+
+function isRestoreMessageContinuation(previousText = '', chunkText = '') {
+    const previous = String(previousText || '');
+    const chunk = String(chunkText || '');
+    if (!previous || !chunk || previous === chunk) {
+        return false;
     }
+    if (chunk.startsWith(previous) || previous.startsWith(chunk)) {
+        return true;
+    }
+    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
+    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
+        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function maybeAdvanceRestoreCaptureTurn(capture, update, role, kind, text) {
     if (
-        state.index < 0
-        || state.index >= state.messages.length
+        !capture
+        || update?.messageId
+        || role !== 'user'
+        || kind !== 'message'
     ) {
-        state.exhausted = true;
-        return false;
+        return;
     }
+    const last = capture.messages[capture.messages.length - 1] || null;
+    if (!last) {
+        return;
+    }
+    if (last.role !== 'user' || last.kind !== 'message') {
+        capture.syntheticStreamTurn += 1;
+        capture.syntheticStreams.clear();
+        return;
+    }
+    if (!isRestoreMessageContinuation(last.text, text)) {
+        capture.syntheticStreamTurn += 1;
+        capture.syntheticStreams.clear();
+    }
+}
 
-    const message = state.messages[state.index];
-    if (message.role !== role || message.kind !== kind) {
-        state.exhausted = true;
-        return false;
+function getRestoreCaptureStreamKey(capture, update, role, kind, text = '') {
+    maybeAdvanceRestoreCaptureTurn(capture, update, role, kind, text);
+    if (update?.messageId) {
+        return update.messageId;
     }
+    const bucketKey = `${update?.sessionUpdate}:${role}:${kind}`;
+    let streamKey = capture.syntheticStreams.get(bucketKey) || '';
+    if (!streamKey) {
+        streamKey = [
+            'synthetic',
+            capture.syntheticStreamTurn,
+            update?.sessionUpdate || 'message_chunk',
+            role,
+            kind
+        ].join(':');
+        capture.syntheticStreams.set(bucketKey, streamKey);
+    }
+    return streamKey;
+}
 
-    const remaining = message.text.slice(state.offset);
-    if (!remaining.startsWith(chunk)) {
-        state.exhausted = true;
-        return false;
+export function captureRestoreReplayChunk(capture, update, role, kind, text) {
+    if (!capture) return false;
+    const chunk = String(text || '');
+    if (!chunk) return true;
+    const streamKey = getRestoreCaptureStreamKey(
+        capture,
+        update,
+        role,
+        kind,
+        chunk
+    );
+    const last = capture.messages[capture.messages.length - 1] || null;
+    if (
+        last
+        && last.streamKey === streamKey
+        && last.role === role
+        && last.kind === kind
+    ) {
+        last.text = mergeAgentMessageText(last.text, chunk);
+        return true;
     }
-
-    state.offset += chunk.length;
-    if (state.offset >= message.text.length) {
-        state.index += 1;
-        state.offset = 0;
+    if (!update?.messageId) {
+        capture.messageCounter += 1;
     }
-    if (state.index >= state.messages.length) {
-        state.exhausted = true;
-    }
+    const baselineMessage = capture.baselineMessages[capture.messages.length] || null;
+    const canReuseBaseline = !!(
+        baselineMessage
+        && baselineMessage.role === role
+        && baselineMessage.kind === kind
+    );
+    capture.messages.push({
+        id: canReuseBaseline
+            ? (baselineMessage.id || crypto.randomUUID())
+            : crypto.randomUUID(),
+        streamKey: canReuseBaseline
+            ? (baselineMessage.streamKey || streamKey)
+            : streamKey,
+        role,
+        kind,
+        text: chunk,
+        createdAt: canReuseBaseline
+            ? (baselineMessage.createdAt || '')
+            : '',
+        order: typeof capture.nextTimelineOrder === 'function'
+            ? capture.nextTimelineOrder()
+            : capture.messages.length + 1,
+        attachments: canReuseBaseline
+            && Array.isArray(baselineMessage.attachments)
+            ? cloneSerializable(baselineMessage.attachments, [])
+            : []
+    });
     return true;
+}
+
+export function finalizeRestoreCaptureMessages(tab) {
+    const capture = tab?.restoreCapture;
+    if (!capture) {
+        return false;
+    }
+    const baselineMessages = Array.isArray(capture.baselineMessages)
+        ? capture.baselineMessages
+        : [];
+    const replayMessages = Array.isArray(capture.messages)
+        ? capture.messages
+        : [];
+    const nextMessages = replayMessages.length > 0
+        ? normalizeAgentTranscriptMessages(replayMessages)
+        : baselineMessages;
+    const replacedMessages = !(
+        baselineMessages.length === nextMessages.length
+        && baselineMessages.every((message, index) =>
+            areRestoreMessagesEquivalent(message, nextMessages[index] || {})
+        )
+    );
+    tab.messages = nextMessages;
+    const maxMessageOrder = tab.messages.reduce(
+        (maxOrder, message) => Math.max(
+            maxOrder,
+            normalizePersistedTimelineOrder(message.order, 0)
+        ),
+        0
+    );
+    const maxToolCallOrder = Array.from(tab.toolCalls.values()).reduce(
+        (maxOrder, toolCall) => Math.max(
+            maxOrder,
+            normalizePersistedTimelineOrder(toolCall?.order, 0)
+        ),
+        0
+    );
+    const maxPermissionOrder = Array.from(tab.permissions.values()).reduce(
+        (maxOrder, permission) => Math.max(
+            maxOrder,
+            normalizePersistedTimelineOrder(permission?.order, 0)
+        ),
+        0
+    );
+    tab.timelineCounter = Math.max(
+        maxMessageOrder,
+        maxToolCallOrder,
+        maxPermissionOrder
+    );
+    tab.messageCounter = Math.max(tab.messageCounter, tab.messages.length);
+    tab.restoreCapture = null;
+    return replacedMessages;
+}
+
+export function buildRestoredToolCall(
+    previous = null,
+    baseline = null,
+    update = {},
+    nextTimelineOrder = null
+) {
+    const persisted = cloneSerializable(baseline, {}) || {};
+    const current = cloneSerializable(previous, {}) || {};
+    const nextOrder = normalizePersistedTimelineOrder(current.order, 0)
+        || (
+            typeof nextTimelineOrder === 'function'
+                ? nextTimelineOrder()
+                : normalizePersistedTimelineOrder(persisted.order, 0)
+        )
+        || 1;
+    const createdAt = String(
+        current.createdAt || persisted.createdAt || ''
+    ).trim() || new Date().toISOString();
+    const nextToolCall = {
+        ...persisted,
+        ...current,
+        ...update,
+        createdAt,
+        order: nextOrder
+    };
+    if (!nextToolCall.toolCallId) {
+        nextToolCall.toolCallId = String(update.toolCallId || '');
+    }
+    if (typeof nextToolCall.title !== 'string') {
+        nextToolCall.title = '';
+    }
+    if (typeof nextToolCall.status !== 'string') {
+        nextToolCall.status = 'pending';
+    }
+    return nextToolCall;
 }
 
 function normalizePersistedMessage(message = {}, fallbackOrder = 0) {
@@ -1192,12 +1642,26 @@ function normalizePersistedTerminalSummary(summary = {}) {
     };
 }
 
+export function getNextSyntheticStreamTurn(messages = []) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return 0;
+    }
+    return messages.reduce((maxTurn, entry) => {
+        const streamKey = String(entry?.streamKey || '');
+        const match = /^synthetic:(\d+):/.exec(streamKey);
+        if (!match) {
+            return maxTurn;
+        }
+        const turn = Number.parseInt(match[1], 10);
+        if (!Number.isFinite(turn)) {
+            return maxTurn;
+        }
+        return Math.max(maxTurn, turn + 1);
+    }, 0);
+}
+
 function restorePersistedTabSnapshot(tab, snapshot = {}) {
-    const messages = Array.isArray(snapshot.messages)
-        ? snapshot.messages.map((message, index) =>
-            normalizePersistedMessage(message, index + 1)
-        )
-        : [];
+    const messages = normalizeAgentTranscriptMessages(snapshot.messages);
     const toolCalls = Array.isArray(snapshot.toolCalls)
         ? snapshot.toolCalls.map((entry, index) =>
             normalizePersistedTimelineEntry(
@@ -1279,6 +1743,13 @@ function restorePersistedTabSnapshot(tab, snapshot = {}) {
         maxPermissionOrder
     );
     tab.messageCounter = Math.max(tab.messageCounter, messages.length);
+    const maxSyntheticTurn = getNextSyntheticStreamTurn(messages);
+    tab.syntheticStreamTurn = Math.max(
+        Number.isFinite(tab.syntheticStreamTurn)
+            ? tab.syntheticStreamTurn
+            : 0,
+        maxSyntheticTurn
+    );
 }
 
 class LocalExecTerminal extends EventEmitter {
@@ -1748,7 +2219,7 @@ class AcpRuntime extends EventEmitter {
             syntheticStreams: new Map(),
             syntheticStreamTurn: 0,
             pendingUserEcho: null,
-            restoreReplay: null,
+            restoreCapture: null,
             currentModeId,
             availableModes,
             availableCommands,
@@ -2005,14 +2476,20 @@ class AcpRuntime extends EventEmitter {
             availableModes: meta.availableModes || [],
             availableCommands: meta.availableCommands || [],
             configOptions: meta.configOptions || [],
-            messages: meta.messages || [],
-            toolCalls: meta.toolCalls || [],
-            permissions: meta.permissions || [],
-            plan: meta.plan || [],
+            messages: [],
+            toolCalls: [],
+            permissions: [],
+            plan: [],
             usage: meta.usage || null,
             terminals: meta.terminals || []
         });
-        tab.restoreReplay = createRestoreReplayState(meta.messages || []);
+        // For loadSession-capable runtimes, transcript ordering comes from the
+        // authoritative replay stream, not the persisted snapshot.
+        tab.restoreCapture = createRestoreCaptureState(meta.messages || [], {
+            toolCalls: meta.toolCalls || []
+        });
+        tab.restoreCapture.nextTimelineOrder = () =>
+            this.#nextTimelineOrder(tab);
         tab.status = 'restoring';
         tab.busy = true;
 
@@ -2020,41 +2497,14 @@ class AcpRuntime extends EventEmitter {
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
 
         try {
-            const response = await this.connection.loadSession({
-                cwd: meta.cwd,
-                sessionId: meta.acpSessionId,
-                mcpServers: []
+            await this.#loadSessionIntoTab(tab, meta);
+            this.#broadcast(tab, {
+                type: 'snapshot',
+                tab: this.serializeTab(tab)
             });
-            const restoredSessionId = response?.sessionId || meta.acpSessionId;
-            if (restoredSessionId !== tab.acpSessionId) {
-                this.sessionToTabId.delete(tab.acpSessionId);
-                tab.acpSessionId = restoredSessionId;
-                this.sessionToTabId.set(tab.acpSessionId, tab.id);
-            }
-            if (typeof response?.title === 'string') {
-                tab.title = response.title;
-            }
-            tab.currentModeId = response?.modes?.currentModeId || '';
-            tab.availableModes = this.#resolveAvailableModes(
-                response?.modes?.availableModes,
-                tab.availableModes
-            );
-            tab.availableCommands = this.#resolveAvailableCommands(
-                response?.availableCommands,
-                tab.availableCommands
-            );
-            tab.configOptions = this.#resolveConfigOptions(
-                response?.configOptions,
-                tab.configOptions,
-                response?.models
-            );
-            tab.restoreReplay = null;
-            tab.status = 'ready';
-            tab.busy = false;
-            tab.errorMessage = '';
             return this.serializeTab(tab);
         } catch (error) {
-            tab.restoreReplay = null;
+            tab.restoreCapture = null;
             this.tabs.delete(tab.id);
             this.sessionToTabId.delete(tab.acpSessionId);
             throw error;
@@ -2131,6 +2581,10 @@ class AcpRuntime extends EventEmitter {
             createdAt: new Date().toISOString(),
             title: meta.title || ''
         });
+        // Resume rebuilds transcript ordering from the runtime replay stream.
+        tab.restoreCapture = createRestoreCaptureState([]);
+        tab.restoreCapture.nextTimelineOrder = () =>
+            this.#nextTimelineOrder(tab);
         tab.status = 'restoring';
         tab.busy = true;
 
@@ -2138,9 +2592,20 @@ class AcpRuntime extends EventEmitter {
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
 
         try {
+            await this.#loadSessionIntoTab(tab, meta);
+            return this.serializeTab(tab);
+        } catch (error) {
+            this.tabs.delete(tab.id);
+            this.sessionToTabId.delete(tab.acpSessionId);
+            throw error;
+        }
+    }
+
+    async #loadSessionIntoTab(tab, meta) {
+        try {
             const response = await this.connection.loadSession({
                 cwd: meta.cwd,
-                sessionId: meta.acpSessionId,
+                sessionId: tab.acpSessionId,
                 mcpServers: []
             });
             const restoredSessionId = response?.sessionId || meta.acpSessionId;
@@ -2166,13 +2631,16 @@ class AcpRuntime extends EventEmitter {
                 tab.configOptions,
                 response?.models
             );
+            const replacedMessages = finalizeRestoreCaptureMessages(tab);
             tab.status = 'ready';
             tab.busy = false;
             tab.errorMessage = '';
-            return this.serializeTab(tab);
+            if (replacedMessages) {
+                this.#markTabDirty(tab);
+            }
+            return replacedMessages;
         } catch (error) {
-            this.tabs.delete(tab.id);
-            this.sessionToTabId.delete(tab.acpSessionId);
+            tab.restoreCapture = null;
             throw error;
         }
     }
@@ -2186,6 +2654,7 @@ class AcpRuntime extends EventEmitter {
     }
 
     serializeTab(tab) {
+        tab.messages = normalizeAgentTranscriptMessages(tab.messages);
         return {
             id: tab.id,
             runtimeId: tab.runtimeId,
@@ -2628,32 +3097,59 @@ class AcpRuntime extends EventEmitter {
     }
 
     async #handleSessionUpdate(params) {
+        const update = params.update;
         const tab = this.#getTabBySession(params.sessionId);
         if (!tab) return;
-        const update = params.update;
         let broadcastUpdate = update;
         let didChange = false;
+        let suppressSessionUpdateBroadcast = false;
 
         switch (update.sessionUpdate) {
-            case 'agent_message_chunk':
-                this.#appendContentChunk(tab, update, 'assistant', 'message');
-                didChange = true;
+            case 'agent_message_chunk': {
+                const result = this.#appendContentChunk(
+                    tab,
+                    update,
+                    'assistant',
+                    'message'
+                );
+                didChange = !!result.didChange;
+                suppressSessionUpdateBroadcast = !!result.suppressBroadcast;
                 break;
-            case 'agent_thought_chunk':
-                this.#appendContentChunk(tab, update, 'assistant', 'thought');
-                didChange = true;
+            }
+            case 'agent_thought_chunk': {
+                const result = this.#appendContentChunk(
+                    tab,
+                    update,
+                    'assistant',
+                    'thought'
+                );
+                didChange = !!result.didChange;
+                suppressSessionUpdateBroadcast = !!result.suppressBroadcast;
                 break;
-            case 'user_message_chunk':
-                this.#appendContentChunk(tab, update, 'user', 'message');
-                didChange = true;
+            }
+            case 'user_message_chunk': {
+                const result = this.#appendContentChunk(
+                    tab,
+                    update,
+                    'user',
+                    'message'
+                );
+                didChange = !!result.didChange;
+                suppressSessionUpdateBroadcast = !!result.suppressBroadcast;
                 break;
+            }
             case 'tool_call': {
                 this.#advanceSyntheticStreamTurn(tab);
-                const nextToolCall = {
-                    ...update,
-                    createdAt: new Date().toISOString(),
-                    order: this.#nextTimelineOrder(tab)
-                };
+                const baseline = tab.restoreCapture?.baselineToolCalls?.get(
+                    update.toolCallId
+                ) || null;
+                const previous = tab.toolCalls.get(update.toolCallId) || null;
+                const nextToolCall = buildRestoredToolCall(
+                    previous,
+                    baseline,
+                    update,
+                    () => this.#nextTimelineOrder(tab)
+                );
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
                 didChange = true;
@@ -2661,17 +3157,16 @@ class AcpRuntime extends EventEmitter {
             }
             case 'tool_call_update': {
                 this.#advanceSyntheticStreamTurn(tab);
-                const previous = tab.toolCalls.get(update.toolCallId) || {
-                    toolCallId: update.toolCallId,
-                    title: '',
-                    status: 'pending',
-                    createdAt: new Date().toISOString(),
-                    order: this.#nextTimelineOrder(tab)
-                };
-                const nextToolCall = {
-                    ...previous,
-                    ...update
-                };
+                const previous = tab.toolCalls.get(update.toolCallId) || null;
+                const baseline = tab.restoreCapture?.baselineToolCalls?.get(
+                    update.toolCallId
+                ) || null;
+                const nextToolCall = buildRestoredToolCall(
+                    previous,
+                    baseline,
+                    update,
+                    () => this.#nextTimelineOrder(tab)
+                );
                 tab.toolCalls.set(update.toolCallId, nextToolCall);
                 broadcastUpdate = nextToolCall;
                 didChange = true;
@@ -2715,17 +3210,19 @@ class AcpRuntime extends EventEmitter {
                 break;
         }
 
-        this.#broadcast(tab, {
-            type: 'session_update',
-            update: broadcastUpdate,
-            tab: {
-                title: tab.title,
-                currentModeId: tab.currentModeId,
-                availableModes: tab.availableModes,
-                availableCommands: tab.availableCommands,
-                configOptions: tab.configOptions
-            }
-        });
+        if (!suppressSessionUpdateBroadcast) {
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: broadcastUpdate,
+                tab: {
+                    title: tab.title,
+                    currentModeId: tab.currentModeId,
+                    availableModes: tab.availableModes,
+                    availableCommands: tab.availableCommands,
+                    configOptions: tab.configOptions
+                }
+            });
+        }
         if (didChange) {
             this.#markTabDirty(tab);
         }
@@ -2737,10 +3234,17 @@ class AcpRuntime extends EventEmitter {
             ? (content.text || '')
             : `[${content.type}]`;
         if (role === 'user' && kind === 'message' && this.#consumeUserEcho(tab, text)) {
-            return;
+            return {
+                didChange: false,
+                suppressBroadcast: false
+            };
         }
-        if (consumeRestoredMessageReplay(tab.restoreReplay, role, kind, text)) {
-            return;
+        if (tab.restoreCapture) {
+            captureRestoreReplayChunk(tab.restoreCapture, update, role, kind, text);
+            return {
+                didChange: false,
+                suppressBroadcast: true
+            };
         }
         const streamKey = this.#getStreamKey(tab, update, role, kind);
         const last = tab.messages[tab.messages.length - 1] || null;
@@ -2761,7 +3265,10 @@ class AcpRuntime extends EventEmitter {
                 kind,
                 text: appendedText
             });
-            return;
+            return {
+                didChange: true,
+                suppressBroadcast: false
+            };
         }
 
         if (!update.messageId) {
@@ -2781,6 +3288,10 @@ class AcpRuntime extends EventEmitter {
             type: 'message_open',
             message
         });
+        return {
+            didChange: true,
+            suppressBroadcast: false
+        };
     }
 
     #consumeUserEcho(tab, text) {
@@ -3538,8 +4049,8 @@ export class AcpManager {
         }, this.transcriptPersistDelayMs);
     }
 
-    getPersistedTabs() {
-        return Array.from(this.tabs.values()).map((entry) => {
+    #getSerializedTabs() {
+        const serializedTabs = Array.from(this.tabs.values()).map((entry) => {
             const tab = entry.serialize();
             return {
                 id: tab.id,
@@ -3577,6 +4088,21 @@ export class AcpManager {
                     : []
             };
         });
+        return dedupeSerializedTabs(serializedTabs).tabs;
+    }
+
+    #findOpenSerializedTabBySessionId(sessionId) {
+        const targetSessionId = String(sessionId || '').trim();
+        if (!targetSessionId) {
+            return null;
+        }
+        return this.#getSerializedTabs().find(
+            (tab) => String(tab?.acpSessionId || '').trim() === targetSessionId
+        ) || null;
+    }
+
+    getPersistedTabs() {
+        return this.#getSerializedTabs();
     }
 
     persistTabs() {
@@ -3608,15 +4134,15 @@ export class AcpManager {
             restoring: this.restoring,
             definitions: await this.listDefinitions(),
             configs: await this.listAgentConfigs(),
-            tabs: Array.from(this.tabs.values()).map((entry) => entry.serialize())
+            tabs: this.#getSerializedTabs()
         };
     }
 
     async listInventory() {
+        const tabs = this.#getSerializedTabs();
         return {
             restoring: this.restoring,
-            tabs: Array.from(this.tabs.values()).map((entry) => {
-                const serialized = entry.serialize();
+            tabs: tabs.map((serialized) => {
                 return {
                     id: serialized.id,
                     runtimeId: serialized.runtimeId,
@@ -3871,6 +4397,13 @@ export class AcpManager {
             throw new Error(availability.reason || 'Agent unavailable');
         }
 
+        const existingTab = this.#findOpenSerializedTabBySessionId(
+            options.sessionId
+        );
+        if (existingTab) {
+            return existingTab;
+        }
+
         const cwd = path.resolve(options.cwd || process.cwd());
         const { runtimeEntry, createdRuntime, runtimeStoreKey } =
             this.#ensureRuntimeEntry(definition, cwd);
@@ -3917,10 +4450,21 @@ export class AcpManager {
 
     async restoreTabs(validTerminalSessionIds = new Set()) {
         await this.ensureConfigsLoaded();
-        const entries = await this.loadTabs();
+        const dedupedTabs = dedupeSerializedTabs(await this.loadTabs());
+        const entries = dedupedTabs.tabs;
         let changed = false;
+        if (dedupedTabs.changed) {
+            changed = true;
+        }
 
         for (const meta of entries) {
+            const existingTab = this.#findOpenSerializedTabBySessionId(
+                meta.acpSessionId
+            );
+            if (existingTab) {
+                changed = true;
+                continue;
+            }
             if (
                 meta.terminalSessionId
                 && !validTerminalSessionIds.has(meta.terminalSessionId)

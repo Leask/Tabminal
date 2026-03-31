@@ -378,6 +378,134 @@ class TabminalTestAgent {
                 throw new Error('prompt dispatch failed');
             }
 
+            if (
+                commandName === 'cumulative-debug'
+                || /cumulative-debug/i.test(promptText)
+            ) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Alpha'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Alpha Beta'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
+            if (
+                commandName === 'restart-debug'
+                || /restart-debug/i.test(promptText)
+            ) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Report A\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'line 1\nline 2\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Report A\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'line 1\nline 2\n'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
+            if (
+                commandName === 'restart-drift-debug'
+                || /restart-drift-debug/i.test(promptText)
+            ) {
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: '時間戳：1\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Dataset A\nDataset B\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: '時間戳：2\n'
+                        }
+                    }
+                });
+                await sleep(20, signal);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: {
+                            type: 'text',
+                            text: 'Dataset A\n'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
+            }
+
             if (commandName === 'plan') {
                 await sleep(60, signal);
                 await this.sendPlan(params.sessionId, [

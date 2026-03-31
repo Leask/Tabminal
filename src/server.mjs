@@ -574,6 +574,7 @@ router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
         ctx.body = { error: 'text or attachments are required' };
         return;
     }
+
     try {
         await acpManager.sendPrompt(tabId, text, attachments);
         ctx.status = 202;
@@ -793,7 +794,7 @@ function findAvailablePort(startPort, host) {
 })();
 
 let isShuttingDown = false;
-function shutdown(signal) {
+async function shutdown(signal) {
     if (isShuttingDown) {
         return;
     }
@@ -805,23 +806,38 @@ function shutdown(signal) {
     }
     wss.close();
     terminalManager.dispose();
-    void acpManager.dispose();
 
-    const forceExitTimer = setTimeout(() => {
-        console.warn('Forced shutdown after timeout.');
-        process.exit(1);
-    }, 5000).unref();
-
-    httpServer.close(() => {
-        clearTimeout(forceExitTimer);
-        process.exit(0);
+    const waitForHttpClose = new Promise((resolve) => {
+        httpServer.close(() => resolve());
     });
     httpServer.closeIdleConnections?.();
     httpServer.closeAllConnections?.();
     for (const socket of httpConnections) {
         socket.destroy();
     }
+
+    const forceExitTimer = setTimeout(() => {
+        console.warn('Forced shutdown after timeout.');
+        process.exit(1);
+    }, 5000).unref();
+
+    try {
+        await Promise.all([
+            waitForHttpClose,
+            acpManager.dispose()
+        ]);
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+    } catch (error) {
+        clearTimeout(forceExitTimer);
+        console.error('Shutdown failed:', error);
+        process.exit(0);
+    }
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+});
+process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+});

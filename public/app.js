@@ -4264,6 +4264,9 @@ class EditorManager {
         if (!(body instanceof HTMLElement) || !message?.text) {
             return;
         }
+        if (agentTab?.busy) {
+            return;
+        }
         if (isAgentMessageStreaming(agentTab, message)) {
             return;
         }
@@ -6239,7 +6242,8 @@ class EditorManager {
             ) {
                 const cachedMarkdown = getAgentMessageMarkdownCache(message);
                 if (
-                    !isAgentMessageStreaming(agentTab, message)
+                    !agentTab?.busy
+                    && !isAgentMessageStreaming(agentTab, message)
                     && cachedMarkdown
                 ) {
                     body.classList.add('markdown');
@@ -9827,7 +9831,7 @@ class AgentTab {
             const byId = this.messages.findIndex(
                 (message) => message.id === candidate.id
             );
-            if (byId !== -1) return byId;
+            return byId;
         }
         if (!candidate.streamKey) return -1;
         for (let index = this.messages.length - 1; index >= 0; index -= 1) {
@@ -10049,9 +10053,21 @@ class AgentTab {
         this.busy = typeof data.busy === 'boolean' ? data.busy : this.busy;
         this.errorMessage = data.errorMessage || this.errorMessage || '';
         this.currentModeId = data.currentModeId || this.currentModeId || '';
+        this.availableModes = Array.isArray(data.availableModes)
+            ? data.availableModes
+            : this.availableModes;
+        this.availableCommands = Array.isArray(data.availableCommands)
+            ? data.availableCommands
+            : this.availableCommands;
+        this.configOptions = Array.isArray(data.configOptions)
+            ? data.configOptions
+            : this.configOptions;
         this.sessionCapabilities = normalizeAgentSessionCapabilities(
             data.sessionCapabilities || this.sessionCapabilities
         );
+        if (data.usage) {
+            this.usage = this.#normalizeUsageState(data.usage);
+        }
         const nextSession = this.getLinkedSession();
         const nextSnapshot = JSON.stringify({
             runtimeId: this.runtimeId || '',
@@ -11018,6 +11034,19 @@ function mergeAgentMessageText(previousText, chunkText) {
     const chunk = String(chunkText || '');
     if (!previous) return chunk;
     if (!chunk) return previous;
+    if (previous === chunk) return previous;
+    if (chunk.startsWith(previous)) {
+        return chunk;
+    }
+    if (previous.startsWith(chunk)) {
+        return previous;
+    }
+    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
+    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
+        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
+            return `${previous}${chunk.slice(overlap)}`;
+        }
+    }
     if (/\s$/.test(previous) || /^\s/.test(chunk)) {
         return `${previous}${chunk}`;
     }
@@ -13538,14 +13567,62 @@ function upsertAgentTab(server, data) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
     if (existing) {
-        existing.update(data);
+        const hasLiveSocket = existing.socket?.readyState === WebSocket.OPEN;
+        let shouldNotify = true;
+        if (
+            hasLiveSocket
+            && !shouldApplyAuthoritativeAgentSnapshot(existing, data)
+        ) {
+            shouldNotify = existing.applyInventory(data);
+        } else {
+            existing.update(data);
+        }
         existing.connect();
-        existing.notifyUi();
+        if (shouldNotify) {
+            existing.notifyUi();
+        }
         return existing;
     }
     const agentTab = new AgentTab(data, server);
     state.agentTabs.set(key, agentTab);
     return agentTab;
+}
+
+function getAgentMessageComparableSignature(message) {
+    if (!message || typeof message !== 'object') {
+        return '';
+    }
+    return JSON.stringify([
+        message.id || '',
+        message.order || 0,
+        message.role || '',
+        message.kind || '',
+        message.streamKey || '',
+        hashUiText(message.text || '')
+    ]);
+}
+
+function shouldApplyAuthoritativeAgentSnapshot(existing, data) {
+    if (!existing || !data || typeof data !== 'object') {
+        return false;
+    }
+    const incomingBusy = data.busy === true;
+    if (incomingBusy) {
+        return false;
+    }
+    if (!Array.isArray(data.messages)) {
+        return true;
+    }
+    const currentMessages = Array.isArray(existing.messages)
+        ? existing.messages
+        : [];
+    if (data.messages.length !== currentMessages.length) {
+        return true;
+    }
+    const incomingLast = data.messages[data.messages.length - 1] || null;
+    const currentLast = currentMessages[currentMessages.length - 1] || null;
+    return getAgentMessageComparableSignature(incomingLast)
+        !== getAgentMessageComparableSignature(currentLast);
 }
 
 function upsertAgentInventoryTab(server, data) {
