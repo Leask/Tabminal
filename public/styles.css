@@ -3609,6 +3609,10 @@ kbd {
 }
 
 @media (max-width: 767px) {
+    .agent-command-menu {
+        max-height: 152px;
+    }
+
     .markdown-preview-scroll {
         padding: 12px;
     }
