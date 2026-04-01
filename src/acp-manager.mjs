@@ -4193,44 +4193,50 @@ export class AcpManager {
 
     #getSerializedTabs() {
         const serializedTabs = Array.from(this.tabs.values()).map((entry) => {
-            const tab = entry.serialize();
-            return {
-                id: tab.id,
-                agentId: tab.agentId,
-                cwd: tab.cwd,
-                acpSessionId: tab.acpSessionId,
-                terminalSessionId: tab.terminalSessionId,
-                createdAt: tab.createdAt,
-                title: tab.title || '',
-                currentModeId: tab.currentModeId || '',
-                availableModes: Array.isArray(tab.availableModes)
-                    ? cloneSerializable(tab.availableModes, [])
-                    : [],
-                availableCommands: Array.isArray(tab.availableCommands)
-                    ? cloneSerializable(tab.availableCommands, [])
-                    : [],
-                configOptions: Array.isArray(tab.configOptions)
-                    ? cloneSerializable(tab.configOptions, [])
-                    : [],
-                messages: Array.isArray(tab.messages)
-                    ? cloneSerializable(tab.messages, [])
-                    : [],
-                toolCalls: Array.isArray(tab.toolCalls)
-                    ? cloneSerializable(tab.toolCalls, [])
-                    : [],
-                permissions: Array.isArray(tab.permissions)
-                    ? cloneSerializable(tab.permissions, [])
-                    : [],
-                plan: Array.isArray(tab.plan)
-                    ? cloneSerializable(tab.plan, [])
-                    : [],
-                usage: tab.usage ? cloneSerializable(tab.usage, null) : null,
-                terminals: Array.isArray(tab.terminals)
-                    ? cloneSerializable(tab.terminals, [])
-                    : []
-            };
-        });
+            return cloneSerializable(entry.serialize(), null);
+        }).filter(Boolean);
         return dedupeSerializedTabs(serializedTabs).tabs;
+    }
+
+    #serializePersistedTab(tab) {
+        if (!tab || typeof tab !== 'object') {
+            return null;
+        }
+        return {
+            id: tab.id,
+            agentId: tab.agentId,
+            cwd: tab.cwd,
+            acpSessionId: tab.acpSessionId,
+            terminalSessionId: tab.terminalSessionId,
+            createdAt: tab.createdAt,
+            title: tab.title || '',
+            currentModeId: tab.currentModeId || '',
+            availableModes: Array.isArray(tab.availableModes)
+                ? cloneSerializable(tab.availableModes, [])
+                : [],
+            availableCommands: Array.isArray(tab.availableCommands)
+                ? cloneSerializable(tab.availableCommands, [])
+                : [],
+            configOptions: Array.isArray(tab.configOptions)
+                ? cloneSerializable(tab.configOptions, [])
+                : [],
+            messages: Array.isArray(tab.messages)
+                ? cloneSerializable(tab.messages, [])
+                : [],
+            toolCalls: Array.isArray(tab.toolCalls)
+                ? cloneSerializable(tab.toolCalls, [])
+                : [],
+            permissions: Array.isArray(tab.permissions)
+                ? cloneSerializable(tab.permissions, [])
+                : [],
+            plan: Array.isArray(tab.plan)
+                ? cloneSerializable(tab.plan, [])
+                : [],
+            usage: tab.usage ? cloneSerializable(tab.usage, null) : null,
+            terminals: Array.isArray(tab.terminals)
+                ? cloneSerializable(tab.terminals, [])
+                : []
+        };
     }
 
     #findOpenSerializedTabBySessionId(sessionId) {
@@ -4244,7 +4250,9 @@ export class AcpManager {
     }
 
     getPersistedTabs() {
-        return this.#getSerializedTabs();
+        return this.#getSerializedTabs()
+            .map((tab) => this.#serializePersistedTab(tab))
+            .filter(Boolean);
     }
 
     persistTabs() {

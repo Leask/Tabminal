@@ -2029,16 +2029,20 @@ describe('AcpManager', () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 if (!current) return null;
-                const hasBefore = current.messages.some((message) => (
-                    message.text === 'Before tool.'
-                ));
-                const hasAfter = current.messages.some((message) => (
-                    message.text === 'After tool.'
-                ));
                 const hasTool = current.toolCalls.some((tool) => (
-                    tool.toolCallId === 'synthetic-tool'
+                    tool.toolCallId === 'permission-tool'
+                    && tool.status === 'completed'
                 ));
-                return hasBefore && hasAfter && hasTool ? current : null;
+                const granted = current.messages.some((message) => (
+                    /Permission was granted/.test(message.text || '')
+                ));
+                const selected = current.permissions.some((permission) => (
+                    permission.status === 'selected'
+                    && permission.selectedOptionId === 'allow-once'
+                ));
+                return hasTool && granted && selected && !current.busy
+                    ? current
+                    : null;
             }, 12000);
             assert.equal(settledTab.status, 'ready');
             assert.ok(
@@ -2094,13 +2098,10 @@ describe('AcpManager', () => {
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 if (!current) return null;
                 const hasMessage = current.messages.some((message) => (
-                    message.streamKey === 'inline-order-message'
-                    && message.text === 'Before tool. After tool.'
+                    message.streamKey === 'plan-result'
+                    && message.text === 'Plan-only demo complete.'
                 ));
-                const hasTool = current.toolCalls.some((tool) => (
-                    tool.toolCallId === 'inline-order-tool'
-                ));
-                return hasMessage && hasTool ? current : null;
+                return hasMessage && !current.busy ? current : null;
             }, 12000);
 
             assert.equal(settledTab.title, 'plan');
@@ -2164,19 +2165,16 @@ describe('AcpManager', () => {
             const settledTab = await waitForValue(async () => {
                 const state = await manager.listState();
                 const current = state.tabs.find((entry) => entry.id === tab.id);
-                if (!current) return null;
-                const hasBefore = current.messages.some((message) => (
-                    message.text === 'Before tool.'
-                ));
-                const hasAfter = current.messages.some((message) => (
-                    message.text === 'After tool.'
-                ));
-                const hasTool = current.toolCalls.some((tool) => (
-                    tool.toolCallId === 'synthetic-tool'
-                ));
-                return hasBefore && hasAfter && hasTool ? current : null;
+                return current && !current.busy ? current : null;
             }, 12000);
             assert.equal(settledTab.status, 'ready');
+            assert.equal(settledTab.title, 'cancel');
+            assert.equal(settledTab.toolCalls.length, 0);
+            assert.ok(
+                settledTab.messages.some((message) => (
+                    /Tabminal ACP smoke agent online/.test(message.text || '')
+                ))
+            );
         } finally {
             await manager.dispose();
         }
