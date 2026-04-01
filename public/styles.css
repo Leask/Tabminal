@@ -2945,6 +2945,28 @@ kbd {
     color: var(--text-muted);
 }
 
+.agent-message-body.markdown p,
+.agent-message-body.markdown li,
+.agent-message-body.markdown blockquote,
+.agent-message-body.markdown h1,
+.agent-message-body.markdown h2,
+.agent-message-body.markdown h3,
+.agent-message-body.markdown h4,
+.agent-message-body.markdown h5,
+.agent-message-body.markdown h6,
+.markdown-preview-sheet.markdown-body p,
+.markdown-preview-sheet.markdown-body li,
+.markdown-preview-sheet.markdown-body blockquote,
+.markdown-preview-sheet.markdown-body h1,
+.markdown-preview-sheet.markdown-body h2,
+.markdown-preview-sheet.markdown-body h3,
+.markdown-preview-sheet.markdown-body h4,
+.markdown-preview-sheet.markdown-body h5,
+.markdown-preview-sheet.markdown-body h6 {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .agent-message-body.markdown code {
     font: inherit;
     font-size: 11px;
