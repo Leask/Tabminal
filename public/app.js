@@ -108,6 +108,8 @@ const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
 const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 100;
 const AGENT_TRANSCRIPT_WINDOW_STEP = 50;
 const AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE = 5;
+const AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS = 300;
+const AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS = 300;
 const WORKSPACE_TAB_TITLE_MAX_LENGTH = 20;
 const MAIN_SERVER_ID = 'main';
 const RUNTIME_BOOT_ID_STORAGE_KEY = 'tabminal_runtime_boot_id';
@@ -1028,6 +1030,7 @@ class EditorManager {
         this.agentEmbeddedEditors = [];
         this.agentEmbeddedTerminals = new Map();
         this.agentTranscriptLayout = null;
+        this.agentRenderQueue = new Map();
         this.pdfPreviewState = {
             path: '',
             sessionKey: '',
@@ -4263,12 +4266,6 @@ class EditorManager {
         if (!(body instanceof HTMLElement) || !message?.text) {
             return;
         }
-        if (agentTab?.busy) {
-            return;
-        }
-        if (isAgentMessageStreaming(agentTab, message)) {
-            return;
-        }
         const session = this.currentSession;
         if (!session) {
             return;
@@ -4288,10 +4285,7 @@ class EditorManager {
 
         try {
             const { renderer } = await loadMarkdownPreviewBundle();
-            if (
-                String(message.text || '') !== sourceText
-                || isAgentMessageStreaming(agentTab, message)
-            ) {
+            if (String(message.text || '') !== sourceText) {
                 return;
             }
             const rendered = renderer.render(sourceText);
@@ -5623,13 +5617,133 @@ class EditorManager {
         removeAgentTab(agentTabKey);
     }
 
-    renderAgentPanel(agentTab, options = {}) {
-        const previousLayout = this.captureAgentTranscriptLayout();
-        const previousScrollTop = previousLayout?.scrollTop || 0;
-        const wasNearBottom = this.isAgentTranscriptLayoutNearBottom(
-            previousLayout,
-            36
-        );
+    getOrCreateAgentRenderState(agentTabKey) {
+        let renderState = this.agentRenderQueue.get(agentTabKey);
+        if (!renderState) {
+            renderState = {
+                timer: 0,
+                inFlight: false,
+                rerenderRequested: false,
+                full: false,
+                authoritativeSync: false,
+                delayMs: 0,
+                dirtyKeys: new Set()
+            };
+            this.agentRenderQueue.set(agentTabKey, renderState);
+        }
+        return renderState;
+    }
+
+    clearScheduledAgentPanelRender(agentTabKey) {
+        const renderState = this.agentRenderQueue.get(agentTabKey);
+        if (!renderState) {
+            return;
+        }
+        if (renderState.timer) {
+            clearTimeout(renderState.timer);
+        }
+        this.agentRenderQueue.delete(agentTabKey);
+    }
+
+    scheduleQueuedAgentPanelRender(agentTabKey, delayMs = 0) {
+        const renderState = this.agentRenderQueue.get(agentTabKey);
+        if (!renderState) {
+            return;
+        }
+        if (renderState.timer) {
+            clearTimeout(renderState.timer);
+        }
+        renderState.delayMs = Math.max(0, Math.floor(delayMs));
+        renderState.timer = window.setTimeout(() => {
+            renderState.timer = 0;
+            void this.flushQueuedAgentPanelRender(agentTabKey);
+        }, renderState.delayMs);
+    }
+
+    scheduleAgentPanelRender(agentTab, options = {}) {
+        if (!agentTab?.key) {
+            return;
+        }
+        const renderState = this.getOrCreateAgentRenderState(agentTab.key);
+        if (options.full) {
+            renderState.full = true;
+        }
+        if (options.authoritativeSync) {
+            renderState.authoritativeSync = true;
+        }
+        if (options.dirtyKey) {
+            renderState.dirtyKeys.add(String(options.dirtyKey));
+        }
+        if (renderState.inFlight) {
+            renderState.rerenderRequested = true;
+        }
+        const delayMs = renderState.full
+            ? 0
+            : (
+                Number.isFinite(options.delayMs)
+                    ? options.delayMs
+                    : AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS
+            );
+        this.scheduleQueuedAgentPanelRender(agentTab.key, delayMs);
+    }
+
+    async flushQueuedAgentPanelRender(agentTabKey) {
+        const renderState = this.agentRenderQueue.get(agentTabKey);
+        if (!renderState) {
+            return;
+        }
+        if (renderState.inFlight) {
+            renderState.rerenderRequested = true;
+            return;
+        }
+        renderState.inFlight = true;
+        const pendingFull = renderState.full;
+        const pendingAuthoritativeSync = renderState.authoritativeSync;
+        renderState.full = false;
+        renderState.authoritativeSync = false;
+        renderState.rerenderRequested = false;
+        renderState.dirtyKeys.clear();
+        try {
+            const agentTab = state.agentTabs.get(agentTabKey);
+            if (!agentTab) {
+                return;
+            }
+            if (isAgentTabVisible(agentTab)) {
+                if (pendingFull) {
+                    this.renderAgentPanel(agentTab, {
+                        reason: 'queued-full'
+                    });
+                } else {
+                    this.renderAgentTranscript(agentTab, {
+                        reason: 'queued-transcript'
+                    });
+                }
+            }
+            if (pendingAuthoritativeSync && agentTab.server?.isAuthenticated) {
+                try {
+                    await syncAgentsForServer(agentTab.server, { force: true });
+                } catch {
+                    // Ignore transient authority sync failures. The next
+                    // heartbeat or state refresh will reconcile.
+                }
+            }
+        } finally {
+            renderState.inFlight = false;
+            if (
+                renderState.full
+                || renderState.authoritativeSync
+                || renderState.dirtyKeys.size > 0
+                || renderState.rerenderRequested
+            ) {
+                const delayMs = renderState.full
+                    ? 0
+                    : AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS;
+                this.scheduleQueuedAgentPanelRender(agentTabKey, delayMs);
+            }
+        }
+    }
+
+    renderAgentPanelChrome(agentTab) {
         this.agentHeader.textContent = '';
         this.agentMeta.textContent = '';
         this.renderAgentUsageHud(agentTab);
@@ -5686,7 +5800,25 @@ class EditorManager {
         }
 
         this.renderAgentComposerAttachments(agentTab);
+        this.agentTools.innerHTML = '';
+        this.agentTools.style.display = 'none';
+        this.agentPermissions.innerHTML = '';
+        this.agentPermissions.style.display = 'none';
 
+        this.agentPrompt.disabled = false;
+        this.setAgentPromptValue(agentTab.promptDraft || '', agentTab);
+        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
+        this.updateAgentComposerActions(agentTab);
+        this.refreshAgentUsageHud();
+    }
+
+    renderAgentTranscript(agentTab, options = {}) {
+        const previousLayout = this.captureAgentTranscriptLayout();
+        const previousScrollTop = previousLayout?.scrollTop || 0;
+        const wasNearBottom = this.isAgentTranscriptLayoutNearBottom(
+            previousLayout,
+            36
+        );
         const timeline = getAgentTimelineItems(agentTab);
         const shouldPinToBottom = wasNearBottom || (
             agentTab.scrollToBottomOnNextRender
@@ -5781,17 +5913,12 @@ class EditorManager {
         }
         this.updateAgentScrollBottomButton();
         this.rememberAgentTranscriptLayout();
-        this.agentTools.innerHTML = '';
-        this.agentTools.style.display = 'none';
-        this.agentPermissions.innerHTML = '';
-        this.agentPermissions.style.display = 'none';
-
-        this.agentPrompt.disabled = false;
-        this.setAgentPromptValue(agentTab.promptDraft || '', agentTab);
-        this.agentPrompt.placeholder = buildAgentPromptPlaceholder(agentTab);
-        this.updateAgentComposerActions(agentTab);
-        this.refreshAgentUsageHud();
         this.scheduleAgentTranscriptViewportUpdate(shouldPinToBottom);
+    }
+
+    renderAgentPanel(agentTab, options = {}) {
+        this.renderAgentPanelChrome(agentTab);
+        this.renderAgentTranscript(agentTab, options);
     }
 
     buildAgentTimelineNode(agentTab, entry, timelineIndex) {
@@ -6221,11 +6348,7 @@ class EditorManager {
                 && message.kind === 'message'
             ) {
                 const cachedMarkdown = getAgentMessageMarkdownCache(message);
-                if (
-                    !agentTab?.busy
-                    && !isAgentMessageStreaming(agentTab, message)
-                    && cachedMarkdown
-                ) {
+                if (cachedMarkdown) {
                     body.classList.add('markdown');
                     body.innerHTML = cachedMarkdown;
                 } else {
@@ -9246,11 +9369,32 @@ class AgentTab {
         ) || null;
     }
 
-    notifyUi() {
+    notifyUi(options = {}) {
         const session = this.getLinkedSession();
         if (!session) return;
-        session.updateTabUI();
-        refreshWorkspaceIfSessionActive(session);
+        const shouldUpdateTabs = options.updateTabs !== false;
+        if (shouldUpdateTabs) {
+            session.updateTabUI();
+        }
+        if (state.activeSessionKey !== session.key) {
+            return;
+        }
+        if (editorManager.currentSession?.key !== session.key) {
+            editorManager.switchTo(session);
+            return;
+        }
+        if (shouldUpdateTabs) {
+            editorManager.renderEditorTabs();
+        }
+        if (editorManager.getActiveWorkspaceTabKey(session) !== this.key) {
+            return;
+        }
+        editorManager.scheduleAgentPanelRender(this, {
+            full: options.full !== false,
+            delayMs: options.delayMs,
+            dirtyKey: options.dirtyKey || '',
+            authoritativeSync: !!options.authoritativeSync
+        });
     }
 
     update(data) {
@@ -9432,10 +9576,14 @@ class AgentTab {
 
     handleMessage(message) {
         const wasBusy = this.busy;
+        let notifyOptions = { full: true };
         switch (message.type) {
             case 'snapshot':
                 this.update(message.tab || {});
                 this.scrollToBottomOnNextRender = true;
+                notifyOptions = {
+                    full: true
+                };
                 break;
             case 'message_open':
                 this.#upsertMessage(message.message);
@@ -9446,6 +9594,12 @@ class AgentTab {
                 ) {
                     this.streamingAssistantStreamKey = message.message.streamKey;
                 }
+                notifyOptions = {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getMessageRenderKey(message.message),
+                    updateTabs: false
+                };
                 break;
             case 'message_chunk':
                 this.#appendChunk(message);
@@ -9456,9 +9610,15 @@ class AgentTab {
                 ) {
                     this.streamingAssistantStreamKey = message.streamKey;
                 }
+                notifyOptions = {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getMessageRenderKey(message),
+                    updateTabs: false
+                };
                 break;
             case 'session_update':
-                this.#applySessionUpdate(message.update || {});
+                notifyOptions = this.#applySessionUpdate(message.update || {});
                 if (message.tab?.currentModeId || message.tab?.modeId) {
                     this.currentModeId = message.tab.currentModeId
                         || message.tab.modeId;
@@ -9487,6 +9647,14 @@ class AgentTab {
                         )
                     });
                 }
+                notifyOptions = {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getPermissionRenderKey(
+                        message.permission?.id
+                    ),
+                    updateTabs: false
+                };
                 break;
             case 'permission_resolved': {
                 const permission = this.permissions.get(message.permissionId);
@@ -9496,6 +9664,14 @@ class AgentTab {
                         || permission.selectedOptionId
                         || '';
                 }
+                notifyOptions = {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getPermissionRenderKey(
+                        message.permissionId
+                    ),
+                    updateTabs: false
+                };
                 break;
             }
             case 'terminal_update':
@@ -9535,18 +9711,22 @@ class AgentTab {
                         return;
                     }
                 }
+                notifyOptions = { full: true };
                 break;
             case 'usage_state':
                 this.usage = this.#normalizeUsageState(message.usage);
+                notifyOptions = { full: true };
                 break;
             case 'status':
                 this.status = message.status || this.status;
                 this.busy = !!message.busy;
                 this.errorMessage = message.errorMessage || '';
+                notifyOptions = { full: true };
                 break;
             case 'complete':
                 this.status = message.status || 'ready';
                 this.busy = !!message.busy;
+                notifyOptions = { full: true };
                 break;
             default:
                 break;
@@ -9587,7 +9767,15 @@ class AgentTab {
             this.needsAttention = false;
         }
         this.#syncBusyWatchdog();
-        this.notifyUi();
+        if (wasBusy && !this.busy) {
+            notifyOptions = {
+                ...notifyOptions,
+                full: true,
+                authoritativeSync: true,
+                delayMs: AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS
+            };
+        }
+        this.notifyUi(notifyOptions);
         if (shouldAutostartQueuedPrompt) {
             this.lastCompletedRunCounter = this.runCounter;
             void drainQueuedAgentPrompt(this);
@@ -9801,13 +9989,39 @@ class AgentTab {
         return this.timelineCounter;
     }
 
+    #getMessageRenderKey(message = {}) {
+        const role = String(message?.role || 'assistant');
+        const kind = String(message?.kind || 'message');
+        const identity = String(
+            message?.id
+            || message?.streamKey
+            || ''
+        ).trim();
+        if (!identity) {
+            return '';
+        }
+        return `message:${role}:${kind}:${identity}`;
+    }
+
+    #getToolRenderKey(toolCallId = '') {
+        const identity = String(toolCallId || '').trim();
+        return identity ? `tool:${identity}` : '';
+    }
+
+    #getPermissionRenderKey(permissionId = '') {
+        const identity = String(permissionId || '').trim();
+        return identity ? `permission:${identity}` : '';
+    }
+
     #findMessageIndex(candidate) {
         if (!candidate) return -1;
         if (candidate.id) {
             const byId = this.messages.findIndex(
                 (message) => message.id === candidate.id
             );
-            return byId;
+            if (byId !== -1) {
+                return byId;
+            }
         }
         if (!candidate.streamKey) return -1;
         for (let index = this.messages.length - 1; index >= 0; index -= 1) {
@@ -9835,7 +10049,12 @@ class AgentTab {
 
         const previous = this.messages[index];
         const nextMessage = this.#normalizeMessage(message, previous.order);
-        const mergedText = selectAgentMessageText(previous.text, nextMessage.text);
+        const mergedText = (
+            !previous.id
+            && nextMessage.id
+                ? (nextMessage.text || '')
+                : selectAgentMessageText(previous.text, nextMessage.text)
+        );
         this.messages[index] = {
             ...previous,
             ...nextMessage,
@@ -9866,7 +10085,9 @@ class AgentTab {
         }
 
         const nextMessage = this.#normalizeMessage({
-            id: crypto.randomUUID(),
+            id: typeof message.id === 'string'
+                ? message.id
+                : '',
             streamKey: message.streamKey,
             role: message.role || 'assistant',
             kind: message.kind || 'message',
@@ -9888,28 +10109,38 @@ class AgentTab {
                         this.#normalizeTimelineEntry(update, previous?.order)
                     );
                 }
-                break;
+                return {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getToolRenderKey(update.toolCallId),
+                    updateTabs: false
+                };
             case 'tool_call_update': {
                 const previous = this.toolCalls.get(update.toolCallId) || {};
                 this.toolCalls.set(update.toolCallId, {
                     ...previous,
                     ...this.#normalizeTimelineEntry(update, previous.order)
                 });
-                break;
+                return {
+                    full: false,
+                    delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                    dirtyKey: this.#getToolRenderKey(update.toolCallId),
+                    updateTabs: false
+                };
             }
             case 'current_mode_update':
                 this.currentModeId = update.currentModeId || update.modeId || '';
-                break;
+                return { full: true };
             case 'available_commands_update':
                 this.availableCommands = Array.isArray(update.availableCommands)
                     ? update.availableCommands
                     : [];
-                break;
+                return { full: true };
             case 'config_option_update':
                 this.configOptions = Array.isArray(update.configOptions)
                     ? update.configOptions
                     : [];
-                break;
+                return { full: true };
             case 'plan':
                 this.#applyPlanState(
                     Array.isArray(update.entries)
@@ -9918,22 +10149,22 @@ class AgentTab {
                         )
                         : []
                 );
-                break;
+                return { full: true };
             case 'usage_update':
                 this.usage = this.#normalizeUsageState({
                     ...(this.usage || {}),
                     ...update
                 });
-                break;
+                return { full: true };
             case 'session_info_update':
                 if (typeof update.title === 'string') {
                     this.title = update.title;
                 } else if (update.title === null) {
                     this.title = '';
                 }
-                break;
+                return { full: true };
             default:
-                break;
+                return { full: true };
         }
     }
 
@@ -13556,18 +13787,51 @@ function upsertAgentTab(server, data) {
     return agentTab;
 }
 
-function getAgentMessageComparableSignature(message) {
-    if (!message || typeof message !== 'object') {
-        return '';
+function buildComparableAgentTimelineTail(source, limit = 6) {
+    const items = [];
+    const messages = Array.isArray(source?.messages) ? source.messages : [];
+    const toolCalls = Array.isArray(source?.toolCalls)
+        ? source.toolCalls
+        : Array.from(source?.toolCalls?.values?.() || []);
+    const permissions = Array.isArray(source?.permissions)
+        ? source.permissions
+        : Array.from(source?.permissions?.values?.() || []);
+    for (const message of messages) {
+        items.push([
+            'message',
+            Number.isFinite(message?.order) ? message.order : 0,
+            String(message?.id || ''),
+            String(message?.streamKey || ''),
+            String(message?.role || ''),
+            String(message?.kind || ''),
+            hashUiText(message?.text || '')
+        ]);
     }
-    return JSON.stringify([
-        message.id || '',
-        message.order || 0,
-        message.role || '',
-        message.kind || '',
-        message.streamKey || '',
-        hashUiText(message.text || '')
-    ]);
+    for (const toolCall of toolCalls) {
+        items.push([
+            'tool',
+            Number.isFinite(toolCall?.order) ? toolCall.order : 0,
+            String(toolCall?.toolCallId || ''),
+            String(toolCall?.status || ''),
+            hashUiText(JSON.stringify(toolCall || null))
+        ]);
+    }
+    for (const permission of permissions) {
+        items.push([
+            'permission',
+            Number.isFinite(permission?.order) ? permission.order : 0,
+            String(permission?.id || ''),
+            String(permission?.status || ''),
+            String(permission?.selectedOptionId || '')
+        ]);
+    }
+    items.sort((left, right) => {
+        if (left[1] !== right[1]) {
+            return left[1] - right[1];
+        }
+        return String(left[0]).localeCompare(String(right[0]));
+    });
+    return JSON.stringify(items.slice(-limit));
 }
 
 function shouldApplyAuthoritativeAgentSnapshot(existing, data) {
@@ -13581,16 +13845,15 @@ function shouldApplyAuthoritativeAgentSnapshot(existing, data) {
     if (!Array.isArray(data.messages)) {
         return true;
     }
-    const currentMessages = Array.isArray(existing.messages)
-        ? existing.messages
-        : [];
-    if (data.messages.length !== currentMessages.length) {
+    if (
+        Array.isArray(data.messages)
+        && Array.isArray(existing.messages)
+        && data.messages.length !== existing.messages.length
+    ) {
         return true;
     }
-    const incomingLast = data.messages[data.messages.length - 1] || null;
-    const currentLast = currentMessages[currentMessages.length - 1] || null;
-    return getAgentMessageComparableSignature(incomingLast)
-        !== getAgentMessageComparableSignature(currentLast);
+    return buildComparableAgentTimelineTail(data)
+        !== buildComparableAgentTimelineTail(existing);
 }
 
 function upsertAgentInventoryTab(server, data) {
@@ -13687,6 +13950,7 @@ function removeAgentTab(agentTabKey) {
     const agentTab = state.agentTabs.get(agentTabKey);
     if (!agentTab) return;
     const session = agentTab.getLinkedSession();
+    editorManager?.clearScheduledAgentPanelRender?.(agentTabKey);
     agentTab.dispose();
     state.agentTabs.delete(agentTabKey);
 
