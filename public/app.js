@@ -5820,12 +5820,13 @@ class EditorManager {
             36
         );
         const timeline = getAgentTimelineItems(agentTab);
-        const shouldPinToBottom = wasNearBottom || (
+        const isNearLatestWindow = isAgentTranscriptWindowNearLatest(
+            agentTab,
+            timeline.length
+        );
+        const shouldPinToBottom = !options.preserveTranscriptAnchor && (
             agentTab.scrollToBottomOnNextRender
-            && isAgentTranscriptWindowNearLatest(
-                agentTab,
-                timeline.length
-            )
+            || (wasNearBottom && isNearLatestWindow)
         );
         const transcriptWindow = getAgentTranscriptWindow(
             agentTab,
