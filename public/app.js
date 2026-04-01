@@ -6377,8 +6377,13 @@ class EditorManager {
         );
         node.className = `agent-tool-call state-${toolStatusClass}`;
 
+        const status = document.createElement('span');
+        status.className = `agent-status-pill ${toolStatusClass}`;
+        status.textContent = getAgentStatusLabel(toolStatusClass);
+
         node.appendChild(buildAgentTimelineHeader(
-            buildAgentTimelineRoleLabel(agentTab, 'tool')
+            buildAgentTimelineRoleLabel(agentTab, 'tool'),
+            status
         ));
 
         const header = document.createElement('div');
@@ -6388,12 +6393,7 @@ class EditorManager {
         title.className = 'agent-tool-call-title';
         title.textContent = getAgentToolTitle(toolCall);
 
-        const status = document.createElement('span');
-        status.className = `agent-status-pill ${toolStatusClass}`;
-        status.textContent = getAgentStatusLabel(toolStatusClass);
-
         header.appendChild(title);
-        header.appendChild(status);
         node.appendChild(header);
 
         const meta = document.createElement('div');
@@ -6479,13 +6479,18 @@ class EditorManager {
         );
         card.className = `agent-permission-card state-${permissionStatusClass}`;
 
+        const status = document.createElement('span');
+        status.className = `agent-status-pill ${permissionStatusClass}`;
+        status.textContent = getAgentPermissionStatusLabel(permission);
+
         card.appendChild(buildAgentTimelineHeader(
             buildAgentTimelineRoleLabel(
                 agentTab,
                 permission.status === 'pending'
                     ? 'permission request'
                     : 'permission'
-            )
+            ),
+            status
         ));
 
         const titleRow = document.createElement('div');
@@ -6495,12 +6500,7 @@ class EditorManager {
         title.className = 'agent-permission-title';
         title.textContent = getAgentPermissionTitle(permission);
 
-        const status = document.createElement('span');
-        status.className = `agent-status-pill ${permissionStatusClass}`;
-        status.textContent = getAgentPermissionStatusLabel(permission);
-
         titleRow.appendChild(title);
-        titleRow.appendChild(status);
         card.appendChild(titleRow);
 
         const meta = document.createElement('div');
@@ -11576,9 +11576,7 @@ function getAgentMessageTimeLabel(message) {
     return timestamp.toLocaleString();
 }
 
-function buildAgentTimelineHeader(
-    roleLabel
-) {
+function buildAgentTimelineHeader(roleLabel, trailingNode = null) {
     const header = document.createElement('div');
     header.className = 'agent-message-header';
 
@@ -11586,6 +11584,10 @@ function buildAgentTimelineHeader(
     role.className = 'agent-message-role';
     role.textContent = roleLabel;
     header.appendChild(role);
+
+    if (trailingNode) {
+        header.appendChild(trailingNode);
+    }
 
     return header;
 }
