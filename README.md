@@ -11,6 +11,7 @@ experience.
 
 ![Tabminal Banner](public/favicon.svg)
 
+<a href="https://www.producthunt.com/products/tabminal?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-tabminal" target="_blank" rel="noopener noreferrer"><img alt="Tabminal - CloudNative terminal / ACP workspace for desktop and mobile | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1116260&amp;theme=dark&amp;t=1775396848893"></a>
 
 ## What It Does
 
