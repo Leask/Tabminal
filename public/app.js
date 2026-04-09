@@ -1,9 +1,9 @@
-import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm';
-import { FitAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm';
-import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/+esm';
-import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-canvas@0.5.0/+esm';
-import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/+esm';
-import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify/+esm';
+import { Terminal } from 'https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/+esm';
+import { FitAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/+esm';
+import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.12.0/+esm';
+import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/+esm';
+import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.16.0/+esm';
+import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify@3.3.3/+esm';
 import {
     normalizeBaseUrl,
     getServerEndpointKeyFromUrl,
@@ -143,11 +143,11 @@ const PDFJS_WORKER_URL = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSIO
 const MARKDOWN_IT_MODULE_URL = 'https://cdn.jsdelivr.net/npm/markdown-it@14.1.1/+esm';
 const MARKDOWN_TASK_LISTS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/markdown-it-task-lists@2.1.1/+esm';
 const MARKDOWN_KATEX_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@traptitech/markdown-it-katex@3.6.0/+esm';
-const KATEX_MODULE_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.25/+esm';
+const KATEX_MODULE_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.45/+esm';
 const HIGHLIGHT_JS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/+esm';
-const MARKDOWN_PREVIEW_GITHUB_CSS_URL = 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown-dark.min.css';
+const MARKDOWN_PREVIEW_GITHUB_CSS_URL = 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.9.0/github-markdown-dark.min.css';
 const MARKDOWN_PREVIEW_HIGHLIGHT_CSS_URL = 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.css';
-const MARKDOWN_PREVIEW_KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css';
+const MARKDOWN_PREVIEW_KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.css';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
@@ -4076,7 +4076,7 @@ class EditorManager {
     }
 
     initMonaco() {
-        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' }});
+        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs' }});
         require(['vs/editor/editor.main'], (monaco) => {
             this.monacoInstance = monaco;
             this.editor = monaco.editor.create(this.monacoContainer, {
