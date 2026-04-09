@@ -756,6 +756,22 @@ body {
     font-weight: 600;
 }
 
+.tab-info-overlay .meta.meta-progress {
+    font-weight: 600;
+}
+
+.tab-info-overlay .meta.meta-progress[data-tone="running"] {
+    color: #2aa198;
+}
+
+.tab-info-overlay .meta.meta-progress[data-tone="warning"] {
+    color: #b58900;
+}
+
+.tab-info-overlay .meta.meta-progress[data-tone="error"] {
+    color: #dc322f;
+}
+
 .tab-info-overlay .title {
     display: flex;
     align-items: center;

@@ -3,6 +3,8 @@ import { FitAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/+
 import { WebLinksAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.12.0/+esm';
 import { CanvasAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/+esm';
 import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.16.0/+esm';
+import { ProgressAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-progress@0.2.0/+esm';
+import { LigaturesAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-ligatures@0.10.0/+esm';
 import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify@3.3.3/+esm';
 import {
     normalizeBaseUrl,
@@ -177,8 +179,18 @@ const MAIN_TERMINAL_THEME = {
     foreground: '#839496',
     cursor: '#93a1a1',
     cursorAccent: '#002b36',
-    selectionBackground: '#073642'
+    selectionBackground: '#073642',
+    overviewRulerBorder: '#073642'
 };
+const TERMINAL_SEARCH_DECORATIONS = {
+    matchBackground: '#073642',
+    matchBorder: '#2aa198',
+    matchOverviewRuler: '#2aa198',
+    activeMatchBackground: '#0b4f5d',
+    activeMatchBorder: '#b58900',
+    activeMatchColorOverviewRuler: '#b58900'
+};
+const TERMINAL_LIGATURE_FEATURE_SETTINGS = '"calt" on, "liga" on';
 const serverModalState = {
     mode: 'add',
     targetServerId: null
@@ -380,6 +392,94 @@ function buildMainTerminalTheme() {
     return {
         ...MAIN_TERMINAL_THEME
     };
+}
+
+function buildTerminalOverviewRulerOptions() {
+    return {
+        width: IS_MOBILE ? 5 : 8,
+        showTopBorder: true,
+        showBottomBorder: true
+    };
+}
+
+function buildTerminalBaseOptions(overrides = {}) {
+    return {
+        allowTransparency: true,
+        convertEol: true,
+        fontFamily: TERMINAL_FONT_FAMILY,
+        fontSize: getTerminalFontSize(),
+        fontWeight: '450',
+        fontWeightBold: '700',
+        customGlyphs: true,
+        reflowCursorLine: true,
+        rescaleOverlappingGlyphs: true,
+        ...overrides
+    };
+}
+
+function normalizeTerminalProgressState(progress) {
+    const state = Number(progress?.state);
+    const value = Number(progress?.value);
+    if (!Number.isFinite(state) || state <= 0 || state > 4) {
+        return null;
+    }
+    return {
+        state,
+        value: Number.isFinite(value)
+            ? Math.max(0, Math.min(100, Math.round(value)))
+            : 0
+    };
+}
+
+function formatTerminalProgressLabel(progress) {
+    if (!progress) {
+        return '';
+    }
+    if (progress.state === 3) {
+        return 'PROGRESS: Working…';
+    }
+    if (progress.state === 2) {
+        return `PROGRESS: Error ${progress.value}%`;
+    }
+    if (progress.state === 4) {
+        return `PROGRESS: Paused ${progress.value}%`;
+    }
+    return `PROGRESS: ${progress.value}%`;
+}
+
+function getTerminalProgressTone(progress) {
+    if (!progress) {
+        return '';
+    }
+    if (progress.state === 2) {
+        return 'error';
+    }
+    if (progress.state === 4) {
+        return 'warning';
+    }
+    if (progress.state === 3) {
+        return 'running';
+    }
+    return 'normal';
+}
+
+function loadTerminalAddonSafely(term, addon, label) {
+    if (!term || !addon) {
+        return null;
+    }
+    try {
+        term.loadAddon(addon);
+        return addon;
+    } catch (error) {
+        console.warn(`Failed to load terminal addon (${label})`, error);
+        return null;
+    }
+}
+
+function createTerminalLigaturesAddon() {
+    return new LigaturesAddon({
+        fontFeatureSettings: TERMINAL_LIGATURE_FEATURE_SETTINGS
+    });
 }
 
 function workspaceKeyToFilePath(key) {
@@ -6818,19 +6918,27 @@ class EditorManager {
         }px`;
         host.appendChild(terminalNode);
 
-        const embeddedTerm = new Terminal({
+        const embeddedTerm = new Terminal(buildTerminalBaseOptions({
             disableStdin: true,
-            convertEol: true,
             cursorBlink: false,
             cursorStyle: 'bar',
             theme: buildMainTerminalTheme(),
             scrollback: 2000,
             fontSize: getTerminalFontSize(),
             fontFamily: TERMINAL_FONT_FAMILY
-        });
+        }));
         const fitAddon = new FitAddon();
-        embeddedTerm.loadAddon(fitAddon);
-        embeddedTerm.loadAddon(new CanvasAddon());
+        loadTerminalAddonSafely(embeddedTerm, fitAddon, 'embedded-fit');
+        loadTerminalAddonSafely(
+            embeddedTerm,
+            createTerminalLigaturesAddon(),
+            'embedded-ligatures'
+        );
+        loadTerminalAddonSafely(
+            embeddedTerm,
+            new CanvasAddon(),
+            'embedded-canvas'
+        );
         embeddedTerm.open(terminalNode);
         renderEmbeddedAgentTerminal(
             embeddedTerm,
@@ -8504,6 +8612,9 @@ class Session {
         this.lastExecutionEntry = null;
         this.needsAttention = false;
         this.lastNotifiedExecutionId = '';
+        this.terminalProgress = null;
+        this.mainProgressAddon = null;
+        this.mainProgressSubscription = null;
         const legacyEditorState = data.editorState
             && typeof data.editorState === 'object'
             ? data.editorState
@@ -8600,7 +8711,7 @@ class Session {
     }
 
     _createTerminals() {
-        this.previewTerm = new Terminal({
+        this.previewTerm = new Terminal(buildTerminalBaseOptions({
             disableStdin: true,
             cursorBlink: false,
             allowTransparency: true,
@@ -8613,29 +8724,50 @@ class Session {
                 cursor: 'transparent',
                 selectionBackground: 'transparent'
             }
-        });
+        }));
 
         if (window.innerWidth >= 768) {
             this.previewTerm.loadAddon(new CanvasAddon());
         }
 
-        this.mainTerm = new Terminal({
-            allowTransparency: true,
-            convertEol: true,
+        this.mainTerm = new Terminal(buildTerminalBaseOptions({
             cursorBlink: true,
-            fontFamily: TERMINAL_FONT_FAMILY,
-            fontSize: getTerminalFontSize(),
             rows: this.rows,
             cols: this.cols,
-            theme: buildMainTerminalTheme()
-        });
+            theme: buildMainTerminalTheme(),
+            overviewRuler: buildTerminalOverviewRulerOptions()
+        }));
         this.mainFitAddon = new FitAddon();
         this.mainLinksAddon = new WebLinksAddon();
         this.searchAddon = new SearchAddon();
-        this.mainTerm.loadAddon(this.mainFitAddon);
-        this.mainTerm.loadAddon(this.mainLinksAddon);
-        this.mainTerm.loadAddon(this.searchAddon);
-        this.mainTerm.loadAddon(new CanvasAddon());
+        this.mainProgressAddon = new ProgressAddon();
+        loadTerminalAddonSafely(this.mainTerm, this.mainFitAddon, 'fit');
+        loadTerminalAddonSafely(this.mainTerm, this.mainLinksAddon, 'weblinks');
+        loadTerminalAddonSafely(this.mainTerm, this.searchAddon, 'search');
+        loadTerminalAddonSafely(
+            this.mainTerm,
+            this.mainProgressAddon,
+            'progress'
+        );
+        loadTerminalAddonSafely(
+            this.mainTerm,
+            createTerminalLigaturesAddon(),
+            'ligatures'
+        );
+        loadTerminalAddonSafely(this.mainTerm, new CanvasAddon(), 'canvas');
+        if (this.mainProgressAddon?.onChange) {
+            this.mainProgressSubscription = this.mainProgressAddon.onChange(
+                (progress) => {
+                    this.terminalProgress = normalizeTerminalProgressState(
+                        progress
+                    );
+                    this.updateTabUI();
+                }
+            );
+            if (this.terminalProgress) {
+                this.mainProgressAddon.progress = this.terminalProgress;
+            }
+        }
 
         this.mainTerm.onData((data) => {
             if (this.isRestoring) return;
@@ -8669,6 +8801,8 @@ class Session {
         }
 
         try {
+            this.mainProgressSubscription?.dispose?.();
+            this.mainProgressSubscription = null;
             this.mainTerm?.dispose();
         } catch (e) {
             if (!e.message?.includes('onRequestRedraw')) {
@@ -8971,6 +9105,27 @@ class Session {
                 const hhStr = String(hh).padStart(2, '0');
                 metaTimeEl.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
                 metaTimeEl.classList.remove('meta-managed');
+            }
+        }
+
+        const metaProgressEl = tab.querySelector('.meta-progress');
+        if (metaProgressEl) {
+            const progressLabel = formatTerminalProgressLabel(
+                this.terminalProgress
+            );
+            if (progressLabel) {
+                metaProgressEl.textContent = progressLabel;
+                metaProgressEl.hidden = false;
+                const tone = getTerminalProgressTone(this.terminalProgress);
+                if (tone) {
+                    metaProgressEl.dataset.tone = tone;
+                } else {
+                    delete metaProgressEl.dataset.tone;
+                }
+            } else {
+                metaProgressEl.textContent = '';
+                metaProgressEl.hidden = true;
+                delete metaProgressEl.dataset.tone;
             }
         }
 
@@ -15347,11 +15502,16 @@ function createTabElement(session) {
     
     metaTime.textContent = `SINCE: ${mm}-${dd} ${hhStr}:${min} ${ampm}`;
 
+    const metaProgress = document.createElement('div');
+    metaProgress.className = 'meta meta-progress';
+    metaProgress.hidden = true;
+
     overlay.appendChild(title);
     overlay.appendChild(metaId);
     overlay.appendChild(metaServer);
     overlay.appendChild(metaCwd);
     overlay.appendChild(metaTime);
+    overlay.appendChild(metaProgress);
 
     tab.appendChild(previewContainer);
     tab.appendChild(overlay);
@@ -16720,6 +16880,14 @@ let searchOptions = {
     regex: false
 };
 
+function buildTerminalSearchOptions(options = {}) {
+    return {
+        ...searchOptions,
+        ...options,
+        decorations: TERMINAL_SEARCH_DECORATIONS
+    };
+}
+
 if (searchBar) {
     const updateUI = (found) => {
         if (!found) {
@@ -16739,8 +16907,11 @@ if (searchBar) {
         const term = searchInput.value;
         
         let found = false;
-        if (forward) found = addon.findNext(term, searchOptions);
-        else found = addon.findPrevious(term, searchOptions);
+        if (forward) {
+            found = addon.findNext(term, buildTerminalSearchOptions());
+        } else {
+            found = addon.findPrevious(term, buildTerminalSearchOptions());
+        }
         
         updateUI(found);
     };
@@ -16763,6 +16934,8 @@ if (searchBar) {
         if (!state.activeSessionKey) return;
         const term = e.target.value;
         if (!term) {
+            state.sessions.get(state.activeSessionKey)?.searchAddon
+                ?.clearDecorations();
             updateUI(false);
             searchResults.textContent = ''; // Empty when clear? Or No results? VS Code clears. 
             // But user asked for "No results always".
@@ -16771,10 +16944,11 @@ if (searchBar) {
         }
         
         // Incremental search
-        const found = state.sessions.get(state.activeSessionKey).searchAddon.findNext(term, {
-            incremental: true, 
-            ...searchOptions 
-        });
+        const found = state.sessions.get(state.activeSessionKey)
+            .searchAddon.findNext(
+                term,
+                buildTerminalSearchOptions({ incremental: true })
+            );
         
         updateUI(found);
     });
@@ -16786,6 +16960,8 @@ if (searchBar) {
         }
         if (e.key === 'Escape') {
             e.preventDefault();
+            state.sessions.get(state.activeSessionKey)?.searchAddon
+                ?.clearDecorations();
             searchBar.style.display = 'none';
             state.sessions.get(state.activeSessionKey)?.mainTerm.focus();
         }
@@ -16795,6 +16971,8 @@ if (searchBar) {
     searchPrev.addEventListener('click', () => doSearch(false));
     
     searchClose.addEventListener('click', () => {
+        state.sessions.get(state.activeSessionKey)?.searchAddon
+            ?.clearDecorations();
         searchBar.style.display = 'none';
         state.sessions.get(state.activeSessionKey)?.mainTerm.focus();
     });
