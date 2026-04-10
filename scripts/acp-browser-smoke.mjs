@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const chromeBaseUrl = process.env.CHROME_DEBUG_URL
@@ -6,9 +5,6 @@ const chromeBaseUrl = process.env.CHROME_DEBUG_URL
 const tabminalUrl = process.env.TABMINAL_URL
     || 'http://127.0.0.1:19846/';
 const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
-const tabminalAuthToken = crypto.createHash('sha256')
-    .update(tabminalPassword)
-    .digest('hex');
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
 const targetAgentDisplayLabel = targetAgentLabel.replace(
     /\s+(CLI|Agent|Adapter)$/i,
@@ -129,18 +125,33 @@ async function postJsonWithAuth(url, token, body) {
     return await response.json();
 }
 
-let apiTokenPromise = null;
+let authStatePromise = null;
+
+async function getAuthState() {
+    if (authStatePromise) {
+        return await authStatePromise;
+    }
+    authStatePromise = (async () => {
+        const response = await fetch(new URL('/api/auth/login', tabminalUrl), {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                password: tabminalPassword
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`/api/auth/login -> ${response.status}`);
+        }
+        return await response.json();
+    })();
+    return await authStatePromise;
+}
 
 async function getApiToken() {
-    if (apiTokenPromise) {
-        return await apiTokenPromise;
-    }
-    apiTokenPromise = (async () => {
-        return crypto.createHash('sha256')
-            .update(tabminalPassword)
-            .digest('hex');
-    })();
-    return await apiTokenPromise;
+    const authState = await getAuthState();
+    return authState?.accessToken || '';
 }
 
 async function createSessionViaNodeApi(label = 'create-session-via-node-api') {
@@ -323,13 +334,13 @@ async function main() {
         }
 
         async function primeTargetAuthAndNavigate() {
-            const token = await getApiToken();
+            const authState = await getAuthState();
             await page.send('Page.addScriptToEvaluateOnNewDocument', {
                 source: `
                     try {
                         localStorage.setItem(
-                            'tabminal_auth_token:main',
-                            ${JSON.stringify(token)}
+                            'tabminal_auth_state:main',
+                            ${JSON.stringify(JSON.stringify(authState))}
                         );
                     } catch {}
                 `
@@ -416,9 +427,16 @@ async function main() {
                 created = await evaluate(
                     toExpression(`
                         async () => {
-                            const token = localStorage.getItem(
-                                'tabminal_auth_token:main'
-                            ) || '';
+                            let token = '';
+                            try {
+                                const raw = localStorage.getItem(
+                                    'tabminal_auth_state:main'
+                                ) || '';
+                                const parsed = raw ? JSON.parse(raw) : null;
+                                token = typeof parsed?.accessToken === 'string'
+                                    ? parsed.accessToken
+                                    : '';
+                            } catch {}
                             try {
                                 const response = await fetch('/api/sessions', {
                                     method: 'POST',
@@ -490,13 +508,13 @@ async function main() {
                     );
                 });
             } catch {
-                const token = await getApiToken();
+                const authState = await getAuthState();
                 await evaluate(
                     toExpression(`
                         () => {
                             localStorage.setItem(
-                                'tabminal_auth_token:main',
-                                ${JSON.stringify(token)}
+                                'tabminal_auth_state:main',
+                                ${JSON.stringify(JSON.stringify(authState))}
                             );
                             return true;
                         }
@@ -512,13 +530,13 @@ async function main() {
 
             if (authState === 'login') {
                 try {
-                    const token = await getApiToken();
+                    const authState = await getAuthState();
                     await evaluate(
                         toExpression(`
                             () => {
                                 localStorage.setItem(
-                                    'tabminal_auth_token:main',
-                                    ${JSON.stringify(token)}
+                                    'tabminal_auth_state:main',
+                                    ${JSON.stringify(JSON.stringify(authState))}
                                 );
                                 return true;
                             }
@@ -580,13 +598,13 @@ async function main() {
                     'document-ready-after-session-recreate-target'
                 );
                 try {
-                    const token = await getApiToken();
+                    const authState = await getAuthState();
                     await evaluate(
                         toExpression(`
                             () => {
                                 localStorage.setItem(
-                                    'tabminal_auth_token:main',
-                                    ${JSON.stringify(token)}
+                                    'tabminal_auth_state:main',
+                                    ${JSON.stringify(JSON.stringify(authState))}
                                 );
                                 return true;
                             }

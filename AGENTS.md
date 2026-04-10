@@ -34,6 +34,7 @@ Important persistence files under `~/.tabminal`:
 - `cluster.json`
 - `agent-tabs.json`
 - `agent-config.json`
+- `auth-sessions.json`
 
 ## 2) Non-Negotiable Contracts
 
@@ -63,13 +64,18 @@ Relevant code:
 
 ### 2.3 Token storage
 
-- Main host token:
-  - browser `localStorage`
-  - key: `tabminal_auth_token:main`
-- Sub-host tokens:
-  - persisted in backend `cluster.json`
-  - do not persist in browser `localStorage`
-- Removing a host should also remove any stale local token keyed to that host.
+- Auth state is browser-owned.
+- All hosts persist auth state in browser `localStorage`.
+- Key format:
+  - `tabminal_auth_state:<hostId>`
+- Stored auth state currently includes:
+  - short-lived access token
+  - access token expiry
+  - refresh token
+  - refresh token expiry
+- Legacy password-hash token storage is no longer supported or migrated.
+- Removing a host should also remove any stale local auth state keyed to that
+  host.
 
 Relevant code:
 - `public/app.js`

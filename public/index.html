@@ -489,6 +489,34 @@
             <p id="add-server-error" class="error-message"></p>
         </div>
     </div>
+    <div id="auth-sessions-modal" class="modal" style="display: none;">
+        <div class="modal-content auth-sessions-content">
+            <h2 id="auth-sessions-title">Login sessions</h2>
+            <p id="auth-sessions-description"></p>
+            <div
+                id="auth-sessions-list"
+                class="auth-sessions-list"
+                aria-live="polite"
+            ></div>
+            <p id="auth-sessions-error" class="error-message"></p>
+            <div class="auth-sessions-actions">
+                <button
+                    id="auth-sessions-revoke-others"
+                    class="danger-button"
+                    type="button"
+                >
+                    Log out others
+                </button>
+                <button
+                    id="auth-sessions-close"
+                    class="secondary-button"
+                    type="button"
+                >
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
     <div id="agent-setup-modal" class="modal" style="display: none;">
         <div class="modal-content agent-setup-content">
             <h2 id="agent-setup-title">Agent setup</h2>

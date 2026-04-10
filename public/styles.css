@@ -481,6 +481,10 @@ body {
     transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
+.server-row.has-auth-sessions .server-main-button {
+    padding-right: 42px;
+}
+
 .server-main-button:hover {
     background-color: var(--bg-surface);
 }
@@ -535,6 +539,50 @@ body {
 
 .server-delete-button:active {
     background-color: rgba(220, 50, 47, 1);
+    transform: translateY(1px);
+}
+
+.server-auth-button {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    color: var(--text-highlight);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    opacity: 0.72;
+    z-index: 10;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.server-auth-button svg {
+    width: 15px;
+    height: 15px;
+}
+
+.server-row:hover .server-auth-button,
+.server-row:focus-within .server-auth-button {
+    opacity: 1;
+}
+
+.server-auth-button:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+    border-color: rgba(255, 255, 255, 0.4);
+    color: var(--text-highlight);
+}
+
+.server-auth-button:active {
     transform: translateY(1px);
 }
 
@@ -1201,6 +1249,71 @@ body {
 .confirm-modal-actions button {
     width: auto;
     min-width: 120px;
+}
+
+.auth-sessions-content {
+    max-width: 620px;
+    text-align: left;
+}
+
+.auth-sessions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: min(50vh, 420px);
+    overflow-y: auto;
+    margin: 1rem 0;
+    padding-right: 0.25rem;
+}
+
+.auth-session-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.8rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.auth-session-row.current {
+    border-color: var(--accent-color);
+}
+
+.auth-session-info {
+    min-width: 0;
+}
+
+.auth-session-title {
+    color: var(--text-highlight);
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+}
+
+.auth-session-meta,
+.auth-session-empty {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.auth-session-revoke {
+    width: auto !important;
+    min-width: 92px;
+    flex: 0 0 auto;
+}
+
+.auth-sessions-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.auth-sessions-actions button {
+    width: auto;
+    min-width: 130px;
 }
 
 .agent-setup-content {

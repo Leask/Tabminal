@@ -56,23 +56,56 @@ There are two websocket namespaces:
 
 ## 3. Authentication
 
-All API routes except `/healthz` and `/api/version` require authentication.
+All API routes except `/healthz`, `/api/version`, `/api/auth/login`,
+`/api/auth/refresh`, and `/api/auth/logout` require authentication.
 
-### 3.1 Auth token format
+### 3.1 Login and session model
 
-The server expects the configured password hash directly, not a bearer token.
+Tabminal uses:
+
+- short-lived access tokens
+- long-lived refresh tokens
+- server-side refresh session state
+
+Current defaults:
+
+- access token lifetime: `15 minutes`
+- refresh token lifetime: `90 days`
+- refresh tokens rotate on every successful refresh
+
+Login flow:
+
+1. client submits the user password over the active HTTP transport
+2. client calls `POST /api/auth/login`
+3. server hashes the password and compares it to the configured password hash
+4. server returns `accessToken`, `accessTokenExpiresAt`, `refreshToken`, and
+   `refreshTokenExpiresAt`
+
+The browser does not compute or store a reusable password hash.
+
+### 3.2 Access token transport
 
 Accepted forms:
 
-- HTTP header: `Authorization: <sha256-hash>`
-- HTTP query: `?token=<sha256-hash>`
-- WebSocket query: `?token=<sha256-hash>`
-- WebSocket header: `Authorization: <sha256-hash>`
+- HTTP header: `Authorization: Bearer <access-token>`
+- HTTP header: `Authorization: <access-token>`
+- HTTP query: `?token=<access-token>`
+- WebSocket query: `?token=<access-token>`
+- WebSocket header: `Authorization: Bearer <access-token>`
 
-Do not send `Bearer <hash>` unless the server is updated to explicitly strip
-the prefix. The current implementation compares the provided value directly.
+Browser websocket clients generally use the query-param form because browser
+WebSocket construction does not allow arbitrary auth headers.
 
-### 3.2 Lockout behavior
+### 3.3 Refresh token handling
+
+Refresh tokens are HTTP-only protocol values, not websocket credentials.
+
+- clients send refresh tokens only to `POST /api/auth/refresh`
+- clients should not place refresh tokens on URLs
+- web clients currently persist both access and refresh tokens in local storage
+- native clients should use platform-secure storage where possible
+
+### 3.4 Lockout behavior
 
 After `30` failed auth attempts, the service enters a locked state and returns:
 
@@ -80,14 +113,138 @@ After `30` failed auth attempts, the service enters a locked state and returns:
 
 Lockout is cleared only by restarting the service.
 
-### 3.3 Cookies and Cloudflare Access
+### 3.5 Auth endpoints
 
-Tabminal itself authenticates with the hash above. In practice, some deployments
-also sit behind Cloudflare Access or another upstream auth layer.
+#### `POST /api/auth/login`
+
+Request:
+
+```json
+{
+  "password": "<plain-text password>"
+}
+```
+
+Success response:
+
+```json
+{
+  "accessToken": "ta_...",
+  "accessTokenExpiresAt": "2026-04-10T15:00:00.000Z",
+  "refreshToken": "tr_...",
+  "refreshTokenExpiresAt": "2026-07-09T15:00:00.000Z"
+}
+```
+
+Failure responses:
+
+- `401 Unauthorized`
+- `403 Service locked due to too many failed attempts. Please restart the service.`
+
+#### `POST /api/auth/refresh`
+
+Request:
+
+```json
+{
+  "refreshToken": "tr_..."
+}
+```
+
+Success response matches `POST /api/auth/login`.
+
+Failure response:
+
+- `401 Unauthorized`
+
+#### `POST /api/auth/logout`
+
+Request body may include:
+
+```json
+{
+  "refreshToken": "tr_..."
+}
+```
+
+The current access token may also be supplied in `Authorization` or `?token=`.
+
+Success response:
+
+- `204 No Content`
+
+#### `GET /api/auth/session`
+
+Requires a valid access token.
+
+Response:
+
+```json
+{
+  "authenticated": true,
+  "sessionId": "uuid",
+  "accessTokenExpiresAt": "2026-04-10T15:00:00.000Z",
+  "refreshTokenExpiresAt": "2026-07-09T15:00:00.000Z"
+}
+```
+
+#### `GET /api/auth/sessions`
+
+Requires a valid access token.
+
+Returns refresh-session summaries for the current host. Tokens and token hashes
+are never returned.
+
+Response:
+
+```json
+{
+  "sessions": [
+    {
+      "id": "uuid",
+      "createdAt": "2026-04-10T15:00:00.000Z",
+      "lastSeenAt": "2026-04-10T15:10:00.000Z",
+      "refreshExpiresAt": "2026-07-09T15:10:00.000Z",
+      "userAgent": "Mozilla/5.0 ...",
+      "current": true
+    }
+  ]
+}
+```
+
+#### `DELETE /api/auth/sessions/:id`
+
+Requires a valid access token.
+
+Revokes the selected refresh session and any active access token belonging to
+that session.
+
+Success response:
+
+- `204 No Content`
+
+Failure response:
+
+- `404 Not Found`
+
+#### `POST /api/auth/logout-others`
+
+Requires a valid access token.
+
+Revokes every refresh session except the current one.
+
+Success response:
+
+- `204 No Content`
+
+### 3.6 Cookies and Cloudflare Access
+
+Tabminal now authenticates with opaque access tokens, but some deployments also
+sit behind Cloudflare Access or another upstream auth layer.
 
 Clients must be prepared to work with both:
 
-- Tabminal auth token
+- Tabminal access token / refresh token
 - upstream auth cookies/challenges
 
 For browser clients, this is why sub-host fetches use cookies and redirect
@@ -95,7 +252,7 @@ handling. Native clients should preserve the same capability:
 
 - maintain a cookie jar when needed
 - detect auth redirects
-- treat upstream auth separately from the Tabminal password hash
+- treat upstream auth separately from Tabminal token auth
 
 ## 4. Versioning and Boot Identity
 
@@ -510,7 +667,7 @@ Auth note:
 
 - this route still requires auth
 - clients that cannot conveniently attach headers to media elements may use
-  `?token=<sha256-hash>` on the URL
+  `?token=<access-token>` on the URL
 
 ## 10. Memory API
 
@@ -569,7 +726,7 @@ Request:
       "id": "node-a",
       "baseUrl": "https://node-a.example.com",
       "host": "node-a.example.com",
-      "token": "sha256-hash-or-empty"
+      "token": ""
     }
   ]
 }
@@ -879,7 +1036,7 @@ Response:
 
 Endpoint:
 
-- `/ws/:sessionId?token=<hash>`
+- `/ws/:sessionId?token=<access-token>`
 
 Browser clients use the query param because browser WebSocket construction does
 not let them set arbitrary auth headers.
@@ -1039,7 +1196,7 @@ Server responds with:
 
 Endpoint:
 
-- `/ws/agents/:tabId?token=<hash>`
+- `/ws/agents/:tabId?token=<access-token>`
 
 The agent websocket is currently server-to-client only for transcript and tab
 realtime updates. Prompt submission and command actions stay on HTTP.
@@ -1324,7 +1481,7 @@ Future native clients should follow the same API contract as web.
 ### 16.1 Required shared behavior
 
 - use `/api/version` for runtime boot identity
-- authenticate with the same hash token contract
+- authenticate with the same login/refresh/access-token contract
 - use `/api/heartbeat` for authoritative session and agent inventory
 - use terminal and agent websockets for realtime streaming
 - submit agent prompts and actions over HTTP, not websocket

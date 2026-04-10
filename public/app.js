@@ -6,7 +6,9 @@ import { SearchAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.
 import { ProgressAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-progress@0.3.0-beta.197/+esm';
 import { LigaturesAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-ligatures@0.11.0-beta.197/+esm';
 import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify@3.3.3/+esm';
-import {
+
+const LOCAL_MODULE_VERSION = new URL(import.meta.url).search;
+const {
     normalizeBaseUrl,
     getServerEndpointKeyFromUrl,
     getUrlHostname,
@@ -14,21 +16,37 @@ import {
     isAccessRedirectResponse,
     buildAccessLoginUrl,
     isLikelyAccessLoginResponse,
-    buildTokenStorageKey,
+    buildAuthStateStorageKey,
     makeSessionKey,
-    splitSessionKey,
-    hashPassword
-} from './modules/url-auth.js';
-import {
+    splitSessionKey
+} = await import(`./modules/url-auth.js${LOCAL_MODULE_VERSION}`);
+const {
     shortenPath,
     getEnvValue,
     getDisplayHost,
     renderSessionHostMeta
-} from './modules/session-meta.js';
-import {
+} = await import(`./modules/session-meta.js${LOCAL_MODULE_VERSION}`);
+const {
     NotificationManager,
     ToastManager
-} from './modules/notifications.js';
+} = await import(`./modules/notifications.js${LOCAL_MODULE_VERSION}`);
+
+const DEPRECATED_AUTH_TOKEN_STORAGE_PREFIX = 'tabminal_auth_token:';
+
+function clearDeprecatedPasswordHashAuthStorage() {
+    try {
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+            const key = localStorage.key(index) || '';
+            if (key.startsWith(DEPRECATED_AUTH_TOKEN_STORAGE_PREFIX)) {
+                localStorage.removeItem(key);
+            }
+        }
+    } catch {
+        // Ignore storage failures; deprecated tokens are never read.
+    }
+}
+
+clearDeprecatedPasswordHashAuthStorage();
 
 // Detect Mobile/Tablet (focus on touch capability for font sizing)
 // Logic: If the device supports touch, we assume it needs larger fonts (14px)
@@ -56,6 +74,17 @@ const addServerCancel = document.getElementById('add-server-cancel');
 const addServerTitle = addServerModal?.querySelector('h2') || null;
 const addServerDescription = addServerModal?.querySelector('p') || null;
 const addServerSubmitButton = addServerForm?.querySelector('button[type="submit"]') || null;
+const authSessionsModal = document.getElementById('auth-sessions-modal');
+const authSessionsTitle = document.getElementById('auth-sessions-title');
+const authSessionsDescription = document.getElementById(
+    'auth-sessions-description'
+);
+const authSessionsList = document.getElementById('auth-sessions-list');
+const authSessionsError = document.getElementById('auth-sessions-error');
+const authSessionsClose = document.getElementById('auth-sessions-close');
+const authSessionsRevokeOthers = document.getElementById(
+    'auth-sessions-revoke-others'
+);
 const agentSetupModal = document.getElementById('agent-setup-modal');
 const agentSetupForm = document.getElementById('agent-setup-form');
 const agentSetupTitle = document.getElementById('agent-setup-title');
@@ -152,6 +181,7 @@ const MARKDOWN_PREVIEW_HIGHLIGHT_CSS_URL = 'https://cdn.jsdelivr.net/npm/highlig
 const MARKDOWN_PREVIEW_KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.css';
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 const AGENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M9 7V5"></path><path d="M15 7V5"></path><path d="M12 17v2"></path><path d="M5 12H3"></path><path d="M21 12h-2"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path><path d="M9.5 14c.7.67 1.53 1 2.5 1s1.8-.33 2.5-1"></path></svg>';
+const AUTH_SESSIONS_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"></path><path d="M2.5 16.5a4.5 4.5 0 0 1 9 0"></path><path d="M17 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"></path><path d="M13.5 16.5a3.5 3.5 0 0 1 7 0"></path></svg>';
 const TERMINAL_TAB_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m8 10 3 2-3 2"></path><path d="M13 15h4"></path></svg>';
 const MANAGED_TERMINAL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 12h.01"></path><path d="M12 9v6"></path><path d="M9 12h6"></path><path d="M18 8v2"></path><path d="M19 9h-2"></path></svg>';
 const BELL_ICON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2.1" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5a4.5 4.5 0 0 0-4.5 4.5v2.4c0 1.2-.41 2.37-1.17 3.3L5 16.5h14l-1.33-1.8a5.66 5.66 0 0 1-1.17-3.3V9A4.5 4.5 0 0 0 12 4.5"></path><path d="M10.25 19a1.75 1.75 0 0 0 3.5 0"></path></svg>';
@@ -854,6 +884,52 @@ class AuthManager {
     }
 }
 
+function readStoredAuthState(serverId) {
+    const authStateKey = buildAuthStateStorageKey(serverId);
+    let authState = null;
+    try {
+        const raw = localStorage.getItem(authStateKey);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                authState = parsed;
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to parse stored auth state', error);
+    }
+    return authState;
+}
+
+function normalizeAuthState(value) {
+    const auth = value && typeof value === 'object' ? value : {};
+    return {
+        accessToken: typeof auth.accessToken === 'string'
+            ? auth.accessToken.trim()
+            : '',
+        accessTokenExpiresAt: typeof auth.accessTokenExpiresAt === 'string'
+            ? auth.accessTokenExpiresAt.trim()
+            : '',
+        refreshToken: typeof auth.refreshToken === 'string'
+            ? auth.refreshToken.trim()
+            : '',
+        refreshTokenExpiresAt: typeof auth.refreshTokenExpiresAt === 'string'
+            ? auth.refreshTokenExpiresAt.trim()
+            : ''
+    };
+}
+
+function isIsoExpired(value, leewayMs = 0) {
+    if (!value) {
+        return true;
+    }
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) {
+        return true;
+    }
+    return timestamp <= (Date.now() + leewayMs);
+}
+
 class ServerClient {
     constructor(data, { isPrimary = false } = {}) {
         this.id = data.id;
@@ -877,38 +953,56 @@ class ServerClient {
         this.accessLoginUrl = '';
         this.expandedPaths = new Set();
         this.modelStore = new Map();
-        const key = buildTokenStorageKey(this.id);
-        const persistedToken = typeof data.token === 'string' ? data.token : '';
-        if (this.isPrimary) {
-            this.token = persistedToken || localStorage.getItem(key) || '';
-            if (this.token) {
-                localStorage.setItem(key, this.token);
-            }
-        } else {
-            this.token = persistedToken;
-            localStorage.removeItem(key);
-        }
-        this.isAuthenticated = !!this.token;
-        this.needsLogin = !this.isAuthenticated;
+        this.token = '';
+        this.accessTokenExpiresAt = '';
+        this.refreshToken = '';
+        this.refreshTokenExpiresAt = '';
+        this.refreshPromise = null;
+        this.bootstrapPromise = null;
+        this.loadStoredAuth();
     }
 
-    setToken(token) {
-        const normalizedToken = typeof token === 'string' ? token.trim() : '';
-        this.token = normalizedToken;
-        this.isAuthenticated = !!this.token;
+    loadStoredAuth() {
+        const normalizedAuthState = normalizeAuthState(
+            readStoredAuthState(this.id)
+        );
+        this.token = normalizedAuthState.accessToken;
+        this.accessTokenExpiresAt = normalizedAuthState.accessTokenExpiresAt;
+        this.refreshToken = normalizedAuthState.refreshToken;
+        this.refreshTokenExpiresAt = normalizedAuthState.refreshTokenExpiresAt;
+        this.syncAuthPersistence();
+        this.updateAuthFlags();
+    }
+
+    syncAuthPersistence() {
+        const authStateKey = buildAuthStateStorageKey(this.id);
+        const authState = {
+            accessToken: this.token,
+            accessTokenExpiresAt: this.accessTokenExpiresAt,
+            refreshToken: this.refreshToken,
+            refreshTokenExpiresAt: this.refreshTokenExpiresAt
+        };
+        if (authState.accessToken || authState.refreshToken) {
+            localStorage.setItem(authStateKey, JSON.stringify(authState));
+        } else {
+            localStorage.removeItem(authStateKey);
+        }
+    }
+
+    updateAuthFlags() {
+        this.isAuthenticated = !!(this.token || this.refreshToken);
         this.needsLogin = !this.isAuthenticated;
         this.nextSyncAt = 0;
+    }
 
-        const key = buildTokenStorageKey(this.id);
-        if (this.isPrimary) {
-            if (this.token) {
-                localStorage.setItem(key, this.token);
-            } else {
-                localStorage.removeItem(key);
-            }
-        } else {
-            localStorage.removeItem(key);
-        }
+    applyAuthState(authState) {
+        const normalized = normalizeAuthState(authState);
+        this.token = normalized.accessToken;
+        this.accessTokenExpiresAt = normalized.accessTokenExpiresAt;
+        this.refreshToken = normalized.refreshToken;
+        this.refreshTokenExpiresAt = normalized.refreshTokenExpiresAt;
+        this.syncAuthPersistence();
+        this.updateAuthFlags();
     }
 
     toJSON() {
@@ -916,12 +1010,12 @@ class ServerClient {
             id: this.id,
             host: this.host,
             baseUrl: this.baseUrl,
-            token: this.token
+            token: ''
         };
     }
 
     getHeaders() {
-        return this.token ? { 'Authorization': this.token } : {};
+        return this.token ? { 'Authorization': `Bearer ${this.token}` } : {};
     }
 
     resolveUrl(path) {
@@ -960,12 +1054,26 @@ class ServerClient {
     }
 
     async login(password) {
-        const hashed = await hashPassword(password);
-        await this.loginWithToken(hashed);
-    }
-
-    async loginWithToken(token) {
-        this.setToken(token);
+        const normalizedPassword = typeof password === 'string'
+            ? password
+            : '';
+        const response = await this.fetchWithoutAuth('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: normalizedPassword })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            if (response.status === 403) {
+                throw new Error(
+                    data.error
+                    || 'Service locked due to too many failed attempts.'
+                );
+            }
+            throw new Error(data.error || 'Authentication required.');
+        }
+        const authState = await response.json();
+        this.applyAuthState(authState);
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
         renderServerControls();
@@ -973,25 +1081,158 @@ class ServerClient {
         this.startHeartbeat();
     }
 
+    async bootstrapAuth() {
+        if (this.bootstrapPromise) {
+            return this.bootstrapPromise;
+        }
+        this.bootstrapPromise = (async () => {
+            if (this.token && !isIsoExpired(this.accessTokenExpiresAt, 30_000)) {
+                this.updateAuthFlags();
+                return true;
+            }
+            if (this.refreshToken) {
+                const refreshed = await this.refreshAuth();
+                if (refreshed) {
+                    return true;
+                }
+            }
+            this.updateAuthFlags();
+            return false;
+        })().finally(() => {
+            this.bootstrapPromise = null;
+        });
+        return this.bootstrapPromise;
+    }
+
+    async refreshAuth({ allowStorageReload = true } = {}) {
+        if (!this.refreshToken) {
+            return false;
+        }
+        if (this.refreshPromise) {
+            return this.refreshPromise;
+        }
+        this.refreshPromise = (async () => {
+            try {
+                const response = await this.fetchWithoutAuth('/api/auth/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        refreshToken: this.refreshToken
+                    })
+                });
+                if (response.ok) {
+                    const authState = await response.json();
+                    this.applyAuthState(authState);
+                    this.needsAccessLogin = false;
+                    this.accessLoginUrl = '';
+                    return true;
+                }
+                if (
+                    allowStorageReload
+                    && response.status === 401
+                    && this.loadAuthStateFromStorage()
+                ) {
+                    return this.refreshAuth({ allowStorageReload: false });
+                }
+                return false;
+            } catch {
+                return false;
+            }
+        })().finally(() => {
+            this.refreshPromise = null;
+        });
+        return this.refreshPromise;
+    }
+
+    loadAuthStateFromStorage() {
+        const previousRefreshToken = this.refreshToken;
+        const previousAccessToken = this.token;
+        const storedAuthState = readStoredAuthState(this.id);
+        if (!storedAuthState) {
+            return false;
+        }
+        const nextState = normalizeAuthState(storedAuthState);
+        const changed = (
+            nextState.refreshToken !== previousRefreshToken
+            || nextState.accessToken !== previousAccessToken
+        );
+        if (!changed) {
+            return false;
+        }
+        this.applyAuthState(nextState);
+        return true;
+    }
+
+    async ensureActiveAccessToken() {
+        if (this.token && !isIsoExpired(this.accessTokenExpiresAt, 30_000)) {
+            return true;
+        }
+        if (this.refreshToken) {
+            return this.refreshAuth();
+        }
+        return false;
+    }
+
+    async getAuthSessions() {
+        const response = await this.fetch('/api/auth/sessions');
+        const data = await response.json();
+        return Array.isArray(data?.sessions) ? data.sessions : [];
+    }
+
+    async revokeAuthSession(sessionId) {
+        const response = await this.fetch(
+            `/api/auth/sessions/${encodeURIComponent(sessionId)}`,
+            { method: 'DELETE' }
+        );
+        return response.ok;
+    }
+
+    async revokeOtherAuthSessions() {
+        const response = await this.fetch('/api/auth/logout-others', {
+            method: 'POST'
+        });
+        return response.ok;
+    }
+
+    async logoutCurrentAuthSession() {
+        try {
+            await this.fetchWithoutAuth('/api/auth/logout', {
+                method: 'POST',
+                headers: {
+                    ...this.getHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    refreshToken: this.refreshToken || ''
+                })
+            });
+        } catch {
+            // Local logout should still complete if the network is gone.
+        }
+        this.clearAuth();
+        renderServerControls();
+        if (this.isPrimary) {
+            auth.showLoginModal('Signed out.');
+        }
+    }
+
     clearAuth() {
-        this.setToken('');
+        this.token = '';
+        this.accessTokenExpiresAt = '';
+        this.refreshToken = '';
+        this.refreshTokenExpiresAt = '';
+        this.syncAuthPersistence();
+        this.updateAuthFlags();
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
         this.agentStateLoaded = false;
         this.stopHeartbeat();
-        if (!this.isPrimary) {
-            syncServerList().catch(() => {});
-        }
     }
 
-    async fetch(path, options = {}) {
-        const headers = {
-            ...options.headers,
-            ...this.getHeaders()
-        };
+    async fetchWithoutAuth(path, options = {}) {
         const response = await fetch(this.resolveUrl(path), {
             ...options,
-            headers,
+            headers: { ...(options.headers || {}) },
             credentials: options.credentials || 'include',
             redirect: options.redirect || (this.isPrimary ? 'follow' : 'manual')
         });
@@ -1000,6 +1241,34 @@ class ServerClient {
             const error = new Error('Cloudflare Access redirect');
             error.code = 'ACCESS_REDIRECT';
             throw error;
+        }
+        return response;
+    }
+
+    async fetch(path, options = {}) {
+        const hadAccess = await this.ensureActiveAccessToken();
+        if (!hadAccess) {
+            this.handleUnauthorized();
+            throw new Error('Unauthorized');
+        }
+
+        const requestWithCurrentToken = async () => {
+            const headers = {
+                ...options.headers,
+                ...this.getHeaders()
+            };
+            return this.fetchWithoutAuth(path, {
+                ...options,
+                headers
+            });
+        };
+
+        let response = await requestWithCurrentToken();
+        if (response.status === 401) {
+            const refreshed = await this.refreshAuth();
+            if (refreshed) {
+                response = await requestWithCurrentToken();
+            }
         }
         if (response.status === 401) {
             this.handleUnauthorized();
@@ -1022,7 +1291,7 @@ class ServerClient {
             renderServerControls();
             auth.showLoginModal(message || 'Authentication required.');
         } else {
-            // Keep sub-host token untouched; only stop sync and require manual reconnect.
+            this.clearAuth();
             this.stopHeartbeat();
             this.nextSyncAt = 0;
             setStatus(this, 'reconnecting');
@@ -8743,6 +9012,7 @@ class Session {
         this.boundTerminalClaimTextarea = null;
         this.boundTerminalClaimHandler = null;
         this.wrapperElement = null;
+        this.connectPromise = null;
         this._createTerminals();
 
         this.connect();
@@ -9224,46 +9494,68 @@ class Session {
     connect() {
         if (!this.server.isAuthenticated) return;
 
-        // Prevent duplicate connection attempts
-        if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+        if (
+            this.socket
+            && (
+                this.socket.readyState === WebSocket.OPEN
+                || this.socket.readyState === WebSocket.CONNECTING
+            )
+        ) {
+            return;
+        }
+        if (this.connectPromise) {
             return;
         }
 
-        const endpoint = this.server.resolveWsUrl(this.id, this.server.token);
-        try {
-            this.socket = new WebSocket(endpoint);
-        } catch (error) {
-            const hostName = getDisplayHost(this.server);
-            console.error(`[WS] Failed to connect ${hostName}:`, error);
-            setStatus(this.server, 'reconnecting');
-            if (error?.name === 'SecurityError') {
-                alert(
-                    `${hostName} WebSocket blocked in HTTPS context. `
-                    + 'Use HTTPS/WSS endpoint for this host.',
-                    { type: 'warning', title: 'Connection' }
-                );
+        this.connectPromise = (async () => {
+            const hasAccess = await this.server.ensureActiveAccessToken();
+            if (!hasAccess) {
+                return;
             }
-            return;
-        }
 
-        this.socket.addEventListener('open', () => {
-            this.reconnectAttempts = 0;
-            if (state.activeSessionKey === this.key) this.reportResize();
-        });
-
-        this.socket.addEventListener('message', (event) => {
+            const endpoint = this.server.resolveWsUrl(
+                this.id,
+                this.server.token
+            );
             try {
-                this.handleMessage(JSON.parse(event.data));
-            } catch { /* ignore */ }
-        });
+                this.socket = new WebSocket(endpoint);
+            } catch (error) {
+                const hostName = getDisplayHost(this.server);
+                console.error(`[WS] Failed to connect ${hostName}:`, error);
+                setStatus(this.server, 'reconnecting');
+                if (error?.name === 'SecurityError') {
+                    alert(
+                        `${hostName} WebSocket blocked in HTTPS context. `
+                        + 'Use HTTPS/WSS endpoint for this host.',
+                        { type: 'warning', title: 'Connection' }
+                    );
+                }
+                return;
+            }
 
-        this.socket.addEventListener('close', () => {
-            // We rely on the global heartbeat (syncSessions) to handle reconnection.
-            // This event listener just allows the socket to be garbage collected.
-        });
-        
-        this.socket.addEventListener('error', () => {
-            // Often fires on 401 or connection refused
+            this.socket.addEventListener('open', () => {
+                this.reconnectAttempts = 0;
+                if (state.activeSessionKey === this.key) this.reportResize();
+            });
+
+            this.socket.addEventListener('message', (event) => {
+                try {
+                    this.handleMessage(JSON.parse(event.data));
+                } catch {
+                    // Ignore malformed websocket payloads.
+                }
+            });
+
+            this.socket.addEventListener('close', () => {
+                // We rely on the global heartbeat (syncSessions) to handle reconnection.
+                // This event listener just allows the socket to be garbage collected.
+            });
+
+            this.socket.addEventListener('error', () => {
+                // Often fires on 401 or connection refused.
+            });
+        })().finally(() => {
+            this.connectPromise = null;
         });
     }
 
@@ -9593,6 +9885,7 @@ class AgentTab {
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
+        this.connectPromise = null;
         this.update(data);
         this.connect();
     }
@@ -9786,26 +10079,38 @@ class AgentTab {
         ) {
             return;
         }
+        if (this.connectPromise) {
+            return;
+        }
 
-        const endpoint = this.server.resolveAgentWsUrl(
-            this.id,
-            this.server.token
-        );
-        this.socket = new WebSocket(endpoint);
-        this.socket.addEventListener('message', (event) => {
-            try {
-                this.handleMessage(JSON.parse(event.data));
-            } catch {
-                // Ignore malformed agent payloads.
+        this.connectPromise = (async () => {
+            const hasAccess = await this.server.ensureActiveAccessToken();
+            if (!hasAccess) {
+                return;
             }
-        });
-        this.socket.addEventListener('close', () => {
-            this.socket = null;
-            if (this.status === 'running') {
-                this.status = 'disconnected';
-                this.busy = false;
-                this.notifyUi();
-            }
+
+            const endpoint = this.server.resolveAgentWsUrl(
+                this.id,
+                this.server.token
+            );
+            this.socket = new WebSocket(endpoint);
+            this.socket.addEventListener('message', (event) => {
+                try {
+                    this.handleMessage(JSON.parse(event.data));
+                } catch {
+                    // Ignore malformed agent payloads.
+                }
+            });
+            this.socket.addEventListener('close', () => {
+                this.socket = null;
+                if (this.status === 'running') {
+                    this.status = 'disconnected';
+                    this.busy = false;
+                    this.notifyUi();
+                }
+            });
+        })().finally(() => {
+            this.connectPromise = null;
         });
     }
 
@@ -14486,13 +14791,11 @@ function createServerClient(data, { isPrimary = false } = {}) {
         if (data.host !== undefined) {
             existing.host = host;
         }
-        if (typeof data.token === 'string') {
-            existing.setToken(data.token);
-        }
         resetServerEndpoint(existing, normalized);
         if (isPrimary) {
             existing.isPrimary = true;
         }
+        existing.loadStoredAuth(data);
         return existing;
     }
     const safeId = typeof id === 'string' ? id.trim() : '';
@@ -15675,7 +15978,7 @@ async function removeServer(serverId, { persist = true } = {}) {
     }
 
     state.servers.delete(serverId);
-    localStorage.removeItem(buildTokenStorageKey(serverId));
+    localStorage.removeItem(buildAuthStateStorageKey(serverId));
     if (persist) {
         await syncServerList();
     }
@@ -15883,6 +16186,178 @@ function moveConfirmModalFocus(delta) {
     buttons[nextIndex].focus({ preventScroll: true });
 }
 
+const authSessionsModalState = {
+    server: null,
+    loading: false,
+    sessions: []
+};
+
+function formatAuthSessionTime(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return 'Unknown';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString();
+}
+
+function summarizeAuthUserAgent(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return 'Unknown client';
+    const platform = /iphone|ipad|ios/i.test(raw)
+        ? 'iOS'
+        : (/android/i.test(raw) ? 'Android' : '');
+    const browser = /firefox/i.test(raw)
+        ? 'Firefox'
+        : (/edg\//i.test(raw)
+            ? 'Edge'
+            : (/chrome|crios/i.test(raw)
+                ? 'Chrome'
+                : (/safari/i.test(raw) ? 'Safari' : 'Browser')));
+    const label = [platform, browser].filter(Boolean).join(' ');
+    return label || raw.slice(0, 80);
+}
+
+function closeAuthSessionsModal() {
+    if (!authSessionsModal) return;
+    authSessionsModal.style.display = 'none';
+    authSessionsModalState.server = null;
+    authSessionsModalState.loading = false;
+    authSessionsModalState.sessions = [];
+    if (authSessionsError) {
+        authSessionsError.textContent = '';
+    }
+}
+
+function isAuthSessionsModalOpen() {
+    return !!(
+        authSessionsModal
+        && authSessionsModal.style.display === 'flex'
+    );
+}
+
+function renderAuthSessionsModal() {
+    const server = authSessionsModalState.server;
+    if (
+        !authSessionsModal
+        || !authSessionsTitle
+        || !authSessionsDescription
+        || !authSessionsList
+    ) {
+        return;
+    }
+    authSessionsTitle.textContent = 'Login sessions';
+    authSessionsDescription.textContent = server
+        ? `Active sessions for ${getDisplayHost(server)}.`
+        : '';
+    authSessionsList.innerHTML = '';
+
+    if (authSessionsModalState.loading) {
+        const row = document.createElement('div');
+        row.className = 'auth-session-empty';
+        row.textContent = 'Loading sessions...';
+        authSessionsList.appendChild(row);
+    } else if (!authSessionsModalState.sessions.length) {
+        const row = document.createElement('div');
+        row.className = 'auth-session-empty';
+        row.textContent = 'No login sessions found.';
+        authSessionsList.appendChild(row);
+    } else {
+        for (const session of authSessionsModalState.sessions) {
+            const row = document.createElement('div');
+            row.className = 'auth-session-row';
+            if (session.current) {
+                row.classList.add('current');
+            }
+
+            const info = document.createElement('div');
+            info.className = 'auth-session-info';
+
+            const title = document.createElement('div');
+            title.className = 'auth-session-title';
+            title.textContent = session.current
+                ? 'Current session'
+                : summarizeAuthUserAgent(session.userAgent);
+            info.appendChild(title);
+
+            const meta = document.createElement('div');
+            meta.className = 'auth-session-meta';
+            meta.textContent = [
+                `Last used: ${formatAuthSessionTime(session.lastSeenAt)}`,
+                `Expires: ${formatAuthSessionTime(session.refreshExpiresAt)}`,
+                `ID: ${String(session.id || '').slice(0, 8)}`
+            ].join(' · ');
+            info.appendChild(meta);
+            row.appendChild(info);
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'auth-session-revoke danger-button';
+            button.textContent = session.current ? 'Log out' : 'Revoke';
+            button.onclick = async () => {
+                if (!server) return;
+                const confirmed = await showConfirmModal({
+                    title: session.current ? 'Log out?' : 'Revoke session?',
+                    message: session.current
+                        ? 'This will sign out this browser.'
+                        : 'This device will be signed out on its next request.',
+                    confirmLabel: session.current ? 'Log out' : 'Revoke',
+                    danger: true,
+                    returnFocus: button
+                });
+                if (!confirmed) return;
+                if (session.current) {
+                    await server.logoutCurrentAuthSession();
+                    closeAuthSessionsModal();
+                    return;
+                }
+                await server.revokeAuthSession(session.id);
+                await loadAuthSessionsModal(server);
+            };
+            row.appendChild(button);
+            authSessionsList.appendChild(row);
+        }
+    }
+
+    if (authSessionsRevokeOthers) {
+        const otherCount = authSessionsModalState.sessions.filter(
+            (session) => !session.current
+        ).length;
+        authSessionsRevokeOthers.disabled = (
+            authSessionsModalState.loading
+            || !server
+            || otherCount === 0
+        );
+    }
+}
+
+async function loadAuthSessionsModal(server) {
+    if (!server) return;
+    authSessionsModalState.server = server;
+    authSessionsModalState.loading = true;
+    authSessionsModalState.sessions = [];
+    if (authSessionsError) {
+        authSessionsError.textContent = '';
+    }
+    renderAuthSessionsModal();
+    try {
+        authSessionsModalState.sessions = await server.getAuthSessions();
+    } catch (error) {
+        console.error(error);
+        if (authSessionsError) {
+            authSessionsError.textContent = 'Failed to load login sessions.';
+        }
+    } finally {
+        authSessionsModalState.loading = false;
+        renderAuthSessionsModal();
+    }
+}
+
+async function openAuthSessionsModal(server) {
+    if (!authSessionsModal || !server) return;
+    authSessionsModal.style.display = 'flex';
+    await loadAuthSessionsModal(server);
+}
+
 function renderServerControls() {
     updateDocumentTitle();
     if (!serverControlsEl) return;
@@ -15972,6 +16447,24 @@ function renderServerControls() {
         };
 
         row.appendChild(mainButton);
+        if (server.isAuthenticated && !requiresReconnectAction) {
+            row.classList.add('has-auth-sessions');
+            const sessionsButton = document.createElement('button');
+            sessionsButton.type = 'button';
+            sessionsButton.className = 'server-auth-button';
+            sessionsButton.setAttribute(
+                'aria-label',
+                `Manage login sessions for ${hostName}`
+            );
+            sessionsButton.title = `Manage login sessions for ${hostName}`;
+            sessionsButton.innerHTML = AUTH_SESSIONS_ICON_SVG;
+            sessionsButton.onclick = async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                await openAuthSessionsModal(server);
+            };
+            row.appendChild(sessionsButton);
+        }
         if (!server.isPrimary) {
             const deleteButton = document.createElement('button');
             deleteButton.type = 'button';
@@ -16062,6 +16555,26 @@ document.addEventListener('visibilitychange', () => {
         void editorManager.checkActiveFileVersion();
     }
     editorManager.updateTreeAutoRefresh();
+});
+window.addEventListener('storage', (event) => {
+    if (!event.key) {
+        return;
+    }
+    if (event.key.startsWith(DEPRECATED_AUTH_TOKEN_STORAGE_PREFIX)) {
+        clearDeprecatedPasswordHashAuthStorage();
+        return;
+    }
+    const authStatePrefix = 'tabminal_auth_state:';
+    if (!event.key.startsWith(authStatePrefix)) {
+        return;
+    }
+    const serverId = event.key.slice(authStatePrefix.length);
+    const server = state.servers.get(serverId);
+    if (!server) {
+        return;
+    }
+    server.loadStoredAuth();
+    renderServerControls();
 });
 // #endregion
 
@@ -16405,27 +16918,15 @@ if (
         }
 
         try {
-            let authToken = '';
-            if (password) {
-                authToken = await hashPassword(password);
-            } else {
-                const candidates = [];
-                if (mode === 'reconnect' && server) {
-                    candidates.push(server);
+            if (!password) {
+                addServerError.textContent = 'Password required.';
+                if (createdNewServer && !server.isPrimary) {
+                    await removeServer(server.id, { persist: false });
                 }
-                candidates.push(getActiveServer(), getMainServer());
-                const inheritedServer = candidates.find(item => item?.token) || null;
-                authToken = inheritedServer?.token || '';
-                if (!authToken) {
-                    addServerError.textContent = 'No inherited password available.';
-                    if (createdNewServer && !server.isPrimary) {
-                        await removeServer(server.id, { persist: false });
-                    }
-                    return;
-                }
+                return;
             }
 
-            await server.loginWithToken(authToken);
+            await server.login(password);
             await fetchExpandedPaths(server);
             await syncServer(server);
             server.startHeartbeat();
@@ -16457,6 +16958,61 @@ if (
     console.warn('[Tabminal] Legacy sidebar detected, enabling fallback new-tab button.');
     legacyNewTabButton.addEventListener('click', () => {
         createNewSession(getMainServer());
+    });
+}
+
+if (
+    authSessionsModal
+    && authSessionsClose
+    && authSessionsRevokeOthers
+) {
+    authSessionsClose.addEventListener('click', () => {
+        closeAuthSessionsModal();
+    });
+
+    authSessionsModal.addEventListener('click', (event) => {
+        if (event.target === authSessionsModal) {
+            closeAuthSessionsModal();
+        }
+    });
+
+    authSessionsModal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeAuthSessionsModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !isAuthSessionsModalOpen()) {
+            return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeAuthSessionsModal();
+    }, true);
+
+    authSessionsRevokeOthers.addEventListener('click', async () => {
+        const server = authSessionsModalState.server;
+        if (!server) return;
+        const confirmed = await showConfirmModal({
+            title: 'Log out other sessions?',
+            message: 'All other devices will be signed out.',
+            confirmLabel: 'Log out others',
+            danger: true,
+            returnFocus: authSessionsRevokeOthers
+        });
+        if (!confirmed) return;
+        try {
+            await server.revokeOtherAuthSessions();
+            await loadAuthSessionsModal(server);
+        } catch (error) {
+            console.error(error);
+            if (authSessionsError) {
+                authSessionsError.textContent =
+                    'Failed to revoke other sessions.';
+            }
+        }
     });
 }
 
@@ -16558,6 +17114,7 @@ if (loginForm && passwordInput) {
             await initApp();
         } catch (err) {
             console.error(err);
+            loginError.textContent = err?.message || 'Authentication failed.';
         }
     });
 }
@@ -16640,6 +17197,8 @@ async function initApp() {
     const mainServer = getMainServer();
     if (!mainServer) return;
 
+    await mainServer.bootstrapAuth();
+
     if (!mainServer.isAuthenticated) {
         auth.showLoginModal();
         return;
@@ -16649,6 +17208,7 @@ async function initApp() {
     await hydrateServerRegistry();
 
     for (const server of state.servers.values()) {
+        await server.bootstrapAuth();
         if (!server.isAuthenticated) continue;
         await fetchExpandedPaths(server);
         await syncServer(server);

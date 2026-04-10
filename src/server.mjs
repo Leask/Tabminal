@@ -18,7 +18,17 @@ import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
-import { authMiddleware, verifyClient } from './auth.mjs';
+import {
+    authMiddleware,
+    initAuthStore,
+    issueAuthTokensFromPassword,
+    listAuthSessions,
+    refreshAuthTokens,
+    revokeAuthSessionById,
+    revokeOtherAuthSessions,
+    revokeAuthTokens,
+    verifyClient
+} from './auth.mjs';
 import {
     setupFsRoutes,
     writeTextFileSnapshot
@@ -174,6 +184,61 @@ router.get('/healthz', (ctx) => {
     ctx.body = { status: 'ok' };
 });
 
+router.post('/api/auth/login', async (ctx) => {
+    const body = ctx.request.body || {};
+    const password = typeof body.password === 'string'
+        ? body.password
+        : '';
+    const result = await issueAuthTokensFromPassword(password, {
+        userAgent: ctx.get('user-agent')
+    });
+    ctx.status = result.status;
+    if (result.ok) {
+        ctx.body = {
+            accessToken: result.accessToken,
+            accessTokenExpiresAt: result.accessTokenExpiresAt,
+            refreshToken: result.refreshToken,
+            refreshTokenExpiresAt: result.refreshTokenExpiresAt
+        };
+        return;
+    }
+    ctx.body = { error: result.error };
+});
+
+router.post('/api/auth/refresh', async (ctx) => {
+    const body = ctx.request.body || {};
+    const refreshToken = typeof body.refreshToken === 'string'
+        ? body.refreshToken
+        : '';
+    const result = await refreshAuthTokens(refreshToken, {
+        userAgent: ctx.get('user-agent')
+    });
+    ctx.status = result.status;
+    if (result.ok) {
+        ctx.body = {
+            accessToken: result.accessToken,
+            accessTokenExpiresAt: result.accessTokenExpiresAt,
+            refreshToken: result.refreshToken,
+            refreshTokenExpiresAt: result.refreshTokenExpiresAt
+        };
+        return;
+    }
+    ctx.body = { error: result.error };
+});
+
+router.post('/api/auth/logout', async (ctx) => {
+    const body = ctx.request.body || {};
+    const refreshToken = typeof body.refreshToken === 'string'
+        ? body.refreshToken
+        : '';
+    const accessToken = ctx.get('Authorization') || ctx.query.token || '';
+    const result = await revokeAuthTokens({
+        refreshToken,
+        accessToken
+    });
+    ctx.status = result.status;
+});
+
 app.use(async (ctx, next) => {
     if (ctx.method === 'GET' && ctx.path === '/api/version') {
         ctx.set(
@@ -198,6 +263,39 @@ app.use(bodyParser());
 
 // Auth Middleware for API routes
 app.use(authMiddleware);
+
+await initAuthStore();
+
+router.get('/api/auth/session', async (ctx) => {
+    const auth = ctx.state.auth || {};
+    ctx.body = {
+        authenticated: true,
+        sessionId: auth.sessionId || '',
+        accessTokenExpiresAt: auth.accessTokenExpiresAt || '',
+        refreshTokenExpiresAt: auth.refreshTokenExpiresAt || ''
+    };
+});
+
+router.get('/api/auth/sessions', async (ctx) => {
+    const auth = ctx.state.auth || {};
+    ctx.body = {
+        sessions: await listAuthSessions(auth.sessionId || '')
+    };
+});
+
+router.delete('/api/auth/sessions/:id', async (ctx) => {
+    const result = await revokeAuthSessionById(ctx.params.id);
+    ctx.status = result.status;
+    if (!result.ok) {
+        ctx.body = { error: result.error };
+    }
+});
+
+router.post('/api/auth/logout-others', async (ctx) => {
+    const auth = ctx.state.auth || {};
+    const result = await revokeOtherAuthSessions(auth.sessionId || '');
+    ctx.status = result.status;
+});
 
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();

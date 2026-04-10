@@ -9,6 +9,7 @@ const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
 const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');
 const AGENT_TABS_FILE = path.join(BASE_DIR, 'agent-tabs.json');
 const AGENT_CONFIG_FILE = path.join(BASE_DIR, 'agent-config.json');
+const AUTH_SESSIONS_FILE = path.join(BASE_DIR, 'auth-sessions.json');
 const getSessionSnapshotPath = (id) => path.join(SESSIONS_DIR, `${id}.snapshot`);
 
 // Ensure directories exist
@@ -192,6 +193,80 @@ export const saveCluster = async (servers) => {
         await fs.writeFile(CLUSTER_FILE, JSON.stringify(payload, null, 2));
     } catch (e) {
         console.error('[Persistence] Failed to save cluster:', e);
+        throw e;
+    }
+};
+
+// --- Auth Session Persistence ---
+
+function normalizeAuthSessions(sessions) {
+    if (!Array.isArray(sessions)) return [];
+    const normalized = [];
+    for (const entry of sessions) {
+        if (!entry || typeof entry !== 'object') continue;
+        const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+        const passwordFingerprint = typeof entry.passwordFingerprint === 'string'
+            ? entry.passwordFingerprint.trim()
+            : '';
+        const refreshTokenHash = typeof entry.refreshTokenHash === 'string'
+            ? entry.refreshTokenHash.trim()
+            : '';
+        const createdAt = typeof entry.createdAt === 'string'
+            ? entry.createdAt.trim()
+            : '';
+        const lastSeenAt = typeof entry.lastSeenAt === 'string'
+            ? entry.lastSeenAt.trim()
+            : '';
+        const refreshExpiresAt = typeof entry.refreshExpiresAt === 'string'
+            ? entry.refreshExpiresAt.trim()
+            : '';
+        const rotatedAt = typeof entry.rotatedAt === 'string'
+            ? entry.rotatedAt.trim()
+            : '';
+        const revokedAt = typeof entry.revokedAt === 'string'
+            ? entry.revokedAt.trim()
+            : '';
+        const userAgent = typeof entry.userAgent === 'string'
+            ? entry.userAgent.trim()
+            : '';
+        if (!id || !passwordFingerprint || !refreshTokenHash) continue;
+        normalized.push({
+            id,
+            passwordFingerprint,
+            refreshTokenHash,
+            createdAt,
+            lastSeenAt,
+            refreshExpiresAt,
+            rotatedAt,
+            revokedAt,
+            userAgent
+        });
+    }
+    return normalized;
+}
+
+export const loadAuthSessions = async () => {
+    await init();
+    try {
+        const content = await fs.readFile(AUTH_SESSIONS_FILE, 'utf-8');
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+            return normalizeAuthSessions(parsed);
+        }
+        return normalizeAuthSessions(parsed?.sessions);
+    } catch {
+        return [];
+    }
+};
+
+export const saveAuthSessions = async (sessions) => {
+    await init();
+    const normalized = normalizeAuthSessions(sessions);
+    const payload = { sessions: normalized };
+    try {
+        await fs.writeFile(AUTH_SESSIONS_FILE, JSON.stringify(payload, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save auth sessions:', e);
         throw e;
     }
 };
