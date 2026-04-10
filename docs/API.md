@@ -75,13 +75,14 @@ Current defaults:
 
 Login flow:
 
-1. client submits the user password over the active HTTP transport
+1. client computes `SHA-256(password)` locally
 2. client calls `POST /api/auth/login`
-3. server hashes the password and compares it to the configured password hash
+3. server compares that hash to the configured password hash
 4. server returns `accessToken`, `accessTokenExpiresAt`, `refreshToken`, and
    `refreshTokenExpiresAt`
 
-The browser does not compute or store a reusable password hash.
+The browser does not persist the password hash. The hash is accepted only as a
+login credential and must not be used as an API bearer token.
 
 ### 3.2 Access token transport
 
@@ -121,7 +122,7 @@ Request:
 
 ```json
 {
-  "password": "<plain-text password>"
+  "passwordHash": "<sha256-hex>"
 }
 ```
 

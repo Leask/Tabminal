@@ -148,14 +148,17 @@ async function ensureAuthStoreInitialized() {
     await authStoreInitPromise;
 }
 
-function verifyPassword(password) {
+function verifyPasswordHash(passwordHash) {
     if (isLocked) {
         return { success: false, locked: true };
     }
-    const normalized = typeof password === 'string'
-        ? password
+    const normalized = typeof passwordHash === 'string'
+        ? passwordHash.trim().toLowerCase()
         : '';
-    if (!normalized || !safeEqualHex(sha256(normalized), config.passwordHash)) {
+    if (
+        !/^[0-9a-f]{64}$/.test(normalized)
+        || !safeEqualHex(normalized, config.passwordHash)
+    ) {
         failedAttempts += 1;
         if (failedAttempts >= MAX_ATTEMPTS) {
             isLocked = true;
@@ -214,12 +217,12 @@ export async function initAuthStore() {
     await ensureAuthStoreInitialized();
 }
 
-export async function issueAuthTokensFromPassword(
-    password,
+export async function issueAuthTokensFromPasswordHash(
+    passwordHash,
     { userAgent = '' } = {}
 ) {
     await ensureAuthStoreInitialized();
-    const { success, locked } = verifyPassword(password);
+    const { success, locked } = verifyPasswordHash(passwordHash);
     if (locked) {
         return {
             ok: false,

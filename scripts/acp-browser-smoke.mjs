@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const chromeBaseUrl = process.env.CHROME_DEBUG_URL
@@ -5,6 +6,10 @@ const chromeBaseUrl = process.env.CHROME_DEBUG_URL
 const tabminalUrl = process.env.TABMINAL_URL
     || 'http://127.0.0.1:19846/';
 const tabminalPassword = process.env.TABMINAL_PASSWORD || 'acp-smoke';
+const tabminalPasswordHash = crypto
+    .createHash('sha256')
+    .update(tabminalPassword)
+    .digest('hex');
 const targetAgentLabel = process.env.TABMINAL_AGENT_LABEL || 'Test Agent';
 const targetAgentDisplayLabel = targetAgentLabel.replace(
     /\s+(CLI|Agent|Adapter)$/i,
@@ -138,7 +143,7 @@ async function getAuthState() {
                 'content-type': 'application/json'
             },
             body: JSON.stringify({
-                password: tabminalPassword
+                passwordHash: tabminalPasswordHash
             })
         });
         if (!response.ok) {

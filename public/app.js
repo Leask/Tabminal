@@ -18,7 +18,8 @@ const {
     isLikelyAccessLoginResponse,
     buildAuthStateStorageKey,
     makeSessionKey,
-    splitSessionKey
+    splitSessionKey,
+    hashPassword
 } = await import(`./modules/url-auth.js${LOCAL_MODULE_VERSION}`);
 const {
     shortenPath,
@@ -1054,13 +1055,11 @@ class ServerClient {
     }
 
     async login(password) {
-        const normalizedPassword = typeof password === 'string'
-            ? password
-            : '';
+        const passwordHash = await hashPassword(password);
         const response = await this.fetchWithoutAuth('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: normalizedPassword })
+            body: JSON.stringify({ passwordHash })
         });
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));

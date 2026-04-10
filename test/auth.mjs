@@ -31,12 +31,12 @@ describe('auth token lifecycle', () => {
         const auth = await loadAuthModule();
         await auth.initAuthStore();
 
-        const failed = await auth.issueAuthTokensFromPassword('invalid');
+        const failed = await auth.issueAuthTokensFromPasswordHash('invalid');
         assert.equal(failed.ok, false);
         assert.equal(failed.status, 401);
 
-        const login = await auth.issueAuthTokensFromPassword(
-            process.env.TABMINAL_PASSWORD
+        const login = await auth.issueAuthTokensFromPasswordHash(
+            sha256(process.env.TABMINAL_PASSWORD)
         );
         assert.equal(login.ok, true);
         assert.ok(login.accessToken);
@@ -81,8 +81,8 @@ describe('auth token lifecycle', () => {
     it('restores refresh sessions from persistence after reload', async () => {
         const firstAuth = await loadAuthModule();
         await firstAuth.initAuthStore();
-        const login = await firstAuth.issueAuthTokensFromPassword(
-            process.env.TABMINAL_PASSWORD
+        const login = await firstAuth.issueAuthTokensFromPasswordHash(
+            sha256(process.env.TABMINAL_PASSWORD)
         );
         assert.equal(login.ok, true);
 
@@ -97,12 +97,12 @@ describe('auth token lifecycle', () => {
         const auth = await loadAuthModule();
         await auth.initAuthStore();
 
-        const first = await auth.issueAuthTokensFromPassword(
-            process.env.TABMINAL_PASSWORD,
+        const first = await auth.issueAuthTokensFromPasswordHash(
+            sha256(process.env.TABMINAL_PASSWORD),
             { userAgent: 'First Test Browser' }
         );
-        const second = await auth.issueAuthTokensFromPassword(
-            process.env.TABMINAL_PASSWORD,
+        const second = await auth.issueAuthTokensFromPasswordHash(
+            sha256(process.env.TABMINAL_PASSWORD),
             { userAgent: 'Second Test Browser' }
         );
         assert.equal(first.ok, true);

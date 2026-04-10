@@ -21,7 +21,7 @@ import { config } from './config.mjs';
 import {
     authMiddleware,
     initAuthStore,
-    issueAuthTokensFromPassword,
+    issueAuthTokensFromPasswordHash,
     listAuthSessions,
     refreshAuthTokens,
     revokeAuthSessionById,
@@ -186,10 +186,10 @@ router.get('/healthz', (ctx) => {
 
 router.post('/api/auth/login', async (ctx) => {
     const body = ctx.request.body || {};
-    const password = typeof body.password === 'string'
-        ? body.password
+    const passwordHash = typeof body.passwordHash === 'string'
+        ? body.passwordHash
         : '';
-    const result = await issueAuthTokensFromPassword(password, {
+    const result = await issueAuthTokensFromPasswordHash(passwordHash, {
         userAgent: ctx.get('user-agent')
     });
     ctx.status = result.status;

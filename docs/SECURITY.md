@@ -14,18 +14,21 @@ state.
 
 ### Password Login
 
-The web client submits the entered password to the server over the active HTTP
-transport:
+The web client hashes the entered password with SHA-256 before calling the login
+API:
 
 ```text
 POST /api/auth/login
-{ "password": "<plain-text password>" }
+{ "passwordHash": "<sha256-hex>" }
 ```
 
-The server hashes that password and checks it against the configured
-`config.passwordHash`. The browser no longer computes or stores a reusable
-password hash, and the login endpoint no longer accepts the old
-`passwordHash` field.
+The server checks that value against the configured `config.passwordHash` using
+a timing-safe comparison. The browser does not persist the password hash and
+does not use it as an API bearer token.
+
+This avoids sending the raw password in the request body. It does not make the
+hash harmless: if the login request hash is captured, it can be replayed as a
+login credential until the configured password changes.
 
 ### Access Token
 
@@ -162,8 +165,9 @@ A stricter future model should keep access tokens in memory only.
 
 #### Password Hash Login Contract Is Still Legacy-Shaped
 
-The client still sends `SHA-256(password)` to the server. This preserves
-compatibility but is not a full modern password-auth design.
+The client sends `SHA-256(password)` to the server. This avoids transmitting the
+raw password, but it is not a full modern password-auth design because the hash
+is still a replayable login credential.
 
 A stronger future design could send the password over HTTPS and let the server
 verify against an Argon2id password hash. That would require a config/storage
