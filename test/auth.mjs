@@ -4,12 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-const projectRoot = '/Users/leask/Documents/Tabminal';
-const authModuleUrl = pathToFileURL(
-    path.join(projectRoot, 'src', 'auth.mjs')
-).href;
+const authModuleUrl = new URL('../src/auth.mjs', import.meta.url).href;
 
 const tempHome = await fs.mkdtemp(
     path.join(os.tmpdir(), 'tabminal-auth-test-')
