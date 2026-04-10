@@ -41,10 +41,61 @@ jobs:
             type=sha
             type=raw,value=latest
 
+      - name: Resolve npm package artifact
+        id: npm
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          current_version="$(node -p "require('./package.json').version")"
+          target_version="$current_version"
+
+          if [[ "$EVENT_NAME" == "push" && "$REF" =~ ^refs/heads/(main|master)$ ]]; then
+            IFS='.' read -r major minor patch <<<"$current_version"
+            target_version="$major.$minor.$((patch + 1))"
+          elif [[ "$EVENT_NAME" == "push" && "$REF" =~ ^refs/tags/v(.+)$ ]]; then
+            target_version="${BASH_REMATCH[1]}"
+          elif [[ "$EVENT_NAME" == "release" && -n "${RELEASE_TAG:-}" ]]; then
+            target_version="${RELEASE_TAG#v}"
+          fi
+
+          package_spec="https://registry.npmjs.org/tabminal/-/tabminal-${target_version}.tgz"
+
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "target_version=$target_version" >> "$GITHUB_OUTPUT"
+          echo "package_spec=$package_spec" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for npm package artifact
+        shell: bash
+        env:
+          TARGET_VERSION: ${{ steps.npm.outputs.target_version }}
+          PACKAGE_SPEC: ${{ steps.npm.outputs.package_spec }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for tabminal@$TARGET_VERSION"
+          echo "Expecting artifact: $PACKAGE_SPEC"
+          for attempt in $(seq 1 60); do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' -I "$PACKAGE_SPEC" || true)"
+            if [[ "$status" == "200" ]]; then
+              echo "Artifact is available"
+              exit 0
+            fi
+            echo "Attempt $attempt/60: status=$status; sleeping 10s"
+            sleep 10
+          done
+          echo "Timed out waiting for $PACKAGE_SPEC"
+          npm view tabminal versions --json || true
+          exit 1
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          build-args: |
+            TABMINAL_NPM_SPEC=${{ steps.npm.outputs.package_spec }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
