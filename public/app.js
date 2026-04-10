@@ -404,6 +404,7 @@ function buildTerminalOverviewRulerOptions() {
 
 function buildTerminalBaseOptions(overrides = {}) {
     return {
+        allowProposedApi: true,
         allowTransparency: true,
         convertEol: true,
         fontFamily: TERMINAL_FONT_FAMILY,
@@ -473,6 +474,17 @@ function loadTerminalAddonSafely(term, addon, label) {
     } catch (error) {
         console.warn(`Failed to load terminal addon (${label})`, error);
         return null;
+    }
+}
+
+function disposeTerminalAddonSafely(addon, label) {
+    if (!addon || typeof addon.dispose !== 'function') {
+        return;
+    }
+    try {
+        addon.dispose();
+    } catch (error) {
+        console.warn(`Failed to dispose terminal addon (${label})`, error);
     }
 }
 
@@ -6928,18 +6940,20 @@ class EditorManager {
             fontFamily: TERMINAL_FONT_FAMILY
         }));
         const fitAddon = new FitAddon();
+        const canvasAddon = new CanvasAddon();
+        const ligaturesAddon = createTerminalLigaturesAddon();
         loadTerminalAddonSafely(embeddedTerm, fitAddon, 'embedded-fit');
+        embeddedTerm.open(terminalNode);
         loadTerminalAddonSafely(
             embeddedTerm,
-            createTerminalLigaturesAddon(),
+            ligaturesAddon,
             'embedded-ligatures'
         );
         loadTerminalAddonSafely(
             embeddedTerm,
-            new CanvasAddon(),
+            canvasAddon,
             'embedded-canvas'
         );
-        embeddedTerm.open(terminalNode);
         renderEmbeddedAgentTerminal(
             embeddedTerm,
             terminalNode,
@@ -6973,6 +6987,12 @@ class EditorManager {
                 layout: layoutTerminal
             };
         }
+        this.trackAgentTimelineDisposable(host, {
+            dispose() {
+                disposeTerminalAddonSafely(ligaturesAddon, 'embedded-ligatures');
+                disposeTerminalAddonSafely(canvasAddon, 'embedded-canvas');
+            }
+        });
         this.trackAgentTimelineDisposable(host, embeddedTerm);
         this.trackAgentTimelineDisposable(host, fitAddon);
 
@@ -8613,8 +8633,12 @@ class Session {
         this.needsAttention = false;
         this.lastNotifiedExecutionId = '';
         this.terminalProgress = null;
+        this.previewCanvasAddon = null;
+        this.mainCanvasAddon = null;
+        this.mainLigaturesAddon = null;
         this.mainProgressAddon = null;
         this.mainProgressSubscription = null;
+        this.mainDeferredAddonsLoaded = false;
         const legacyEditorState = data.editorState
             && typeof data.editorState === 'object'
             ? data.editorState
@@ -8727,7 +8751,14 @@ class Session {
         }));
 
         if (window.innerWidth >= 768) {
-            this.previewTerm.loadAddon(new CanvasAddon());
+            this.previewCanvasAddon = new CanvasAddon();
+            loadTerminalAddonSafely(
+                this.previewTerm,
+                this.previewCanvasAddon,
+                'preview-canvas'
+            );
+        } else {
+            this.previewCanvasAddon = null;
         }
 
         this.mainTerm = new Terminal(buildTerminalBaseOptions({
@@ -8741,6 +8772,9 @@ class Session {
         this.mainLinksAddon = new WebLinksAddon();
         this.searchAddon = new SearchAddon();
         this.mainProgressAddon = new ProgressAddon();
+        this.mainCanvasAddon = new CanvasAddon();
+        this.mainLigaturesAddon = createTerminalLigaturesAddon();
+        this.mainDeferredAddonsLoaded = false;
         loadTerminalAddonSafely(this.mainTerm, this.mainFitAddon, 'fit');
         loadTerminalAddonSafely(this.mainTerm, this.mainLinksAddon, 'weblinks');
         loadTerminalAddonSafely(this.mainTerm, this.searchAddon, 'search');
@@ -8751,10 +8785,9 @@ class Session {
         );
         loadTerminalAddonSafely(
             this.mainTerm,
-            createTerminalLigaturesAddon(),
-            'ligatures'
+            this.mainCanvasAddon,
+            'canvas'
         );
-        loadTerminalAddonSafely(this.mainTerm, new CanvasAddon(), 'canvas');
         if (this.mainProgressAddon?.onChange) {
             this.mainProgressSubscription = this.mainProgressAddon.onChange(
                 (progress) => {
@@ -8786,6 +8819,35 @@ class Session {
         });
     }
 
+    activateMainTerminalDeferredAddons() {
+        if (
+            !this.mainTerm
+            || !this.mainTerm.element
+            || this.mainDeferredAddonsLoaded
+        ) {
+            return;
+        }
+        loadTerminalAddonSafely(
+            this.mainTerm,
+            this.mainLigaturesAddon,
+            'ligatures'
+        );
+        this.mainDeferredAddonsLoaded = true;
+    }
+
+    disposeTerminalAddons() {
+        disposeTerminalAddonSafely(this.previewCanvasAddon, 'preview-canvas');
+        this.previewCanvasAddon = null;
+        this.mainProgressSubscription?.dispose?.();
+        this.mainProgressSubscription = null;
+        this.mainProgressAddon = null;
+        disposeTerminalAddonSafely(this.mainLigaturesAddon, 'ligatures');
+        this.mainLigaturesAddon = null;
+        disposeTerminalAddonSafely(this.mainCanvasAddon, 'canvas');
+        this.mainCanvasAddon = null;
+        this.mainDeferredAddonsLoaded = false;
+    }
+
     recreateTerminals() {
         const wasActive = state.activeSessionKey === this.key;
         const previewWrapper = this.wrapperElement;
@@ -8793,6 +8855,7 @@ class Session {
         this.unbindTerminalControlClaim();
 
         try {
+            this.disposeTerminalAddons();
             this.previewTerm?.dispose();
         } catch (e) {
             if (!e.message?.includes('onRequestRedraw')) {
@@ -8801,8 +8864,6 @@ class Session {
         }
 
         try {
-            this.mainProgressSubscription?.dispose?.();
-            this.mainProgressSubscription = null;
             this.mainTerm?.dispose();
         } catch (e) {
             if (!e.message?.includes('onRequestRedraw')) {
@@ -8821,6 +8882,7 @@ class Session {
         if (wasActive && terminalEl) {
             terminalEl.innerHTML = '';
             this.mainTerm.open(terminalEl);
+            this.activateMainTerminalDeferredAddons();
             this.bindTerminalControlClaim();
             if (this.fitMainTerminalIfVisible()) {
                 this.mainTerm.focus();
@@ -9467,7 +9529,8 @@ class Session {
         clearTimeout(this.retryTimer);
         this.socket?.close();
         this.unbindTerminalControlClaim();
-        
+        this.disposeTerminalAddons();
+
         try {
             if (this.previewTerm) this.previewTerm.dispose();
         } catch (e) {
@@ -16081,6 +16144,7 @@ async function switchToSession(sessionKey, options = {}) {
     
     // Mount new session
     session.mainTerm.open(terminalEl);
+    session.activateMainTerminalDeferredAddons();
     session.bindTerminalControlClaim();
     session.fitMainTerminalIfVisible();
     if (session.isMainTerminalVisible()) {
