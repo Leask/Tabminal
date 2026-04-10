@@ -494,6 +494,20 @@ function createTerminalLigaturesAddon() {
     });
 }
 
+function attachTerminalToHost(term, host) {
+    if (!term || !host) {
+        return false;
+    }
+    if (!term.element) {
+        term.open(host);
+        return true;
+    }
+    if (!host.contains(term.element)) {
+        host.appendChild(term.element);
+    }
+    return false;
+}
+
 function workspaceKeyToFilePath(key) {
     if (typeof key !== 'string' || key.length === 0) return '';
     if (key.startsWith(MARKDOWN_PREVIEW_WORKSPACE_TAB_PREFIX)) {
@@ -8875,14 +8889,16 @@ class Session {
 
         if (previewWrapper && window.innerWidth >= 768) {
             previewWrapper.innerHTML = '';
-            this.previewTerm.open(previewWrapper);
+            attachTerminalToHost(this.previewTerm, previewWrapper);
             this.updatePreviewScale();
         }
 
         if (wasActive && terminalEl) {
             terminalEl.innerHTML = '';
-            this.mainTerm.open(terminalEl);
-            this.activateMainTerminalDeferredAddons();
+            const opened = attachTerminalToHost(this.mainTerm, terminalEl);
+            if (opened) {
+                this.activateMainTerminalDeferredAddons();
+            }
             this.bindTerminalControlClaim();
             if (this.fitMainTerminalIfVisible()) {
                 this.mainTerm.focus();
@@ -15340,7 +15356,10 @@ function renderTabs() {
             // Only mount on Desktop to save resources and avoid visual clutter on mobile
             if (window.innerWidth >= 768) {
                 session.wrapperElement = tab.querySelector('.preview-terminal-wrapper');
-                session.previewTerm.open(session.wrapperElement);
+                attachTerminalToHost(
+                    session.previewTerm,
+                    session.wrapperElement
+                );
                 session.updatePreviewScale();
             }
             session.updateTabUI();
@@ -16143,8 +16162,10 @@ async function switchToSession(sessionKey, options = {}) {
     terminalEl.innerHTML = '';
     
     // Mount new session
-    session.mainTerm.open(terminalEl);
-    session.activateMainTerminalDeferredAddons();
+    const opened = attachTerminalToHost(session.mainTerm, terminalEl);
+    if (opened) {
+        session.activateMainTerminalDeferredAddons();
+    }
     session.bindTerminalControlClaim();
     session.fitMainTerminalIfVisible();
     if (session.isMainTerminalVisible()) {
