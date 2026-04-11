@@ -85,6 +85,90 @@ export async function hashPassword(password) {
     return sha256Fallback(normalized);
 }
 
+export function buildLoginChallengeMessage(challenge) {
+    return [
+        'tabminal-login-v1',
+        challenge?.challengeId || challenge?.id || '',
+        challenge?.salt || '',
+        challenge?.expiresAt || ''
+    ].join(':');
+}
+
+export async function buildLoginChallengeResponse(password, challenge) {
+    const passwordHash = await hashPassword(password);
+    const message = buildLoginChallengeMessage(challenge);
+    return hmacSha256Hex(passwordHash, message);
+}
+
+async function hmacSha256Hex(keyHex, message) {
+    if (window.crypto && window.crypto.subtle) {
+        try {
+            const key = await window.crypto.subtle.importKey(
+                'raw',
+                hexToBytes(keyHex),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            const signature = await window.crypto.subtle.sign(
+                'HMAC',
+                key,
+                new TextEncoder().encode(message)
+            );
+            return bytesToHex(new Uint8Array(signature));
+        } catch (error) {
+            console.warn('Web Crypto HMAC failed, falling back to JS', error);
+        }
+    }
+    return hmacSha256Fallback(keyHex, message);
+}
+
+function hmacSha256Fallback(keyHex, message) {
+    const blockSize = 64;
+    let keyBytes = hexToBytes(keyHex);
+    if (keyBytes.length > blockSize) {
+        keyBytes = hexToBytes(sha256Fallback(bytesToBinary(keyBytes)));
+    }
+    const paddedKey = new Uint8Array(blockSize);
+    paddedKey.set(keyBytes);
+    const innerPad = new Uint8Array(blockSize);
+    const outerPad = new Uint8Array(blockSize);
+    for (let index = 0; index < blockSize; index += 1) {
+        innerPad[index] = paddedKey[index] ^ 0x36;
+        outerPad[index] = paddedKey[index] ^ 0x5c;
+    }
+    const innerHash = sha256Fallback(bytesToBinary(innerPad) + message);
+    return sha256Fallback(
+        bytesToBinary(outerPad) + bytesToBinary(hexToBytes(innerHash))
+    );
+}
+
+function hexToBytes(hex) {
+    const normalized = String(hex || '').trim().toLowerCase();
+    const bytes = new Uint8Array(normalized.length / 2);
+    for (let index = 0; index < bytes.length; index += 1) {
+        bytes[index] = Number.parseInt(
+            normalized.slice(index * 2, index * 2 + 2),
+            16
+        );
+    }
+    return bytes;
+}
+
+function bytesToHex(bytes) {
+    return Array.from(bytes, (byte) => {
+        return byte.toString(16).padStart(2, '0');
+    }).join('');
+}
+
+function bytesToBinary(bytes) {
+    let result = '';
+    for (const byte of bytes) {
+        result += String.fromCharCode(byte);
+    }
+    return result;
+}
+
 function sha256Fallback(ascii) {
     function rightRotate(value, amount) {
         return (value >>> amount) | (value << (32 - amount));

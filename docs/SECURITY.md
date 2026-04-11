@@ -14,21 +14,42 @@ state.
 
 ### Password Login
 
-The web client hashes the entered password with SHA-256 before calling the login
-API:
+The web client uses a one-time challenge/response login. It first asks the
+server for a login challenge:
+
+```text
+POST /api/auth/challenge
+{
+  "challengeId": "<uuid>",
+  "salt": "<base64url-random>",
+  "expiresAt": "...",
+  "algorithm": "tabminal-hmac-sha256-login-v1"
+}
+```
+
+Then the client computes:
+
+```text
+passwordHash = SHA-256(password)
+message = "tabminal-login-v1:" + challengeId + ":" + salt + ":" + expiresAt
+response = HMAC-SHA256(key = passwordHash, message)
+```
+
+The login request sends only:
 
 ```text
 POST /api/auth/login
-{ "passwordHash": "<sha256-hex>" }
+{ "challengeId": "<uuid>", "response": "<hmac-sha256-hex>" }
 ```
 
-The server checks that value against the configured `config.passwordHash` using
-a timing-safe comparison. The browser does not persist the password hash and
-does not use it as an API bearer token.
+The server stores `config.passwordHash`, so it can recompute the same HMAC
+without receiving the raw password or a reusable password hash. Challenges live
+for `30 seconds`, are held only in server memory, and are destroyed on every
+login attempt regardless of success or failure.
 
-This avoids sending the raw password in the request body. It does not make the
-hash harmless: if the login request hash is captured, it can be replayed as a
-login credential until the configured password changes.
+This prevents captured login request bodies from being replayed. It does not
+replace HTTPS and it does not make `config.passwordHash` safe to leak; that
+server-side hash remains a password-equivalent verifier.
 
 ### Access Token
 
@@ -41,8 +62,13 @@ Current properties:
 - storage: browser memory plus current in-page runtime state
 - transport:
   - `Authorization: Bearer <access-token>` for HTTP APIs
-  - `?token=<access-token>` for browser WebSocket connections and media URLs
+  - `Sec-WebSocket-Protocol: tabminal.v1, tabminal.auth.<access-token>` for
+    browser WebSocket connections
+  - `?token=<access-token>` for media URLs and legacy WebSocket clients
 - validation: server-side in-memory token store
+
+The WebSocket server selects only `tabminal.v1` in the response protocol. It
+does not echo the token-bearing protocol value.
 
 Access tokens are short-lived and are replaced on refresh.
 
@@ -163,15 +189,18 @@ XSS bug.
 
 A stricter future model should keep access tokens in memory only.
 
-#### Password Hash Login Contract Is Still Legacy-Shaped
+#### Server Password Hash Is Still A Password-Equivalent Verifier
 
-The client sends `SHA-256(password)` to the server. This avoids transmitting the
-raw password, but it is not a full modern password-auth design because the hash
-is still a replayable login credential.
+The client no longer sends `SHA-256(password)` as a reusable login credential.
+However, the server still stores `SHA-256(password)` in `config.passwordHash`.
+That value is the HMAC key used to verify login challenge responses. If the
+server config leaks, an attacker can still answer login challenges until the
+configured password changes.
 
 A stronger future design could send the password over HTTPS and let the server
 verify against an Argon2id password hash. That would require a config/storage
-migration.
+migration. A PAKE design such as OPAQUE would be stronger but substantially
+more complex than the current lightweight challenge/response model.
 
 #### Local HTTP Deployments Cannot Use Secure Cookies
 
@@ -241,7 +270,8 @@ Design:
 - access token is returned by `/api/auth/login` and `/api/auth/refresh`
 - access token is stored only in JavaScript memory
 - page reload calls `/api/auth/refresh` to get a new access token
-- WebSockets continue to use `?token=<access-token>`
+- WebSockets continue to use the token-bearing `Sec-WebSocket-Protocol`
+  request form
 
 Cookie attributes:
 

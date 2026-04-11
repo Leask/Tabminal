@@ -132,18 +132,40 @@ async function postJsonWithAuth(url, token, body) {
 
 let authStatePromise = null;
 
+function buildLoginChallengeResponse(challenge) {
+    const message = [
+        'tabminal-login-v1',
+        challenge?.challengeId || '',
+        challenge?.salt || '',
+        challenge?.expiresAt || ''
+    ].join(':');
+    return crypto
+        .createHmac('sha256', Buffer.from(tabminalPasswordHash, 'hex'))
+        .update(message)
+        .digest('hex');
+}
+
 async function getAuthState() {
     if (authStatePromise) {
         return await authStatePromise;
     }
     authStatePromise = (async () => {
+        const challengeResponse = await fetch(
+            new URL('/api/auth/challenge', tabminalUrl),
+            { method: 'POST' }
+        );
+        if (!challengeResponse.ok) {
+            throw new Error(`/api/auth/challenge -> ${challengeResponse.status}`);
+        }
+        const challenge = await challengeResponse.json();
         const response = await fetch(new URL('/api/auth/login', tabminalUrl), {
             method: 'POST',
             headers: {
                 'content-type': 'application/json'
             },
             body: JSON.stringify({
-                passwordHash: tabminalPasswordHash
+                challengeId: challenge.challengeId,
+                response: buildLoginChallengeResponse(challenge)
             })
         });
         if (!response.ok) {

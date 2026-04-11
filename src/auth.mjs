@@ -10,6 +10,13 @@ const MAX_ATTEMPTS = 30;
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const ACCESS_TOKEN_REPLAY_LEEWAY_MS = 30 * 1000;
+const AUTH_CHALLENGE_TTL_MS = 30 * 1000;
+const AUTH_CHALLENGE_CLEANUP_MS = 15 * 1000;
+const AUTH_CHALLENGE_MAX = 1000;
+export const AUTH_CHALLENGE_ALGORITHM = 'tabminal-hmac-sha256-login-v1';
+export const AUTH_CHALLENGE_MESSAGE_PREFIX = 'tabminal-login-v1';
+export const WEBSOCKET_PROTOCOL = 'tabminal.v1';
+export const WEBSOCKET_AUTH_PROTOCOL_PREFIX = 'tabminal.auth.';
 
 let failedAttempts = 0;
 let isLocked = false;
@@ -17,6 +24,8 @@ let authStoreInitialized = false;
 let authStoreInitPromise = null;
 const refreshSessions = new Map();
 const accessTokens = new Map();
+const authChallenges = new Map();
+let authChallengeCleanupTimer = null;
 
 function nowTimestamp() {
     return Date.now();
@@ -48,6 +57,10 @@ function generateOpaqueToken(prefix) {
     return `${prefix}_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
+function generateAuthChallengeSalt() {
+    return crypto.randomBytes(32).toString('base64url');
+}
+
 function normalizeAuthHeader(value) {
     const raw = typeof value === 'string' ? value.trim() : '';
     if (!raw) {
@@ -57,6 +70,41 @@ function normalizeAuthHeader(value) {
         return raw.replace(/^bearer\s+/i, '').trim();
     }
     return raw;
+}
+
+function parseWebSocketProtocols(value) {
+    return String(value || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+export function extractWebSocketAuthToken(req) {
+    const authHeader = req?.headers?.authorization || '';
+    if (authHeader) {
+        return normalizeAuthHeader(authHeader);
+    }
+
+    const protocols = parseWebSocketProtocols(
+        req?.headers?.['sec-websocket-protocol']
+    );
+    const authProtocol = protocols.find((protocol) => (
+        protocol.startsWith(WEBSOCKET_AUTH_PROTOCOL_PREFIX)
+    ));
+    if (authProtocol) {
+        return authProtocol.slice(WEBSOCKET_AUTH_PROTOCOL_PREFIX.length);
+    }
+
+    if (req?.url) {
+        try {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            return normalizeAuthHeader(url.searchParams.get('token'));
+        } catch {
+            // Ignore malformed URL.
+        }
+    }
+
+    return '';
 }
 
 function normalizeUserAgent(value) {
@@ -77,6 +125,36 @@ function isIsoExpired(value, now = nowTimestamp()) {
 
 function toIsoOffset(baseMs, deltaMs) {
     return new Date(baseMs + deltaMs).toISOString();
+}
+
+function buildAuthChallengeMessage(challenge) {
+    return [
+        AUTH_CHALLENGE_MESSAGE_PREFIX,
+        challenge.id,
+        challenge.salt,
+        challenge.expiresAt
+    ].join(':');
+}
+
+function hmacSha256Hex(keyHex, message) {
+    return crypto
+        .createHmac('sha256', Buffer.from(keyHex, 'hex'))
+        .update(message)
+        .digest('hex');
+}
+
+export function buildAuthChallengeResponse(passwordHash, challenge) {
+    const normalizedPasswordHash = typeof passwordHash === 'string'
+        ? passwordHash.trim().toLowerCase()
+        : '';
+    return hmacSha256Hex(
+        normalizedPasswordHash,
+        buildAuthChallengeMessage({
+            id: challenge?.challengeId || challenge?.id || '',
+            salt: challenge?.salt || '',
+            expiresAt: challenge?.expiresAt || ''
+        })
+    );
 }
 
 function serializeRefreshSessions() {
@@ -105,6 +183,37 @@ function pruneExpiredAccessTokens(now = nowTimestamp()) {
         if (!entry || isIsoExpired(entry.expiresAt, now)) {
             accessTokens.delete(tokenHash);
         }
+    }
+}
+
+export function pruneExpiredAuthChallenges(now = nowTimestamp()) {
+    let removed = 0;
+    for (const [challengeId, challenge] of authChallenges.entries()) {
+        if (!challenge || isIsoExpired(challenge.expiresAt, now)) {
+            authChallenges.delete(challengeId);
+            removed += 1;
+        }
+    }
+    while (authChallenges.size > AUTH_CHALLENGE_MAX) {
+        const oldestKey = authChallenges.keys().next().value;
+        if (!oldestKey) {
+            break;
+        }
+        authChallenges.delete(oldestKey);
+        removed += 1;
+    }
+    return removed;
+}
+
+function startAuthChallengeCleanup() {
+    if (authChallengeCleanupTimer) {
+        return;
+    }
+    authChallengeCleanupTimer = setInterval(() => {
+        pruneExpiredAuthChallenges();
+    }, AUTH_CHALLENGE_CLEANUP_MS);
+    if (typeof authChallengeCleanupTimer.unref === 'function') {
+        authChallengeCleanupTimer.unref();
     }
 }
 
@@ -140,6 +249,7 @@ async function ensureAuthStoreInitialized() {
             if (changed) {
                 await persistRefreshSessions();
             }
+            startAuthChallengeCleanup();
             authStoreInitialized = true;
         })().finally(() => {
             authStoreInitPromise = null;
@@ -148,16 +258,20 @@ async function ensureAuthStoreInitialized() {
     await authStoreInitPromise;
 }
 
-function verifyPasswordHash(passwordHash) {
+function verifyAuthChallengeResponse(challenge, response) {
     if (isLocked) {
         return { success: false, locked: true };
     }
-    const normalized = typeof passwordHash === 'string'
-        ? passwordHash.trim().toLowerCase()
+    const normalized = typeof response === 'string'
+        ? response.trim().toLowerCase()
         : '';
+    const expected = hmacSha256Hex(
+        config.passwordHash,
+        buildAuthChallengeMessage(challenge)
+    );
     if (
         !/^[0-9a-f]{64}$/.test(normalized)
-        || !safeEqualHex(normalized, config.passwordHash)
+        || !safeEqualHex(normalized, expected)
     ) {
         failedAttempts += 1;
         if (failedAttempts >= MAX_ATTEMPTS) {
@@ -178,6 +292,37 @@ function buildAuthPayload(rawAccessToken, rawRefreshToken, now = nowTimestamp())
         accessTokenExpiresAt: toIsoOffset(now, ACCESS_TOKEN_TTL_MS),
         refreshToken: rawRefreshToken,
         refreshTokenExpiresAt: toIsoOffset(now, REFRESH_TOKEN_TTL_MS)
+    };
+}
+
+async function issueAuthTokensForVerifiedPassword({
+    userAgent = ''
+} = {}) {
+    const now = nowTimestamp();
+    const sessionId = crypto.randomUUID();
+    const rawRefreshToken = generateOpaqueToken('tr');
+    const refreshTokenHash = sha256(rawRefreshToken);
+    const createdAt = nowIso();
+    const session = {
+        id: sessionId,
+        passwordFingerprint: getPasswordFingerprint(),
+        refreshTokenHash,
+        createdAt,
+        lastSeenAt: createdAt,
+        refreshExpiresAt: toIsoOffset(now, REFRESH_TOKEN_TTL_MS),
+        rotatedAt: createdAt,
+        revokedAt: '',
+        userAgent: normalizeUserAgent(userAgent)
+    };
+    refreshSessions.set(sessionId, session);
+    await persistRefreshSessions();
+
+    const rawAccessToken = issueAccessToken(sessionId, now);
+    return {
+        ok: true,
+        status: 200,
+        sessionId,
+        ...buildAuthPayload(rawAccessToken, rawRefreshToken, now)
     };
 }
 
@@ -217,12 +362,86 @@ export async function initAuthStore() {
     await ensureAuthStoreInitialized();
 }
 
-export async function issueAuthTokensFromPasswordHash(
-    passwordHash,
+export async function createAuthChallenge() {
+    await ensureAuthStoreInitialized();
+    const now = nowTimestamp();
+    pruneExpiredAuthChallenges(now);
+    while (authChallenges.size >= AUTH_CHALLENGE_MAX) {
+        const oldestKey = authChallenges.keys().next().value;
+        if (!oldestKey) {
+            break;
+        }
+        authChallenges.delete(oldestKey);
+    }
+    const id = crypto.randomUUID();
+    const salt = generateAuthChallengeSalt();
+    const createdAt = new Date(now).toISOString();
+    const expiresAt = toIsoOffset(now, AUTH_CHALLENGE_TTL_MS);
+    authChallenges.set(id, {
+        id,
+        salt,
+        createdAt,
+        expiresAt
+    });
+    return {
+        challengeId: id,
+        salt,
+        expiresAt,
+        algorithm: AUTH_CHALLENGE_ALGORITHM
+    };
+}
+
+function consumeAuthChallenge(challengeId) {
+    const normalizedChallengeId = typeof challengeId === 'string'
+        ? challengeId.trim()
+        : '';
+    if (!normalizedChallengeId) {
+        return null;
+    }
+    const challenge = authChallenges.get(normalizedChallengeId) || null;
+    if (challenge) {
+        authChallenges.delete(normalizedChallengeId);
+    }
+    return challenge;
+}
+
+export async function issueAuthTokensFromChallenge(
+    { challengeId = '', response = '' } = {},
     { userAgent = '' } = {}
 ) {
     await ensureAuthStoreInitialized();
-    const { success, locked } = verifyPasswordHash(passwordHash);
+    if (typeof challengeId !== 'string' || !challengeId.trim()) {
+        return {
+            ok: false,
+            status: 400,
+            error: 'Invalid login challenge.'
+        };
+    }
+
+    const challenge = consumeAuthChallenge(challengeId);
+    if (!challenge || isIsoExpired(challenge.expiresAt)) {
+        return {
+            ok: false,
+            status: 401,
+            error: 'Login challenge expired. Please try again.'
+        };
+    }
+
+    const normalizedResponse = typeof response === 'string'
+        ? response.trim().toLowerCase()
+        : '';
+    if (!/^[0-9a-f]{64}$/.test(normalizedResponse)) {
+        return {
+            ok: false,
+            status: 400,
+            error: 'Invalid login challenge.'
+        };
+    }
+
+    const { success, locked } = verifyAuthChallengeResponse(
+        challenge,
+        normalizedResponse
+    );
     if (locked) {
         return {
             ok: false,
@@ -238,31 +457,7 @@ export async function issueAuthTokensFromPasswordHash(
         };
     }
 
-    const now = nowTimestamp();
-    const sessionId = crypto.randomUUID();
-    const rawRefreshToken = generateOpaqueToken('tr');
-    const refreshTokenHash = sha256(rawRefreshToken);
-    const session = {
-        id: sessionId,
-        passwordFingerprint: getPasswordFingerprint(),
-        refreshTokenHash,
-        createdAt: nowIso(),
-        lastSeenAt: nowIso(),
-        refreshExpiresAt: toIsoOffset(now, REFRESH_TOKEN_TTL_MS),
-        rotatedAt: nowIso(),
-        revokedAt: '',
-        userAgent: normalizeUserAgent(userAgent)
-    };
-    refreshSessions.set(sessionId, session);
-    await persistRefreshSessions();
-
-    const rawAccessToken = issueAccessToken(sessionId, now);
-    return {
-        ok: true,
-        status: 200,
-        sessionId,
-        ...buildAuthPayload(rawAccessToken, rawRefreshToken, now)
-    };
+    return issueAuthTokensForVerifiedPassword({ userAgent });
 }
 
 export async function refreshAuthTokens(
@@ -465,6 +660,7 @@ export async function authMiddleware(ctx, next) {
     if (
         ctx.path === '/healthz'
         || ctx.path === '/api/version'
+        || ctx.path === '/api/auth/challenge'
         || ctx.path === '/api/auth/login'
         || ctx.path === '/api/auth/refresh'
         || ctx.path === '/api/auth/logout'
@@ -486,18 +682,7 @@ export async function authMiddleware(ctx, next) {
 
 export function verifyClient(info, cb) {
     const { req } = info;
-    let authHeader = req.headers['authorization'];
-
-    if (!authHeader && req.url) {
-        try {
-            const url = new URL(req.url, `http://${req.headers.host}`);
-            authHeader = url.searchParams.get('token');
-        } catch {
-            // Ignore malformed URL.
-        }
-    }
-
-    const normalizedToken = normalizeAuthHeader(authHeader);
+    const normalizedToken = extractWebSocketAuthToken(req);
     if (!normalizedToken) {
         cb(false, 401, 'Unauthorized');
         return;

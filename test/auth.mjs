@@ -22,18 +22,78 @@ async function loadAuthModule() {
     return import(`${authModuleUrl}?t=${Date.now()}-${Math.random()}`);
 }
 
+async function loginWithPassword(auth, password = process.env.TABMINAL_PASSWORD, options = {}) {
+    const challenge = await auth.createAuthChallenge();
+    const response = auth.buildAuthChallengeResponse(sha256(password), challenge);
+    return auth.issueAuthTokensFromChallenge({
+        challengeId: challenge.challengeId,
+        response
+    }, options);
+}
+
 describe('auth token lifecycle', () => {
     it('issues, rotates, and revokes auth tokens', async () => {
         const auth = await loadAuthModule();
         await auth.initAuthStore();
 
-        const failed = await auth.issueAuthTokensFromPasswordHash('invalid');
+        const failed = await auth.issueAuthTokensFromChallenge({
+            challengeId: '',
+            response: ''
+        });
+        assert.equal(failed.ok, false);
+        assert.equal(failed.status, 400);
+
+        const wrongChallenge = await auth.createAuthChallenge();
+        const failedLogin = await auth.issueAuthTokensFromChallenge({
+            challengeId: wrongChallenge.challengeId,
+            response: '0'.repeat(64)
+        });
+        assert.equal(failedLogin.ok, false);
+        assert.equal(failedLogin.status, 401);
+
+        const replay = await auth.issueAuthTokensFromChallenge({
+            challengeId: wrongChallenge.challengeId,
+            response: auth.buildAuthChallengeResponse(
+                sha256(process.env.TABMINAL_PASSWORD),
+                wrongChallenge
+            )
+        });
+        assert.equal(replay.ok, false);
+        assert.equal(replay.status, 401);
+
+        const malformedChallenge = await auth.createAuthChallenge();
+        const malformed = await auth.issueAuthTokensFromChallenge({
+            challengeId: malformedChallenge.challengeId,
+            response: 'not-hex'
+        });
+        assert.equal(malformed.ok, false);
+        assert.equal(malformed.status, 400);
+
+        const malformedReplay = await auth.issueAuthTokensFromChallenge({
+            challengeId: malformedChallenge.challengeId,
+            response: auth.buildAuthChallengeResponse(
+                sha256(process.env.TABMINAL_PASSWORD),
+                malformedChallenge
+            )
+        });
+        assert.equal(malformedReplay.ok, false);
+        assert.equal(malformedReplay.status, 401);
+
+        const login = await loginWithPassword(auth);
+        assert.equal(login.ok, true);
+        assert.ok(login.accessToken);
+        assert.ok(login.refreshToken);
+    });
+
+    it('rotates and revokes issued tokens', async () => {
+        const auth = await loadAuthModule();
+        await auth.initAuthStore();
+
+        const failed = await loginWithPassword(auth, 'invalid');
         assert.equal(failed.ok, false);
         assert.equal(failed.status, 401);
 
-        const login = await auth.issueAuthTokensFromPasswordHash(
-            sha256(process.env.TABMINAL_PASSWORD)
-        );
+        const login = await loginWithPassword(auth);
         assert.equal(login.ok, true);
         assert.ok(login.accessToken);
         assert.ok(login.refreshToken);
@@ -74,12 +134,27 @@ describe('auth token lifecycle', () => {
         assert.equal(afterLogout.status, 401);
     });
 
+    it('rejects expired login challenges', async () => {
+        const auth = await loadAuthModule();
+        await auth.initAuthStore();
+
+        const challenge = await auth.createAuthChallenge();
+        auth.pruneExpiredAuthChallenges(Date.parse(challenge.expiresAt) + 1);
+        const login = await auth.issueAuthTokensFromChallenge({
+            challengeId: challenge.challengeId,
+            response: auth.buildAuthChallengeResponse(
+                sha256(process.env.TABMINAL_PASSWORD),
+                challenge
+            )
+        });
+        assert.equal(login.ok, false);
+        assert.equal(login.status, 401);
+    });
+
     it('restores refresh sessions from persistence after reload', async () => {
         const firstAuth = await loadAuthModule();
         await firstAuth.initAuthStore();
-        const login = await firstAuth.issueAuthTokensFromPasswordHash(
-            sha256(process.env.TABMINAL_PASSWORD)
-        );
+        const login = await loginWithPassword(firstAuth);
         assert.equal(login.ok, true);
 
         const secondAuth = await loadAuthModule();
@@ -93,12 +168,14 @@ describe('auth token lifecycle', () => {
         const auth = await loadAuthModule();
         await auth.initAuthStore();
 
-        const first = await auth.issueAuthTokensFromPasswordHash(
-            sha256(process.env.TABMINAL_PASSWORD),
+        const first = await loginWithPassword(
+            auth,
+            process.env.TABMINAL_PASSWORD,
             { userAgent: 'First Test Browser' }
         );
-        const second = await auth.issueAuthTokensFromPasswordHash(
-            sha256(process.env.TABMINAL_PASSWORD),
+        const second = await loginWithPassword(
+            auth,
+            process.env.TABMINAL_PASSWORD,
             { userAgent: 'Second Test Browser' }
         );
         assert.equal(first.ok, true);
@@ -174,5 +251,48 @@ describe('auth token lifecycle', () => {
 
         const sessions = await auth.listAuthSessions();
         assert.deepEqual(sessions, []);
+    });
+
+    it('extracts websocket auth from subprotocol without echoing URL tokens', async () => {
+        const auth = await loadAuthModule();
+        await auth.initAuthStore();
+        const login = await loginWithPassword(auth);
+        assert.equal(login.ok, true);
+
+        const token = login.accessToken;
+        assert.equal(
+            auth.extractWebSocketAuthToken({
+                headers: {
+                    'sec-websocket-protocol': [
+                        auth.WEBSOCKET_PROTOCOL,
+                        `${auth.WEBSOCKET_AUTH_PROTOCOL_PREFIX}${token}`
+                    ].join(', ')
+                },
+                url: '/ws/session-1'
+            }),
+            token
+        );
+        assert.equal(
+            auth.extractWebSocketAuthToken({
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'sec-websocket-protocol': [
+                        auth.WEBSOCKET_PROTOCOL,
+                        `${auth.WEBSOCKET_AUTH_PROTOCOL_PREFIX}ignored`
+                    ].join(', ')
+                },
+                url: '/ws/session-1?token=ignored'
+            }),
+            token
+        );
+        assert.equal(
+            auth.extractWebSocketAuthToken({
+                headers: {
+                    host: '127.0.0.1:9846'
+                },
+                url: `/ws/session-1?token=${encodeURIComponent(token)}`
+            }),
+            token
+        );
     });
 });

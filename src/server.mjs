@@ -20,14 +20,16 @@ import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import {
     authMiddleware,
+    createAuthChallenge,
     initAuthStore,
-    issueAuthTokensFromPasswordHash,
+    issueAuthTokensFromChallenge,
     listAuthSessions,
     refreshAuthTokens,
     revokeAuthSessionById,
     revokeOtherAuthSessions,
     revokeAuthTokens,
-    verifyClient
+    verifyClient,
+    WEBSOCKET_PROTOCOL
 } from './auth.mjs';
 import {
     setupFsRoutes,
@@ -184,12 +186,22 @@ router.get('/healthz', (ctx) => {
     ctx.body = { status: 'ok' };
 });
 
+router.post('/api/auth/challenge', async (ctx) => {
+    ctx.body = await createAuthChallenge();
+});
+
 router.post('/api/auth/login', async (ctx) => {
     const body = ctx.request.body || {};
-    const passwordHash = typeof body.passwordHash === 'string'
-        ? body.passwordHash
+    const challengeId = typeof body.challengeId === 'string'
+        ? body.challengeId
         : '';
-    const result = await issueAuthTokensFromPasswordHash(passwordHash, {
+    const response = typeof body.response === 'string'
+        ? body.response
+        : '';
+    const result = await issueAuthTokensFromChallenge({
+        challengeId,
+        response
+    }, {
         userAgent: ctx.get('user-agent')
     });
     ctx.status = result.status;
@@ -765,7 +777,16 @@ app.use(router.routes());
 app.use(router.allowedMethods());
 
 const httpServer = createServer(app.callback());
-const wss = new WebSocketServer({ noServer: true, verifyClient });
+const wss = new WebSocketServer({
+    noServer: true,
+    verifyClient,
+    handleProtocols: (protocols) => {
+        if (protocols.has(WEBSOCKET_PROTOCOL)) {
+            return WEBSOCKET_PROTOCOL;
+        }
+        return false;
+    }
+});
 const httpConnections = new Set();
 
 httpServer.on('connection', (socket) => {

@@ -19,7 +19,7 @@ const {
     buildAuthStateStorageKey,
     makeSessionKey,
     splitSessionKey,
-    hashPassword
+    buildLoginChallengeResponse
 } = await import(`./modules/url-auth.js${LOCAL_MODULE_VERSION}`);
 const {
     shortenPath,
@@ -33,6 +33,8 @@ const {
 } = await import(`./modules/notifications.js${LOCAL_MODULE_VERSION}`);
 
 const DEPRECATED_AUTH_TOKEN_STORAGE_PREFIX = 'tabminal_auth_token:';
+const WEBSOCKET_PROTOCOL = 'tabminal.v1';
+const WEBSOCKET_AUTH_PROTOCOL_PREFIX = 'tabminal.auth.';
 
 function clearDeprecatedPasswordHashAuthStorage() {
     try {
@@ -1023,7 +1025,7 @@ class ServerClient {
         return new URL(path, `${this.baseUrl}/`).toString();
     }
 
-    resolveWsUrl(sessionId, token = '') {
+    resolveWsUrl(sessionId) {
         const base = new URL(this.baseUrl);
         const shouldUseSecureWs = (
             base.protocol === 'https:'
@@ -1031,13 +1033,10 @@ class ServerClient {
         );
         const wsProtocol = shouldUseSecureWs ? 'wss:' : 'ws:';
         const wsUrl = new URL(`/ws/${sessionId}`, `${wsProtocol}//${base.host}`);
-        if (token) {
-            wsUrl.searchParams.set('token', token);
-        }
         return wsUrl.toString();
     }
 
-    resolveAgentWsUrl(tabId, token = '') {
+    resolveAgentWsUrl(tabId) {
         const base = new URL(this.baseUrl);
         const shouldUseSecureWs = (
             base.protocol === 'https:'
@@ -1048,18 +1047,40 @@ class ServerClient {
             `/ws/agents/${tabId}`,
             `${wsProtocol}//${base.host}`
         );
-        if (token) {
-            wsUrl.searchParams.set('token', token);
-        }
         return wsUrl.toString();
     }
 
+    getWebSocketProtocols() {
+        return this.token
+            ? [
+                WEBSOCKET_PROTOCOL,
+                `${WEBSOCKET_AUTH_PROTOCOL_PREFIX}${this.token}`
+            ]
+            : [WEBSOCKET_PROTOCOL];
+    }
+
     async login(password) {
-        const passwordHash = await hashPassword(password);
+        const challengeResponse = await this.fetchWithoutAuth(
+            '/api/auth/challenge',
+            {
+                method: 'POST'
+            }
+        );
+        if (!challengeResponse.ok) {
+            throw new Error('Unable to start authentication.');
+        }
+        const challenge = await challengeResponse.json();
+        const responseValue = await buildLoginChallengeResponse(
+            password,
+            challenge
+        );
         const response = await this.fetchWithoutAuth('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ passwordHash })
+            body: JSON.stringify({
+                challengeId: challenge.challengeId || '',
+                response: responseValue
+            })
         });
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
@@ -9512,12 +9533,12 @@ class Session {
                 return;
             }
 
-            const endpoint = this.server.resolveWsUrl(
-                this.id,
-                this.server.token
-            );
+            const endpoint = this.server.resolveWsUrl(this.id);
             try {
-                this.socket = new WebSocket(endpoint);
+                this.socket = new WebSocket(
+                    endpoint,
+                    this.server.getWebSocketProtocols()
+                );
             } catch (error) {
                 const hostName = getDisplayHost(this.server);
                 console.error(`[WS] Failed to connect ${hostName}:`, error);
@@ -10088,11 +10109,11 @@ class AgentTab {
                 return;
             }
 
-            const endpoint = this.server.resolveAgentWsUrl(
-                this.id,
-                this.server.token
+            const endpoint = this.server.resolveAgentWsUrl(this.id);
+            this.socket = new WebSocket(
+                endpoint,
+                this.server.getWebSocketProtocols()
             );
-            this.socket = new WebSocket(endpoint);
             this.socket.addEventListener('message', (event) => {
                 try {
                     this.handleMessage(JSON.parse(event.data));

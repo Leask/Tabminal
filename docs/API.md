@@ -56,8 +56,9 @@ There are two websocket namespaces:
 
 ## 3. Authentication
 
-All API routes except `/healthz`, `/api/version`, `/api/auth/login`,
-`/api/auth/refresh`, and `/api/auth/logout` require authentication.
+All API routes except `/healthz`, `/api/version`, `/api/auth/challenge`,
+`/api/auth/login`, `/api/auth/refresh`, and `/api/auth/logout` require
+authentication.
 
 ### 3.1 Login and session model
 
@@ -75,14 +76,34 @@ Current defaults:
 
 Login flow:
 
-1. client computes `SHA-256(password)` locally
-2. client calls `POST /api/auth/login`
-3. server compares that hash to the configured password hash
-4. server returns `accessToken`, `accessTokenExpiresAt`, `refreshToken`, and
+1. client calls `POST /api/auth/challenge`
+2. server returns a one-time `challengeId`, `salt`, `expiresAt`, and
+   `algorithm`
+3. client computes `SHA-256(password)` locally
+4. client computes an HMAC-SHA256 response using that password hash as the key
+5. client calls `POST /api/auth/login` with `challengeId` and `response`
+6. server consumes the challenge, recomputes the HMAC using its configured
+   password hash, and compares the response using a timing-safe comparison
+7. server returns `accessToken`, `accessTokenExpiresAt`, `refreshToken`, and
    `refreshTokenExpiresAt`
 
-The browser does not persist the password hash. The hash is accepted only as a
-login credential and must not be used as an API bearer token.
+The browser does not persist the password hash. Login requests also do not send
+the reusable password hash; they send only a one-time challenge response.
+
+Challenge response construction:
+
+```text
+passwordHash = SHA-256(password)
+message = "tabminal-login-v1:" + challengeId + ":" + salt + ":" + expiresAt
+response = HMAC-SHA256(key = passwordHash, message)
+```
+
+Challenge properties:
+
+- challenge lifetime: `30 seconds`
+- every challenge is single-use
+- a challenge is destroyed on every login attempt, whether successful or failed
+- expired unused challenges are cleaned up server-side
 
 ### 3.2 Access token transport
 
@@ -91,11 +112,17 @@ Accepted forms:
 - HTTP header: `Authorization: Bearer <access-token>`
 - HTTP header: `Authorization: <access-token>`
 - HTTP query: `?token=<access-token>`
-- WebSocket query: `?token=<access-token>`
 - WebSocket header: `Authorization: Bearer <access-token>`
+- WebSocket subprotocol:
+  `Sec-WebSocket-Protocol: tabminal.v1, tabminal.auth.<access-token>`
+- WebSocket query: `?token=<access-token>` is accepted only as a legacy
+  compatibility path
 
-Browser websocket clients generally use the query-param form because browser
-WebSocket construction does not allow arbitrary auth headers.
+Browser websocket clients should use the `Sec-WebSocket-Protocol` form because
+browser WebSocket construction does not allow arbitrary auth headers and URL
+query strings are commonly captured by logs and diagnostics. The server selects
+only `tabminal.v1` in the WebSocket response and never echoes the token-bearing
+protocol value.
 
 ### 3.3 Refresh token handling
 
@@ -116,13 +143,29 @@ Lockout is cleared only by restarting the service.
 
 ### 3.5 Auth endpoints
 
+#### `POST /api/auth/challenge`
+
+Request body is empty.
+
+Success response:
+
+```json
+{
+  "challengeId": "<uuid>",
+  "salt": "<base64url-random>",
+  "expiresAt": "2026-04-10T15:00:30.000Z",
+  "algorithm": "tabminal-hmac-sha256-login-v1"
+}
+```
+
 #### `POST /api/auth/login`
 
 Request:
 
 ```json
 {
-  "passwordHash": "<sha256-hex>"
+  "challengeId": "<uuid>",
+  "response": "<hmac-sha256-hex>"
 }
 ```
 
@@ -139,7 +182,9 @@ Success response:
 
 Failure responses:
 
+- `400 Invalid login challenge`
 - `401 Unauthorized`
+- `401 Login challenge expired. Please try again.`
 - `403 Service locked due to too many failed attempts. Please restart the service.`
 
 #### `POST /api/auth/refresh`
@@ -1037,10 +1082,25 @@ Response:
 
 Endpoint:
 
-- `/ws/:sessionId?token=<access-token>`
+- `/ws/:sessionId`
 
-Browser clients use the query param because browser WebSocket construction does
-not let them set arbitrary auth headers.
+Browser clients authenticate with WebSocket subprotocols:
+
+```js
+new WebSocket('/ws/<sessionId>', [
+  'tabminal.v1',
+  'tabminal.auth.<access-token>'
+]);
+```
+
+The server response selects only:
+
+```text
+Sec-WebSocket-Protocol: tabminal.v1
+```
+
+`?token=<access-token>` remains accepted as a legacy compatibility path, but
+new clients should not use it.
 
 ### 13.1 Connection behavior
 
@@ -1197,10 +1257,13 @@ Server responds with:
 
 Endpoint:
 
-- `/ws/agents/:tabId?token=<access-token>`
+- `/ws/agents/:tabId`
 
 The agent websocket is currently server-to-client only for transcript and tab
 realtime updates. Prompt submission and command actions stay on HTTP.
+
+Authentication uses the same WebSocket subprotocol contract as terminal
+websockets.
 
 ### 14.1 Initial message
 
