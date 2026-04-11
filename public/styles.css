@@ -482,7 +482,7 @@ body {
 }
 
 .server-row.has-auth-sessions .server-main-button {
-    padding-right: 42px;
+    padding-right: 48px;
 }
 
 .server-main-button:hover {
@@ -544,8 +544,8 @@ body {
 
 .server-auth-button {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    top: 8px;
+    right: 8px;
     width: 28px;
     height: 28px;
     border-radius: 4px;
