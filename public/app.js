@@ -442,6 +442,7 @@ function buildTerminalBaseOptions(overrides = {}) {
         convertEol: true,
         fontFamily: TERMINAL_FONT_FAMILY,
         fontSize: getTerminalFontSize(),
+        lineHeight: 1.25,
         fontWeight: '450',
         fontWeightBold: '700',
         customGlyphs: true,
