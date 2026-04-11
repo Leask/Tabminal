@@ -480,6 +480,21 @@ ${buildExitSequence(0, 'echo hi')}`);
         assert.match(session.lastExecution.output, /command not found/);
     });
 
+    it('does not auto-fix failed markers without captured input', async () => {
+        session = new TerminalSession(pty);
+        session._isAiEnabled = () => true;
+        session._promptAi = mock.fn(async () => ({ text: 'ignored' }));
+
+        pty.emitData(buildExitSequence(127, 'previous_bad_command'));
+        await Promise.resolve();
+
+        assert.ok(session.lastExecution);
+        assert.strictEqual(session.lastExecution.command, 'previous_bad_command');
+        assert.strictEqual(session.lastExecution.exitCode, 127);
+        assert.strictEqual(session.lastExecution.input, '');
+        assert.strictEqual(session._promptAi.mock.callCount(), 0);
+    });
+
     it('cancels an active AI response with Ctrl+C', async () => {
         session = new TerminalSession(pty);
         session._isAiEnabled = () => true;

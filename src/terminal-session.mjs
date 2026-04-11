@@ -1001,7 +1001,9 @@ export class TerminalSession {
         });
 
         // Auto-Fix: If command failed, ask AI for help
-        if (exitCode !== 0 && entry.command && this._isAiEnabled()) {
+        const hasCapturedInput =
+            typeof entry.input === 'string' && entry.input.trim().length > 0;
+        if (exitCode !== 0 && entry.command && hasCapturedInput && this._isAiEnabled()) {
             // Don't trigger on simple interruptions (SIGINT=130) or common non-errors?
             // 130 = Ctrl+C. Usually user intention.
             if (exitCode !== 130) {
