@@ -9800,7 +9800,15 @@ class Session {
 
         const textarea = this.mainTerm.textarea
             || root.querySelector('textarea');
-        const handler = () => this.claimTerminalControl();
+        const handler = (event) => {
+            this.claimTerminalControl();
+            if (
+                event?.type === 'touchstart'
+                && this.isMainTerminalVisible()
+            ) {
+                this.mainTerm.focus();
+            }
+        };
 
         root.addEventListener('mousedown', handler, true);
         root.addEventListener('touchstart', handler, true);
