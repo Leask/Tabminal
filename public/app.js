@@ -139,8 +139,8 @@ const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
 const FILE_TREE_REFRESH_INTERVAL_MS = 3000;
 const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
-const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 100;
-const AGENT_TRANSCRIPT_WINDOW_STEP = 50;
+const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 30;
+const AGENT_TRANSCRIPT_WINDOW_STEP = 10;
 const AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE = 5;
 const AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS = 300;
 const AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS = 300;
@@ -9485,6 +9485,9 @@ class Session {
             if (progressLabel) {
                 metaProgressEl.textContent = progressLabel;
                 metaProgressEl.hidden = false;
+                if (metaTimeEl) {
+                    metaTimeEl.hidden = true;
+                }
                 const tone = getTerminalProgressTone(this.terminalProgress);
                 if (tone) {
                     metaProgressEl.dataset.tone = tone;
@@ -9494,6 +9497,9 @@ class Session {
             } else {
                 metaProgressEl.textContent = '';
                 metaProgressEl.hidden = true;
+                if (metaTimeEl) {
+                    metaTimeEl.hidden = false;
+                }
                 delete metaProgressEl.dataset.tone;
             }
         }
