@@ -776,16 +776,31 @@ export function buildTerminalSpawnRequest(request = {}) {
     };
 }
 
+function isLikelyReplayTextFragment(value) {
+    const text = String(value || '');
+    return text.length >= 3 && /[\p{L}\p{N}]/u.test(text);
+}
+
 export function mergeAgentMessageText(previousText, chunkText) {
     const previous = String(previousText || '');
     const chunk = String(chunkText || '');
     if (!previous) return chunk;
     if (!chunk) return previous;
-    if (previous === chunk) return previous;
-    if (chunk.startsWith(previous)) {
+    if (previous === chunk) {
+        return isLikelyReplayTextFragment(chunk)
+            ? previous
+            : `${previous}${chunk}`;
+    }
+    if (
+        chunk.startsWith(previous)
+        && isLikelyReplayTextFragment(previous)
+    ) {
         return chunk;
     }
-    if (previous.startsWith(chunk)) {
+    if (
+        previous.startsWith(chunk)
+        && isLikelyReplayTextFragment(chunk)
+    ) {
         return previous;
     }
 
@@ -803,8 +818,8 @@ export function mergeAgentMessageText(previousText, chunkText) {
     const previousLast = previous.slice(-1);
     const chunkFirst = chunk[0] || '';
     if (
-        /[.!?`'")\]]/.test(previousLast)
-        && /[A-Z`"'[(]/.test(chunkFirst)
+        /[.!?'")\]]/.test(previousLast)
+        && /[A-Z"'[(]/.test(chunkFirst)
     ) {
         return `${previous}\n\n${chunk}`;
     }

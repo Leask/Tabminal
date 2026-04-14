@@ -2708,6 +2708,25 @@ describe('AcpManager', () => {
         );
     });
 
+    it('preserves markdown fences split across stream chunks', () => {
+        assert.equal(
+            mergeAgentMessageText('```text\nx\n``', '`\n\nnext'),
+            '```text\nx\n```\n\nnext'
+        );
+        assert.equal(
+            mergeAgentMessageText('`', '`'),
+            '``'
+        );
+        assert.equal(
+            mergeAgentMessageText('``', '`'),
+            '```'
+        );
+        assert.equal(
+            mergeAgentMessageText('`', '``'),
+            '```'
+        );
+    });
+
     it('deduplicates cumulative assistant chunks', () => {
         assert.equal(
             mergeAgentMessageText('Alpha', 'Alpha Beta'),
