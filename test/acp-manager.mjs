@@ -2151,6 +2151,16 @@ describe('AcpManager', () => {
                 const current = state.tabs.find((entry) => entry.id === tab.id);
                 return current?.busy ? current : null;
             });
+            await waitForValue(() => events.find((event) => (
+                (
+                    event.type === 'message_open'
+                    && event.message?.streamKey === 'cancel-smoke'
+                )
+                || (
+                    event.type === 'message_chunk'
+                    && event.streamKey === 'cancel-smoke'
+                )
+            )), 12000);
 
             await manager.cancel(tab.id);
 
@@ -2158,7 +2168,8 @@ describe('AcpManager', () => {
                 () => events.find((event) => (
                     event.type === 'complete'
                     && event.stopReason === 'cancelled'
-                ))
+                )),
+                12000
             );
             assert.equal(completedEvent.status, 'ready');
 
