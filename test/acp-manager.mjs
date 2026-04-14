@@ -313,6 +313,42 @@ class FakeRuntime extends EventEmitter {
         return { ...tab };
     }
 
+    async resumeIntoTab(tabId, meta) {
+        if (this.resumeDelayMs > 0) {
+            await new Promise((resolve) => {
+                setTimeout(resolve, this.resumeDelayMs);
+            });
+        }
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        const existingTab = Array.from(this.tabs.values()).find(
+            (entry) => (
+                entry.id !== tabId
+                && entry.acpSessionId === meta.acpSessionId
+            )
+        );
+        if (existingTab) {
+            throw new Error('Session is already open');
+        }
+        tab.acpSessionId = meta.acpSessionId;
+        tab.terminalSessionId = meta.terminalSessionId || '';
+        tab.cwd = meta.cwd;
+        tab.title = meta.title || 'Previous run';
+        tab.createdAt = '2026-03-28T00:00:00.000Z';
+        tab.status = 'ready';
+        tab.busy = false;
+        tab.messages = [];
+        tab.toolCalls = [];
+        tab.permissions = [];
+        tab.plan = [];
+        tab.usage = null;
+        tab.terminals = [];
+        this.resumedTabs.push(meta.acpSessionId);
+        return { ...tab };
+    }
+
     attachSocket() {
         return true;
     }
@@ -1148,6 +1184,32 @@ describe('AcpManager', () => {
         assert.equal(tab.acpSessionId, 'hist-1');
         assert.equal(tab.terminalSessionId, 'term-1');
         assert.equal(tab.title, 'Previous run');
+        assert.equal(getPersistedTabs().length, 1);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
+    });
+
+    it('resumes a historical session into an existing tab', async () => {
+        const { manager, getPersistedTabs } = createManager();
+
+        const original = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1'
+        });
+        const resumed = await manager.resumeTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1',
+            sessionId: 'hist-1',
+            targetTabId: original.id,
+            title: 'Previous run'
+        });
+
+        assert.equal(resumed.id, original.id);
+        assert.equal(resumed.acpSessionId, 'hist-1');
+        assert.equal(resumed.title, 'Previous run');
+        assert.equal(manager.tabs.size, 1);
         assert.equal(getPersistedTabs().length, 1);
         const runtimeEntry = manager.runtimes.values().next().value;
         assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);

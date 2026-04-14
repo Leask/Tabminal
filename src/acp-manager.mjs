@@ -2733,6 +2733,108 @@ class AcpRuntime extends EventEmitter {
         }
     }
 
+    #resetTabForSessionLoad(tab, meta) {
+        tab.acpSessionId = String(meta.acpSessionId || '').trim();
+        tab.terminalSessionId = meta.terminalSessionId || tab.terminalSessionId;
+        tab.cwd = meta.cwd || tab.cwd;
+        tab.createdAt = new Date().toISOString();
+        tab.title = meta.title || '';
+        tab.status = 'restoring';
+        tab.busy = true;
+        tab.errorMessage = '';
+        tab.messages = [];
+        tab.toolCalls = new Map();
+        tab.permissions = new Map();
+        tab.syntheticStreams = new Map();
+        tab.syntheticStreamTurn = 0;
+        tab.pendingUserEcho = null;
+        tab.plan = [];
+        tab.usage = null;
+        tab.terminals = new Map();
+        tab.messageCounter = 0;
+        tab.timelineCounter = 0;
+        tab.currentModeId = '';
+        tab.availableModes = [];
+        tab.availableCommands = [];
+        tab.configOptions = [];
+        tab.restoreCapture = createRestoreCaptureState([]);
+        tab.restoreCapture.nextTimelineOrder = () =>
+            this.#nextTimelineOrder(tab);
+    }
+
+    #restoreSerializedTab(tab, snapshot) {
+        tab.acpSessionId = snapshot.acpSessionId;
+        tab.terminalSessionId = snapshot.terminalSessionId || '';
+        tab.cwd = snapshot.cwd || tab.cwd;
+        tab.createdAt = snapshot.createdAt || tab.createdAt;
+        tab.status = snapshot.status || 'ready';
+        tab.busy = !!snapshot.busy;
+        tab.errorMessage = snapshot.errorMessage || '';
+        tab.syntheticStreams = new Map();
+        tab.pendingUserEcho = null;
+        tab.restoreCapture = null;
+        restorePersistedTabSnapshot(tab, snapshot);
+    }
+
+    async resumeIntoTab(tabId, meta) {
+        await this.start();
+        this.clearIdleShutdown();
+
+        const sessionCapabilities = this.#getSessionCapabilities();
+        if (!sessionCapabilities.load) {
+            throw new Error(
+                `${this.definition.label} does not support session restore`
+            );
+        }
+
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        if (tab.busy) {
+            throw new Error('Agent tab is already running');
+        }
+
+        const targetSessionId = String(meta.acpSessionId || '').trim();
+        if (!targetSessionId) {
+            throw new Error('sessionId is required');
+        }
+        const existingTabId = this.sessionToTabId.get(targetSessionId);
+        if (existingTabId && existingTabId !== tab.id) {
+            throw new Error('Session is already open');
+        }
+
+        const previousSnapshot = this.serializeTab(tab);
+        this.sessionToTabId.delete(tab.acpSessionId);
+        this.#resetTabForSessionLoad(tab, {
+            ...meta,
+            acpSessionId: targetSessionId
+        });
+        this.sessionToTabId.set(tab.acpSessionId, tab.id);
+        this.#broadcast(tab, {
+            type: 'snapshot',
+            tab: this.serializeTab(tab)
+        });
+
+        try {
+            await this.#loadSessionIntoTab(tab, meta);
+            this.#broadcast(tab, {
+                type: 'snapshot',
+                tab: this.serializeTab(tab)
+            });
+            return this.serializeTab(tab);
+        } catch (error) {
+            this.sessionToTabId.delete(tab.acpSessionId);
+            this.#restoreSerializedTab(tab, previousSnapshot);
+            this.sessionToTabId.set(tab.acpSessionId, tab.id);
+            this.#broadcast(tab, {
+                type: 'snapshot',
+                tab: this.serializeTab(tab)
+            });
+            throw error;
+        }
+    }
+
     async #loadSessionIntoTab(tab, meta) {
         try {
             const response = await this.connection.loadSession({
@@ -4580,6 +4682,43 @@ export class AcpManager {
         }
 
         const cwd = path.resolve(options.cwd || process.cwd());
+        const targetTabId = String(options.targetTabId || '').trim();
+        if (targetTabId) {
+            const tabEntry = this.tabs.get(targetTabId);
+            if (!tabEntry) {
+                throw new Error('Agent tab not found');
+            }
+            const currentSerialized = tabEntry.serialize();
+            if (currentSerialized.agentId !== definition.id) {
+                throw new Error('Agent mismatch');
+            }
+            const resumePromise = (async () => {
+                const rawSerialized = await tabEntry.runtime.resumeIntoTab(
+                    targetTabId,
+                    {
+                        acpSessionId: options.sessionId,
+                        cwd,
+                        terminalSessionId: options.terminalSessionId || '',
+                        title: options.title || ''
+                    }
+                );
+                const serialized = this.#applyRuntimeMetadataFallback(
+                    tabEntry.runtime,
+                    rawSerialized
+                );
+                this.#clearDefinitionAvailabilityOverride(definition.id);
+                await this.persistTabs();
+                return serialized;
+            })();
+            this.pendingResumeTabs.set(resumeKey, resumePromise);
+
+            try {
+                return await resumePromise;
+            } finally {
+                this.pendingResumeTabs.delete(resumeKey);
+            }
+        }
+
         const { runtimeEntry, createdRuntime, runtimeStoreKey } =
             this.#ensureRuntimeEntry(definition, cwd);
         const tabId = crypto.randomUUID();

@@ -14757,6 +14757,7 @@ async function resumeAgentTabFromHistory(session, agentTab, historySession) {
                 cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
                 terminalSessionId: session.id,
                 sessionId: historySession.sessionId,
+                targetTabId: agentTab.id,
                 title: historySession.title || ''
             })
         });

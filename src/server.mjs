@@ -615,7 +615,7 @@ router.post('/api/agents/tabs', async (ctx) => {
 });
 
 router.post('/api/agents/tabs/resume', async (ctx) => {
-    const { agentId, cwd, terminalSessionId, sessionId, title } =
+    const { agentId, cwd, terminalSessionId, sessionId, targetTabId, title } =
         ctx.request.body || {};
     if (!agentId || typeof agentId !== 'string') {
         ctx.status = 400;
@@ -639,6 +639,7 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
             agentId,
             cwd,
             sessionId,
+            targetTabId: typeof targetTabId === 'string' ? targetTabId : '',
             title: typeof title === 'string' ? title : '',
             terminalSessionId: typeof terminalSessionId === 'string'
                 ? terminalSessionId
