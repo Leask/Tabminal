@@ -277,8 +277,20 @@
             }
 
             const runtimeStorageKey = 'tabminal_runtime_boot_id';
+            const bootRetryStorageKey = 'tabminal_boot_retry_state';
             const versionApiUrl = './api/version';
             const runtimeVersionTimeoutMs = 3000;
+            const bootWatchdogTimeoutMs = 25000;
+            const bootRecoveryProbeIntervalMs = 15000;
+            const bootRecoveryReloadDelayMs = 1200;
+            const bootRetryWindowMs = 90000;
+            const bootMaxReloadsPerWindow = 3;
+            window.__tabminalBootState = {
+                status: 'pending',
+                startedAt: Date.now(),
+                assetKey: '',
+                error: ''
+            };
             const readStoredRuntimeBootId = () => {
                 try {
                     return localStorage.getItem(runtimeStorageKey) || '';
@@ -297,6 +309,159 @@
                 return readStoredRuntimeBootId() || `cold-${Date.now()}`;
             };
             window.__tabminalRuntimeAssetKey = getStartupFallbackAssetKey();
+            window.__tabminalBootState.assetKey =
+                window.__tabminalRuntimeAssetKey;
+
+            const readBootRetryState = () => {
+                try {
+                    const parsed = JSON.parse(
+                        sessionStorage.getItem(bootRetryStorageKey) || '{}'
+                    );
+                    if (!parsed || typeof parsed !== 'object') {
+                        return { firstAt: 0, count: 0 };
+                    }
+                    return {
+                        firstAt: Number.isFinite(parsed.firstAt)
+                            ? parsed.firstAt
+                            : 0,
+                        count: Number.isFinite(parsed.count)
+                            ? parsed.count
+                            : 0
+                    };
+                } catch {
+                    return { firstAt: 0, count: 0 };
+                }
+            };
+
+            const writeBootRetryState = (state) => {
+                try {
+                    sessionStorage.setItem(
+                        bootRetryStorageKey,
+                        JSON.stringify(state)
+                    );
+                } catch {
+                    // Ignore storage failures; the watchdog can still probe.
+                }
+            };
+
+            const clearBootRetryState = () => {
+                try {
+                    sessionStorage.removeItem(bootRetryStorageKey);
+                } catch {
+                    // Ignore storage failures.
+                }
+            };
+
+            const canReloadForBootFailure = () => {
+                const now = Date.now();
+                const retryState = readBootRetryState();
+                const firstAt = (
+                    retryState.firstAt
+                    && now - retryState.firstAt <= bootRetryWindowMs
+                )
+                    ? retryState.firstAt
+                    : now;
+                const count = firstAt === retryState.firstAt
+                    ? retryState.count
+                    : 0;
+                if (count >= bootMaxReloadsPerWindow) {
+                    return false;
+                }
+                writeBootRetryState({
+                    firstAt,
+                    count: count + 1
+                });
+                return true;
+            };
+
+            const probeRuntimeReachable = async () => {
+                const controller = (
+                    typeof AbortController === 'function'
+                        ? new AbortController()
+                        : null
+                );
+                const timeoutId = window.setTimeout(() => {
+                    if (controller) {
+                        controller.abort();
+                    }
+                }, runtimeVersionTimeoutMs);
+                try {
+                    const response = await fetch(versionApiUrl, {
+                        method: 'GET',
+                        cache: 'no-store',
+                        credentials: 'same-origin',
+                        headers: {
+                            'accept': 'application/json'
+                        },
+                        signal: controller?.signal
+                    });
+                    return response.ok;
+                } catch {
+                    return false;
+                } finally {
+                    window.clearTimeout(timeoutId);
+                }
+            };
+
+            const scheduleBootRecovery = (() => {
+                let timer = 0;
+                return (reason, delay = bootRecoveryReloadDelayMs) => {
+                    const state = window.__tabminalBootState;
+                    if (!state || state.status === 'success') {
+                        return;
+                    }
+                    state.status = 'recovering';
+                    state.error = String(reason || 'boot timeout');
+                    if (timer) {
+                        return;
+                    }
+                    timer = window.setTimeout(async () => {
+                        timer = 0;
+                        if (state.status === 'success') {
+                            return;
+                        }
+                        const reachable = await probeRuntimeReachable();
+                        if (!reachable) {
+                            scheduleBootRecovery(
+                                'runtime unavailable',
+                                bootRecoveryProbeIntervalMs
+                            );
+                            return;
+                        }
+                        if (!canReloadForBootFailure()) {
+                            state.status = 'failed';
+                            console.warn(
+                                '[Boot] App shell failed after repeated reloads.',
+                                state.error
+                            );
+                            return;
+                        }
+                        window.location.reload();
+                    }, delay);
+                };
+            })();
+
+            window.__tabminalMarkBootSuccess = () => {
+                const state = window.__tabminalBootState;
+                if (state) {
+                    state.status = 'success';
+                    state.completedAt = Date.now();
+                    state.error = '';
+                }
+                clearBootRetryState();
+            };
+
+            window.__tabminalMarkBootFailure = (reason) => {
+                scheduleBootRecovery(reason || 'boot failure');
+            };
+
+            window.setTimeout(() => {
+                const state = window.__tabminalBootState;
+                if (!state || state.status === 'success') {
+                    return;
+                }
+                scheduleBootRecovery('boot watchdog timeout');
+            }, bootWatchdogTimeoutMs);
 
             window.__tabminalResolveRuntimeVersion = (() => {
                 let promise = null;
@@ -704,10 +869,20 @@
             const link = document.createElement('link');
             link.rel = 'stylesheet';
             link.href = `./styles.css?v=${encodeURIComponent(runtimeBootId)}`;
+            link.onerror = () => {
+                if (window.__tabminalMarkBootFailure) {
+                    window.__tabminalMarkBootFailure('stylesheet load failed');
+                }
+            };
             document.head.appendChild(link);
             const script = document.createElement('script');
             script.type = 'module';
             script.src = `./app.js?v=${encodeURIComponent(runtimeBootId)}`;
+            script.onerror = () => {
+                if (window.__tabminalMarkBootFailure) {
+                    window.__tabminalMarkBootFailure('app module load failed');
+                }
+            };
             document.body.appendChild(script);
         })();
 

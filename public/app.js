@@ -17967,7 +17967,20 @@ document.addEventListener('keydown', (e) => {
 }, true); // Use capture phase to override editor/terminal
 
 
+async function bootApp() {
+    try {
+        bootstrapServers();
+        await initApp();
+        window.__tabminalMarkBootSuccess?.();
+    } catch (error) {
+        console.error('[Boot] Failed to start Tabminal:', error);
+        window.__tabminalMarkBootFailure?.(
+            error?.message || 'app initialization failed'
+        );
+        throw error;
+    }
+}
+
 // Start the app
-bootstrapServers();
-initApp();
+void bootApp();
 // #endregion

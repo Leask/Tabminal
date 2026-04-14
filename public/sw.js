@@ -1,16 +1,36 @@
 const WORKER_VERSION = new URL(self.location.href).searchParams.get('rt') || 'stable';
 const CACHE_NAME = `tabminal-cache-${WORKER_VERSION}`;
+const versioned = (path) => `${path}?v=${encodeURIComponent(WORKER_VERSION)}`;
 const STATIC_ASSETS = [
+    '/',
+    '/index.html',
     '/favicon.svg',
+    '/favicon_adaptive.svg',
     '/manifest.json',
-    '/apple-touch-icon.png'
+    '/apple-touch-icon.png',
+    '/android-chrome-192x192.png',
+    '/android-chrome-192x192-any.png',
+    '/android-chrome-512x512.png',
+    '/android-chrome-512x512-any.png',
+    '/fonts/MonaspaceNeon-Regular.woff2',
+    '/fonts/MonaspaceNeon-Bold.woff2',
+    '/icons/map.json'
+];
+const VERSIONED_APP_ASSETS = [
+    versioned('/styles.css'),
+    versioned('/app.js'),
+    versioned('/modules/notifications.js'),
+    versioned('/modules/session-meta.js'),
+    versioned('/modules/url-auth.js')
 ];
 
 async function networkFirst(request) {
     const cache = await caches.open(CACHE_NAME);
     try {
         const response = await fetch(request);
-        cache.put(request, response.clone());
+        if (response.ok) {
+            cache.put(request, response.clone());
+        }
         return response;
     } catch (_err) {
         const cached = await cache.match(request);
@@ -24,15 +44,27 @@ async function cacheFirst(request) {
     const cached = await cache.match(request);
     if (cached) return cached;
     const response = await fetch(request);
-    cache.put(request, response.clone());
+    if (response.ok) {
+        cache.put(request, response.clone());
+    }
     return response;
+}
+
+async function addAllSettled(cache, assets) {
+    await Promise.allSettled(
+        assets.map((asset) => cache.add(asset))
+    );
 }
 
 self.addEventListener('install', event => {
     self.skipWaiting();
-    event.waitUntil(
-        caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC_ASSETS))
-    );
+    event.waitUntil((async () => {
+        const cache = await caches.open(CACHE_NAME);
+        await addAllSettled(cache, [
+            ...STATIC_ASSETS,
+            ...VERSIONED_APP_ASSETS
+        ]);
+    })());
 });
 
 self.addEventListener('activate', event => {
@@ -81,8 +113,23 @@ self.addEventListener('fetch', event => {
         || url.pathname === '/sw.js'
         || url.pathname.startsWith('/modules/')
     );
+    const isVersionedAppShell = (
+        isAppShell
+        && (
+            url.searchParams.get('v') === WORKER_VERSION
+            || url.searchParams.get('rt') === WORKER_VERSION
+        )
+    );
 
-    if (isDocument || isAppShell) {
+    if (isDocument) {
+        event.respondWith(networkFirst(request));
+        return;
+    }
+    if (isVersionedAppShell) {
+        event.respondWith(cacheFirst(request));
+        return;
+    }
+    if (isAppShell) {
         event.respondWith(networkFirst(request));
         return;
     }
