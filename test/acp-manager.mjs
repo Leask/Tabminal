@@ -42,6 +42,7 @@ class FakeRuntime extends EventEmitter {
         this.restoredTabs = [];
         this.listRequests = [];
         this.resumedTabs = [];
+        this.resumeDelayMs = options.resumeDelayMs || 0;
         this.sessionCapabilities = {
             load: true,
             list: true,
@@ -258,6 +259,11 @@ class FakeRuntime extends EventEmitter {
     }
 
     async resumeTab(meta) {
+        if (this.resumeDelayMs > 0) {
+            await new Promise((resolve) => {
+                setTimeout(resolve, this.resumeDelayMs);
+            });
+        }
         const tab = {
             id: meta.id,
             runtimeId: this.runtimeId,
@@ -818,12 +824,15 @@ describe('AcpManager', () => {
         );
     });
 
-    function createManager() {
+    function createManager(options = {}) {
         let persistedTabs = [];
         let persistedConfigs = {};
         const manager = new AcpManager({
-            runtimeFactory: (definition, options) =>
-                new FakeRuntime(definition, options),
+            runtimeFactory: (definition, runtimeOptions) =>
+                new FakeRuntime(definition, {
+                    ...runtimeOptions,
+                    ...(options.fakeRuntimeOptions || {})
+                }),
             loadTabs: async () => persistedTabs,
             saveTabs: async (tabs) => {
                 persistedTabs = structuredClone(tabs);
@@ -1161,6 +1170,37 @@ describe('AcpManager', () => {
             sessionId: 'hist-1',
             title: 'Duplicate open'
         });
+
+        assert.equal(second.id, first.id);
+        assert.equal(manager.tabs.size, 1);
+        assert.equal(getPersistedTabs().length, 1);
+        const runtimeEntry = manager.runtimes.values().next().value;
+        assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
+    });
+
+    it('coalesces concurrent resume requests for the same ACP session', async () => {
+        const { manager, getPersistedTabs } = createManager({
+            fakeRuntimeOptions: {
+                resumeDelayMs: 20
+            }
+        });
+
+        const [first, second] = await Promise.all([
+            manager.resumeTab({
+                agentId: 'codex',
+                cwd: '/tmp/project',
+                terminalSessionId: 'term-1',
+                sessionId: 'hist-1',
+                title: 'Previous run'
+            }),
+            manager.resumeTab({
+                agentId: 'codex',
+                cwd: '/tmp/other-project',
+                terminalSessionId: 'term-2',
+                sessionId: 'hist-1',
+                title: 'Duplicate open'
+            })
+        ]);
 
         assert.equal(second.id, first.id);
         assert.equal(manager.tabs.size, 1);

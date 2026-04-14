@@ -3890,6 +3890,7 @@ export class AcpManager {
         this.loadConfigs = options.loadConfigs || persistence.loadAgentConfigs;
         this.saveConfigs = options.saveConfigs || persistence.saveAgentConfigs;
         this.persistenceChain = Promise.resolve();
+        this.pendingResumeTabs = new Map();
         this.transcriptPersistDelayMs = options.transcriptPersistDelayMs
             || DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS;
         this.persistTabsTimer = null;
@@ -4569,12 +4570,21 @@ export class AcpManager {
             return existingTab;
         }
 
+        const resumeKey = [
+            definition.id,
+            String(options.sessionId || '').trim()
+        ].join('\0');
+        const pendingResume = this.pendingResumeTabs.get(resumeKey);
+        if (pendingResume) {
+            return await pendingResume;
+        }
+
         const cwd = path.resolve(options.cwd || process.cwd());
         const { runtimeEntry, createdRuntime, runtimeStoreKey } =
             this.#ensureRuntimeEntry(definition, cwd);
         const tabId = crypto.randomUUID();
 
-        try {
+        const resumePromise = (async () => {
             const rawSerialized = await runtimeEntry.runtime.resumeTab({
                 id: tabId,
                 acpSessionId: options.sessionId,
@@ -4603,6 +4613,11 @@ export class AcpManager {
             this.#clearDefinitionAvailabilityOverride(definition.id);
             await this.persistTabs();
             return tabEntry.serialize();
+        })();
+        this.pendingResumeTabs.set(resumeKey, resumePromise);
+
+        try {
+            return await resumePromise;
         } catch (error) {
             const shouldDisposeRuntime = createdRuntime
                 || runtimeEntry.runtime.tabs.size === 0;
@@ -4610,6 +4625,8 @@ export class AcpManager {
                 await this.#disposeRuntimeEntry(runtimeStoreKey, runtimeEntry);
             }
             throw error;
+        } finally {
+            this.pendingResumeTabs.delete(resumeKey);
         }
     }
 

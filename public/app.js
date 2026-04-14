@@ -8213,6 +8213,14 @@ class EditorManager {
             if (!agentTab) return;
             const session = agentTab.getLinkedSession();
             if (!session) return;
+            this.#renderAgentCommandSuggestions([{
+                kind: 'info',
+                label: 'Opening previous session...',
+                description: command.displayName
+                    || command.title
+                    || command.sessionId
+                    || ''
+            }]);
             try {
                 let targetAgentTab = null;
                 let targetPromptDraft = '';
@@ -8265,11 +8273,13 @@ class EditorManager {
                     targetPromptDraft,
                     targetAgentTab || getActiveAgentTab() || agentTab
                 );
+                this.hideAgentCommandMenu();
             } catch (error) {
                 alert(error.message, {
                     type: 'error',
                     title: getAgentBaseName(agentTab)
                 });
+                this.hideAgentCommandMenu();
             }
             return;
         }
@@ -14719,27 +14729,53 @@ async function activateAgentTab(session, agentTab, options = {}) {
     return agentTab;
 }
 
+const pendingAgentHistoryResumes = new Map();
+
+function getAgentHistoryResumeKey(session, agentTab, historySession) {
+    return [
+        session?.server?.id || '',
+        session?.key || '',
+        agentTab?.agentId || '',
+        String(historySession?.sessionId || '').trim()
+    ].join('\0');
+}
+
 async function resumeAgentTabFromHistory(session, agentTab, historySession) {
     if (!session || !agentTab || !historySession?.sessionId) return null;
-    const response = await session.server.fetch('/api/agents/tabs/resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            agentId: agentTab.agentId,
-            cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
-            terminalSessionId: session.id,
-            sessionId: historySession.sessionId,
-            title: historySession.title || ''
-        })
-    });
-    if (!response.ok) {
-        await throwResponseError(response, 'Failed to resume agent session');
+    const resumeKey = getAgentHistoryResumeKey(session, agentTab, historySession);
+    const pendingResume = pendingAgentHistoryResumes.get(resumeKey);
+    if (pendingResume) {
+        return await pendingResume;
     }
-    const data = await response.json();
-    return await activateAgentTab(
-        session,
-        upsertAgentTab(session.server, data)
-    );
+
+    const resumePromise = (async () => {
+        const response = await session.server.fetch('/api/agents/tabs/resume', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agentId: agentTab.agentId,
+                cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
+                terminalSessionId: session.id,
+                sessionId: historySession.sessionId,
+                title: historySession.title || ''
+            })
+        });
+        if (!response.ok) {
+            await throwResponseError(response, 'Failed to resume agent session');
+        }
+        const data = await response.json();
+        return await activateAgentTab(
+            session,
+            upsertAgentTab(session.server, data)
+        );
+    })();
+    pendingAgentHistoryResumes.set(resumeKey, resumePromise);
+
+    try {
+        return await resumePromise;
+    } finally {
+        pendingAgentHistoryResumes.delete(resumeKey);
+    }
 }
 
 function getServerEndpointKey(server) {
