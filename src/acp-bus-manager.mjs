@@ -12,7 +12,7 @@ import {
     buildAcpBusSessionKey
 } from './acp-bus-store.mjs';
 
-const DEFAULT_POLL_INTERVAL_MS = 2000;
+const DEFAULT_POLL_INTERVAL_MS = 10000;
 const DEFAULT_HOT_SESSION_LIMIT = 10;
 const DEFAULT_CACHE_SESSION_LIMIT = 100;
 const DEFAULT_EVENT_LIMIT = 2000;

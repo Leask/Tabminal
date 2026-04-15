@@ -114,7 +114,7 @@ Default policy:
 
 - `hotSessionLimit = 10`
 - `cacheSessionLimit = 100`
-- `pollIntervalMs = 2000`
+- `pollIntervalMs = 10000`
 
 Selection is global, not per provider.
 

@@ -20,7 +20,7 @@ const DEFAULT_CONFIG = {
     openaiApi: null,
     cloudflareKey: null,
     shell: null,
-    acpBusPollIntervalMs: 2000,
+    acpBusPollIntervalMs: 10000,
     acpBusHotSessionLimit: 10,
     acpBusCacheSessionLimit: 100,
     acpBusEventLimit: 2000
