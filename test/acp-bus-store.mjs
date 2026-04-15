@@ -125,4 +125,30 @@ describe('AcpBusStore', () => {
             );
         });
     });
+
+    it('returns inserted event envelopes while pruning old events', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            store.eventLimit = 1;
+            const first = store.appendEvent({
+                createdAt: '2026-04-14T10:00:00.000Z',
+                type: 'first',
+                agentId: 'codex',
+                sessionId: 's-1',
+                payload: { value: 1 }
+            });
+            const second = store.appendEvent({
+                createdAt: '2026-04-14T10:01:00.000Z',
+                type: 'second',
+                agentId: 'codex',
+                sessionId: 's-1',
+                payload: { value: 2 }
+            });
+
+            assert.equal(first.id > 0, true);
+            assert.equal(second.id > first.id, true);
+            assert.deepEqual(store.listEvents(10).map((event) => event.type), [
+                'second'
+            ]);
+        });
+    });
 });

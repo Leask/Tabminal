@@ -672,6 +672,13 @@ export class AcpBusStore {
             ? event.createdAt.trim()
             : this.now();
         const payload = cloneSerializable(event.payload, {});
+        const eventRecord = {
+            createdAt,
+            type: String(event.type || '').trim(),
+            agentId: String(event.agentId || '').trim(),
+            sessionId: String(event.sessionId || '').trim(),
+            payload
+        };
         db.prepare(`
             INSERT INTO acp_bus_events (
                 created_at,
@@ -681,12 +688,15 @@ export class AcpBusStore {
                 payload_json
             ) VALUES (?, ?, ?, ?, ?)
         `).run(
-            createdAt,
-            String(event.type || '').trim(),
-            String(event.agentId || '').trim(),
-            String(event.sessionId || '').trim(),
-            JSON.stringify(payload)
+            eventRecord.createdAt,
+            eventRecord.type,
+            eventRecord.agentId,
+            eventRecord.sessionId,
+            JSON.stringify(eventRecord.payload)
         );
+        const row = db.prepare(`
+            SELECT last_insert_rowid() AS id
+        `).get();
         db.prepare(`
             DELETE FROM acp_bus_events
             WHERE id NOT IN (
@@ -696,6 +706,10 @@ export class AcpBusStore {
                 LIMIT ?
             )
         `).run(this.eventLimit);
+        return {
+            id: Number(row?.id || 0),
+            ...eventRecord
+        };
     }
 
     listEvents(limit = 100) {

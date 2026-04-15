@@ -632,13 +632,14 @@ export class AcpBusManager extends EventEmitter {
                 }
                 : null
         };
-        this.store.appendEvent({
+        const event = this.store.appendEvent({
             createdAt: this.now(),
             type,
             agentId: row?.agentId || '',
             sessionId: row?.sessionId || '',
             payload
         });
+        this.emit('event', event);
         this.emit(type, payload);
     }
 

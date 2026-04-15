@@ -12,7 +12,7 @@ import serve from 'koa-static';
 import Router from '@koa/router';
 import bodyParser from 'koa-bodyparser';
 import { formidable } from 'formidable';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
@@ -92,6 +92,18 @@ function parseQueryBoolean(value) {
     return normalized === '1'
         || normalized === 'true'
         || normalized === 'yes';
+}
+
+function sendWebSocketJson(socket, payload) {
+    if (socket.readyState !== WebSocket.OPEN) {
+        return false;
+    }
+    try {
+        socket.send(JSON.stringify(payload));
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function normalizePromptAttachments(files) {
@@ -893,6 +905,18 @@ const wss = new WebSocketServer({
     }
 });
 const httpConnections = new Set();
+const acpBusSockets = new Set();
+
+function broadcastAcpBusEvent(event) {
+    for (const socket of acpBusSockets) {
+        sendWebSocketJson(socket, {
+            type: 'event',
+            event
+        });
+    }
+}
+
+acpBusManager.on('event', broadcastAcpBusEvent);
 
 httpServer.on('connection', (socket) => {
     httpConnections.add(socket);
@@ -905,7 +929,13 @@ httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const pathname = url.pathname;
 
-    if (pathname.startsWith('/ws/agents/')) {
+    if (pathname === '/ws/acp-bus') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, {
+                kind: 'acp-bus'
+            });
+        });
+    } else if (pathname.startsWith('/ws/agents/')) {
         const match = pathname.match(/^\/ws\/agents\/([a-zA-Z0-9-]+)$/);
         if (!match) {
             socket.destroy();
@@ -965,6 +995,31 @@ wss.on('connection', (socket, target) => {
             `[Server] WebSocket connected to agent tab ${target.tabId}`
         );
         acpManager.attachSocket(target.tabId, socket);
+        return;
+    }
+    if (target.kind === 'acp-bus') {
+        debugLog('[Server] WebSocket connected to ACP bus stream');
+        acpBusSockets.add(socket);
+        socket.on('close', () => {
+            acpBusSockets.delete(socket);
+        });
+        void acpBusReadyPromise
+            .then(() => {
+                sendWebSocketJson(socket, {
+                    type: 'snapshot',
+                    state: acpBusManager.getState(),
+                    sessions: acpBusManager.listSessions({
+                        limit: config.acpBusCacheSessionLimit
+                    })
+                });
+            })
+            .catch((error) => {
+                sendWebSocketJson(socket, {
+                    type: 'error',
+                    error: error?.message || 'ACP bus is not available'
+                });
+                socket.close(1011, 'ACP bus is not available');
+            });
     }
 });
 
@@ -1028,6 +1083,7 @@ async function shutdown(signal) {
     for (const socket of wss.clients) {
         socket.terminate();
     }
+    acpBusSockets.clear();
     wss.close();
     terminalManager.dispose();
 

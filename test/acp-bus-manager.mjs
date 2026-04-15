@@ -173,6 +173,10 @@ describe('AcpBusManager', () => {
                 }
             ]
         }, async ({ manager, runtimeInstances }) => {
+            const streamedEvents = [];
+            manager.on('event', (event) => {
+                streamedEvents.push(event);
+            });
             await manager.start();
 
             const hotSessions = manager.listSessions({ hotOnly: true });
@@ -192,6 +196,11 @@ describe('AcpBusManager', () => {
                     runtime.resumeCalls.map((call) => call.acpSessionId)
                 ).sort(),
                 ['c-1', 'g-1']
+            );
+            assert.ok(
+                streamedEvents.some((event) =>
+                    event.type === 'session_hot_attached'
+                )
             );
         });
     });
