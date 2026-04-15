@@ -75,6 +75,10 @@ export class AcpBusManager extends EventEmitter {
         this.discoveryCwd = path.resolve(
             options.discoveryCwd || process.cwd()
         );
+        this.controllerSnapshotProvider =
+            typeof options.controllerSnapshotProvider === 'function'
+                ? options.controllerSnapshotProvider
+                : null;
         this.now = typeof options.now === 'function' ? options.now : nowIso;
         this.started = false;
         this.startPromise = null;
@@ -83,6 +87,7 @@ export class AcpBusManager extends EventEmitter {
         this.discoveryRuntimes = new Map();
         this.observeRuntimes = new Map();
         this.observedSessions = new Map();
+        this.pinnedSessions = new Map();
         this.tabToSessionKey = new Map();
         this.snapshotFlushTimers = new Map();
     }
@@ -124,6 +129,7 @@ export class AcpBusManager extends EventEmitter {
             await this.#detachHotSession(sessionKey, 'shutdown');
         }
         this.observedSessions.clear();
+        this.pinnedSessions.clear();
         this.tabToSessionKey.clear();
 
         const discoveryEntries = Array.from(this.discoveryRuntimes.values());
@@ -149,6 +155,7 @@ export class AcpBusManager extends EventEmitter {
             hotSessionLimit: this.hotSessionLimit,
             cacheSessionLimit: this.cacheSessionLimit,
             observedSessionCount: this.observedSessions.size,
+            pinnedSessionCount: this.pinnedSessions.size,
             discoveryRuntimeCount: this.discoveryRuntimes.size,
             observeRuntimeCount: this.observeRuntimes.size,
             store: this.store.getSummary()
@@ -179,6 +186,90 @@ export class AcpBusManager extends EventEmitter {
             await this.#rebalanceHotSessions('interest');
         }
         return result.record;
+    }
+
+    async pinSession(pinId, entry = {}, reason = 'ui_attach') {
+        const normalizedPinId = String(pinId || '').trim();
+        if (!normalizedPinId) {
+            throw new Error('pinId is required');
+        }
+        const result = this.store.markSessionInterest({
+            ...entry,
+            interestedAt: entry.interestedAt || this.now()
+        });
+        const previousSessionKey = this.pinnedSessions.get(normalizedPinId) || '';
+        this.pinnedSessions.set(normalizedPinId, result.record.sessionKey);
+        await this.#ensureObservedSession(result.record, reason);
+        if (this.started && !this.syncPromise) {
+            await this.#rebalanceHotSessions(reason);
+        }
+        if (previousSessionKey !== result.record.sessionKey) {
+            this.#emitEvent('session_ui_attached', result.record, {
+                reason,
+                pinId: normalizedPinId
+            });
+        }
+        return this.store.getSession(result.record.sessionKey, {
+            includeSnapshot: true
+        });
+    }
+
+    async unpinSession(pinId, reason = 'ui_detach') {
+        const normalizedPinId = String(pinId || '').trim();
+        if (!normalizedPinId) {
+            return false;
+        }
+        const sessionKey = this.pinnedSessions.get(normalizedPinId) || '';
+        if (!sessionKey) {
+            return false;
+        }
+        this.pinnedSessions.delete(normalizedPinId);
+        if (this.started && !this.syncPromise) {
+            await this.#rebalanceHotSessions(reason);
+        }
+        const record = this.store.getSession(sessionKey, {
+            includeSnapshot: true
+        });
+        if (record) {
+            this.#emitEvent('session_ui_detached', record, {
+                reason,
+                pinId: normalizedPinId
+            });
+        }
+        return true;
+    }
+
+    ingestControllerTab(serialized, reason = 'controller_update') {
+        const agentId = String(serialized?.agentId || '').trim();
+        const sessionId = String(serialized?.acpSessionId || '').trim();
+        if (!agentId || !sessionId) {
+            return null;
+        }
+        const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
+        const observedAt = this.now();
+        const handle = this.observedSessions.get(sessionKey) || null;
+        if (!handle && this.#shouldTreatControllerAsObserved(sessionKey)) {
+            this.#attachControllerSession(serialized, reason, {
+                attachedAt: observedAt,
+                emit: false
+            });
+        } else if (handle?.kind === 'controller') {
+            handle.tabId = String(serialized.id || handle.tabId);
+            if (handle.tabId) {
+                this.tabToSessionKey.set(handle.tabId, sessionKey);
+            }
+        }
+        const persisted = this.store.saveObservedSession(serialized, {
+            continuityState: 'live',
+            observedAt,
+            liveAt: observedAt
+        });
+        if (persisted.changed) {
+            this.#emitEvent('session_snapshot_updated', persisted.record, {
+                reason
+            });
+        }
+        return persisted.record;
     }
 
     async syncNow(reason = 'manual') {
@@ -399,22 +490,30 @@ export class AcpBusManager extends EventEmitter {
     }
 
     async #rebalanceHotSessions(reason) {
-        const desiredRows = this.store.listMostActiveSessions(
+        const hotRows = this.store.listMostActiveSessions(
             this.hotSessionLimit,
             {
                 presentOnly: true,
                 includeSnapshot: true
             }
         );
-        const desiredKeys = desiredRows.map((row) => row.sessionKey);
-        this.store.setHotSessionKeys(desiredKeys);
+        const hotKeys = hotRows.map((row) => row.sessionKey);
+        this.store.setHotSessionKeys(hotKeys);
+        const desiredKeys = new Set([
+            ...hotKeys,
+            ...this.pinnedSessions.values()
+        ]);
 
-        for (const row of desiredRows) {
-            if (this.observedSessions.has(row.sessionKey)) {
-                continue;
+        for (const sessionKey of desiredKeys) {
+            let row = hotRows.find((entry) => entry.sessionKey === sessionKey);
+            if (!row) {
+                row = this.store.getSession(sessionKey, {
+                    includeSnapshot: true
+                });
             }
+            if (!row) continue;
             try {
-                await this.#attachHotSession(row, reason);
+                await this.#ensureObservedSession(row, reason);
             } catch (error) {
                 this.store.updateContinuityState(
                     row.sessionKey,
@@ -433,7 +532,7 @@ export class AcpBusManager extends EventEmitter {
         }
 
         for (const sessionKey of Array.from(this.observedSessions.keys())) {
-            if (desiredKeys.includes(sessionKey)) {
+            if (desiredKeys.has(sessionKey)) {
                 continue;
             }
             await this.#detachHotSession(sessionKey, 'rebalance');
@@ -441,13 +540,76 @@ export class AcpBusManager extends EventEmitter {
 
         const deleted = this.store.pruneSessions(
             this.cacheSessionLimit,
-            desiredKeys
+            Array.from(desiredKeys)
         );
         for (const row of deleted) {
             this.#emitEvent('session_index_removed', row, {
                 reason: 'eviction'
             });
         }
+    }
+
+    async #ensureObservedSession(row, reason) {
+        if (this.observedSessions.has(row.sessionKey)) {
+            return this.observedSessions.get(row.sessionKey);
+        }
+        const controllerSnapshot = this.controllerSnapshotProvider
+            ? this.controllerSnapshotProvider(row.agentId, row.sessionId)
+            : null;
+        if (controllerSnapshot) {
+            return this.#attachControllerSession(controllerSnapshot, reason);
+        }
+        return this.#attachHotSession(row, reason);
+    }
+
+    #shouldTreatControllerAsObserved(sessionKey) {
+        if (!sessionKey) {
+            return false;
+        }
+        if (Array.from(this.pinnedSessions.values()).includes(sessionKey)) {
+            return true;
+        }
+        const row = this.store.getSession(sessionKey);
+        return Number.isInteger(row?.hotRank);
+    }
+
+    #attachControllerSession(serialized, reason, options = {}) {
+        const sessionKey = buildAcpBusSessionKey(
+            serialized.agentId,
+            serialized.acpSessionId
+        );
+        if (this.observedSessions.has(sessionKey)) {
+            return this.observedSessions.get(sessionKey);
+        }
+        const attachedAt = typeof options.attachedAt === 'string'
+            ? options.attachedAt
+            : this.now();
+        const handle = {
+            kind: 'controller',
+            sessionKey,
+            agentId: serialized.agentId,
+            sessionId: serialized.acpSessionId,
+            tabId: String(serialized.id || ''),
+            runtimeEntry: null
+        };
+        this.observedSessions.set(sessionKey, handle);
+        if (handle.tabId) {
+            this.tabToSessionKey.set(handle.tabId, sessionKey);
+        }
+        const persisted = this.store.saveObservedSession(serialized, {
+            continuityState: 'live',
+            observedAt: attachedAt,
+            attachedAt,
+            loadedAt: attachedAt,
+            liveAt: attachedAt
+        });
+        if (options.emit !== false) {
+            this.#emitEvent('session_hot_attached', persisted.record, {
+                reason,
+                source: 'controller'
+            });
+        }
+        return handle;
     }
 
     async #attachHotSession(row, reason) {
@@ -510,8 +672,10 @@ export class AcpBusManager extends EventEmitter {
             this.snapshotFlushTimers.delete(sessionKey);
         }
 
-        handle.runtimeEntry.runtime.detachTab(handle.tabId);
-        handle.runtimeEntry.sessionKeys.delete(sessionKey);
+        if (handle.kind !== 'controller') {
+            handle.runtimeEntry.runtime.detachTab(handle.tabId);
+            handle.runtimeEntry.sessionKeys.delete(sessionKey);
+        }
 
         const updated = this.store.updateContinuityState(
             sessionKey,
@@ -527,7 +691,10 @@ export class AcpBusManager extends EventEmitter {
             this.#emitEvent('session_hot_detached', updated, { reason });
         }
 
-        if (handle.runtimeEntry.sessionKeys.size === 0) {
+        if (
+            handle.kind !== 'controller'
+            && handle.runtimeEntry.sessionKeys.size === 0
+        ) {
             this.observeRuntimes.delete(handle.runtimeEntry.runtimeKey);
             await handle.runtimeEntry.runtime.dispose().catch(() => {});
         }
@@ -548,7 +715,7 @@ export class AcpBusManager extends EventEmitter {
 
     async #flushSessionSnapshot(sessionKey) {
         const handle = this.observedSessions.get(sessionKey);
-        if (!handle) {
+        if (!handle || handle.kind === 'controller') {
             return;
         }
         const tab = handle.runtimeEntry.runtime.tabs.get(handle.tabId);

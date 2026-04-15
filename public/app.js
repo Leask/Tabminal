@@ -963,6 +963,10 @@ class ServerClient {
         this.refreshTokenExpiresAt = '';
         this.refreshPromise = null;
         this.bootstrapPromise = null;
+        this.acpBusSocket = null;
+        this.acpBusConnectPromise = null;
+        this.acpBusReconnectTimer = null;
+        this.acpBusState = null;
         this.loadStoredAuth();
     }
 
@@ -1048,6 +1052,17 @@ class ServerClient {
             `/ws/agents/${tabId}`,
             `${wsProtocol}//${base.host}`
         );
+        return wsUrl.toString();
+    }
+
+    resolveAcpBusWsUrl() {
+        const base = new URL(this.baseUrl);
+        const shouldUseSecureWs = (
+            base.protocol === 'https:'
+            || window.location.protocol === 'https:'
+        );
+        const wsProtocol = shouldUseSecureWs ? 'wss:' : 'ws:';
+        const wsUrl = new URL('/ws/acp-bus', `${wsProtocol}//${base.host}`);
         return wsUrl.toString();
     }
 
@@ -1248,6 +1263,7 @@ class ServerClient {
         this.accessLoginUrl = '';
         this.agentStateLoaded = false;
         this.stopHeartbeat();
+        this.closeAcpBusSocket();
     }
 
     async fetchWithoutAuth(path, options = {}) {
@@ -1330,6 +1346,7 @@ class ServerClient {
         const wasRequired = this.needsAccessLogin;
         this.needsAccessLogin = true;
         this.accessLoginUrl = loginUrl;
+        this.closeAcpBusSocket();
         setStatus(this, 'reconnecting');
         renderServerControls();
         if (!wasRequired) {
@@ -1355,6 +1372,145 @@ class ServerClient {
         if (!this.heartbeatTimer) return;
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
+    }
+
+    async ensureAcpBusConnected() {
+        if (
+            this.acpBusSocket
+            && this.acpBusSocket.readyState === WebSocket.OPEN
+        ) {
+            return true;
+        }
+        if (this.acpBusConnectPromise) {
+            return this.acpBusConnectPromise;
+        }
+
+        this.acpBusConnectPromise = (async () => {
+            const hasAccess = await this.ensureActiveAccessToken();
+            if (!hasAccess) {
+                return false;
+            }
+
+            const socket = new WebSocket(
+                this.resolveAcpBusWsUrl(),
+                this.getWebSocketProtocols()
+            );
+
+            return await new Promise((resolve) => {
+                let settled = false;
+                const settle = (value) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    resolve(value);
+                };
+
+                socket.addEventListener('open', () => {
+                    this.acpBusSocket = socket;
+                    this.handleAcpBusOpen();
+                    settle(true);
+                });
+                socket.addEventListener('message', (event) => {
+                    try {
+                        this.handleAcpBusMessage(JSON.parse(event.data));
+                    } catch {
+                        // Ignore malformed bus payloads.
+                    }
+                });
+                socket.addEventListener('close', () => {
+                    if (this.acpBusSocket === socket) {
+                        this.acpBusSocket = null;
+                    }
+                    const shouldReconnect = !socket._tabminalIntentionalClose;
+                    this.handleAcpBusClose({ shouldReconnect });
+                    settle(false);
+                });
+                socket.addEventListener('error', () => {
+                    settle(false);
+                });
+            });
+        })().finally(() => {
+            this.acpBusConnectPromise = null;
+        });
+
+        return this.acpBusConnectPromise;
+    }
+
+    handleAcpBusOpen() {
+        if (this.acpBusReconnectTimer) {
+            clearTimeout(this.acpBusReconnectTimer);
+            this.acpBusReconnectTimer = null;
+        }
+        for (const agentTab of getAgentTabsForServer(this.id)) {
+            agentTab.connect();
+        }
+    }
+
+    handleAcpBusClose({ shouldReconnect = true } = {}) {
+        this.acpBusState = null;
+        for (const agentTab of getAgentTabsForServer(this.id)) {
+            agentTab.handleBusDisconnected();
+        }
+        if (
+            !shouldReconnect
+            || !this.isAuthenticated
+            || getAgentTabsForServer(this.id).length === 0
+            || this.acpBusReconnectTimer
+        ) {
+            return;
+        }
+        this.acpBusReconnectTimer = window.setTimeout(() => {
+            this.acpBusReconnectTimer = null;
+            void this.ensureAcpBusConnected();
+        }, 1500);
+    }
+
+    closeAcpBusSocket() {
+        if (this.acpBusReconnectTimer) {
+            clearTimeout(this.acpBusReconnectTimer);
+            this.acpBusReconnectTimer = null;
+        }
+        const socket = this.acpBusSocket;
+        this.acpBusSocket = null;
+        if (socket) {
+            socket._tabminalIntentionalClose = true;
+            try {
+                socket.close();
+            } catch {
+                // Ignore close failures during teardown.
+            }
+            return;
+        }
+        this.handleAcpBusClose({ shouldReconnect: false });
+    }
+
+    handleAcpBusMessage(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return;
+        }
+        if (payload.type === 'snapshot') {
+            this.acpBusState = payload.state || null;
+            return;
+        }
+        if (payload.type === 'event') {
+            this.handleAcpBusEvent(payload.event);
+        }
+    }
+
+    handleAcpBusEvent(event) {
+        const session = event?.payload?.session;
+        if (!session?.agentId || !session?.sessionId) {
+            return;
+        }
+        for (const agentTab of getAgentTabsForServer(this.id)) {
+            if (
+                agentTab.agentId === session.agentId
+                && agentTab.acpSessionId === session.sessionId
+            ) {
+                agentTab.handleBusEvent(event);
+            }
+        }
     }
 }
 
@@ -9909,7 +10065,10 @@ class AgentTab {
         this.serverId = server.id;
         this.id = data.id;
         this.key = makeAgentTabKey(this.serverId, this.id);
-        this.socket = null;
+        this.connectionKind = 'bus';
+        this.busAttachedSessionKey = '';
+        this.busSyncTimer = null;
+        this.busSyncPromise = null;
         this.needsAttention = false;
         this.runCounter = 0;
         this.lastCompletedRunCounter = 0;
@@ -9972,6 +10131,7 @@ class AgentTab {
 
     update(data) {
         const previousResumeCacheKey = `${this.agentId || ''}:${this.cwd || ''}`;
+        const previousObservedSessionKey = this.getObservedSessionKey();
         this.runtimeId = data.runtimeId || '';
         this.runtimeKey = data.runtimeKey || '';
         this.acpSessionId = data.acpSessionId || '';
@@ -9985,6 +10145,15 @@ class AgentTab {
         this.status = data.status || 'ready';
         this.busy = !!data.busy;
         this.errorMessage = data.errorMessage || '';
+        this.busConnectionKind = typeof data.busConnectionKind === 'string'
+            ? data.busConnectionKind
+            : this.busConnectionKind || 'shared';
+        this.busContinuityState = typeof data.busContinuityState === 'string'
+            ? data.busContinuityState
+            : this.busContinuityState || '';
+        this.busHotRank = Number.isFinite(data.busHotRank)
+            ? data.busHotRank
+            : this.busHotRank ?? null;
         this.currentModeId = data.currentModeId || '';
         this.availableModes = Array.isArray(data.availableModes)
             ? data.availableModes
@@ -10002,6 +10171,9 @@ class AgentTab {
         if (previousResumeCacheKey !== nextResumeCacheKey) {
             this.resumeSessions = [];
             this.resumeSessionsLoadedAt = 0;
+        }
+        if (previousObservedSessionKey !== this.getObservedSessionKey()) {
+            this.busAttachedSessionKey = '';
         }
         const nextPlan = Array.isArray(data.plan)
             ? data.plan.map((entry) => this.#normalizePlanEntry(entry))
@@ -10115,12 +10287,10 @@ class AgentTab {
 
     connect() {
         if (!this.server.isAuthenticated) return;
+        const observedSessionKey = this.getObservedSessionKey();
         if (
-            this.socket
-            && (
-                this.socket.readyState === WebSocket.OPEN
-                || this.socket.readyState === WebSocket.CONNECTING
-            )
+            observedSessionKey
+            && this.busAttachedSessionKey === observedSessionKey
         ) {
             return;
         }
@@ -10129,34 +10299,109 @@ class AgentTab {
         }
 
         this.connectPromise = (async () => {
-            const hasAccess = await this.server.ensureActiveAccessToken();
-            if (!hasAccess) {
-                return;
+            try {
+                const connected = await this.server.ensureAcpBusConnected();
+                if (!connected) {
+                    return;
+                }
+                await this.syncFromBus({ attach: true });
+            } catch (error) {
+                console.warn(
+                    'Failed to attach agent tab to ACP bus:',
+                    error?.message || error
+                );
             }
-
-            const endpoint = this.server.resolveAgentWsUrl(this.id);
-            this.socket = new WebSocket(
-                endpoint,
-                this.server.getWebSocketProtocols()
-            );
-            this.socket.addEventListener('message', (event) => {
-                try {
-                    this.handleMessage(JSON.parse(event.data));
-                } catch {
-                    // Ignore malformed agent payloads.
-                }
-            });
-            this.socket.addEventListener('close', () => {
-                this.socket = null;
-                if (this.status === 'running') {
-                    this.status = 'disconnected';
-                    this.busy = false;
-                    this.notifyUi();
-                }
-            });
         })().finally(() => {
             this.connectPromise = null;
         });
+    }
+
+    getObservedSessionKey() {
+        const agentId = String(this.agentId || '').trim();
+        const sessionId = String(this.acpSessionId || '').trim();
+        if (!agentId || !sessionId) {
+            return '';
+        }
+        return `${agentId}::${sessionId}`;
+    }
+
+    usesSharedBus() {
+        return this.connectionKind === 'bus';
+    }
+
+    async syncFromBus({ attach = false } = {}) {
+        if (!this.server.isAuthenticated) {
+            return false;
+        }
+        if (this.busSyncPromise) {
+            return this.busSyncPromise;
+        }
+
+        this.busSyncPromise = (async () => {
+            const response = await this.server.fetch(
+                attach
+                    ? `/api/acp-bus/tabs/${this.id}/attach`
+                    : `/api/acp-bus/tabs/${this.id}`,
+                attach ? { method: 'POST' } : {}
+            );
+            if (!response.ok) {
+                await throwResponseError(
+                    response,
+                    'Failed to synchronize agent tab'
+                );
+            }
+            const data = await response.json();
+            this.update(data);
+            this.busAttachedSessionKey = this.getObservedSessionKey();
+            this.scrollToBottomOnNextRender = true;
+            this.notifyUi({
+                full: true,
+                authoritativeSync: true
+            });
+            return true;
+        })().finally(() => {
+            this.busSyncPromise = null;
+        });
+
+        return this.busSyncPromise;
+    }
+
+    scheduleBusSnapshotSync(
+        reason = 'runtime_update',
+        { delayMs = AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS } = {}
+    ) {
+        if (this.busSyncTimer) {
+            clearTimeout(this.busSyncTimer);
+        }
+        this.busSyncTimer = setTimeout(() => {
+            this.busSyncTimer = null;
+            void this.syncFromBus().catch((error) => {
+                console.warn(
+                    `Failed to sync agent tab from ACP bus (${reason}):`,
+                    error?.message || error
+                );
+            });
+        }, delayMs);
+    }
+
+    handleBusEvent(event) {
+        if (!event?.payload?.session) {
+            return;
+        }
+        this.scheduleBusSnapshotSync(event.type || 'event');
+    }
+
+    handleBusDisconnected() {
+        this.busAttachedSessionKey = '';
+        if (this.busSyncTimer) {
+            clearTimeout(this.busSyncTimer);
+            this.busSyncTimer = null;
+        }
+        if (this.status === 'running') {
+            this.status = 'disconnected';
+            this.busy = false;
+            this.notifyUi();
+        }
     }
 
     handleMessage(message) {
@@ -10818,6 +11063,7 @@ class AgentTab {
 
     applyInventory(data) {
         const previousSession = this.getLinkedSession();
+        const previousObservedSessionKey = this.getObservedSessionKey();
         const previousSnapshot = JSON.stringify({
             runtimeId: this.runtimeId || '',
             runtimeKey: this.runtimeKey || '',
@@ -10848,6 +11094,15 @@ class AgentTab {
         this.status = data.status || this.status || 'ready';
         this.busy = typeof data.busy === 'boolean' ? data.busy : this.busy;
         this.errorMessage = data.errorMessage || this.errorMessage || '';
+        this.busConnectionKind = typeof data.busConnectionKind === 'string'
+            ? data.busConnectionKind
+            : this.busConnectionKind || 'shared';
+        this.busContinuityState = typeof data.busContinuityState === 'string'
+            ? data.busContinuityState
+            : this.busContinuityState || '';
+        this.busHotRank = Number.isFinite(data.busHotRank)
+            ? data.busHotRank
+            : this.busHotRank ?? null;
         this.currentModeId = data.currentModeId || this.currentModeId || '';
         this.availableModes = Array.isArray(data.availableModes)
             ? data.availableModes
@@ -10863,6 +11118,9 @@ class AgentTab {
         );
         if (data.usage) {
             this.usage = this.#normalizeUsageState(data.usage);
+        }
+        if (previousObservedSessionKey !== this.getObservedSessionKey()) {
+            this.busAttachedSessionKey = '';
         }
         const nextSession = this.getLinkedSession();
         const nextSnapshot = JSON.stringify({
@@ -10984,8 +11242,18 @@ class AgentTab {
 
     dispose() {
         this.#clearBusyWatchdog();
-        this.socket?.close();
-        this.socket = null;
+        if (this.busSyncTimer) {
+            clearTimeout(this.busSyncTimer);
+            this.busSyncTimer = null;
+        }
+        if (this.server.isAuthenticated) {
+            void this.server.fetch(`/api/acp-bus/tabs/${this.id}/attach`, {
+                method: 'DELETE'
+            }).catch(() => {
+                // Ignore detach failures during local teardown.
+            });
+        }
+        this.busAttachedSessionKey = '';
     }
 }
 
@@ -14368,10 +14636,11 @@ function upsertAgentTab(server, data) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
     if (existing) {
-        const hasLiveSocket = existing.socket?.readyState === WebSocket.OPEN;
         let shouldNotify = true;
-        if (
-            hasLiveSocket
+        if (existing.usesSharedBus()) {
+            shouldNotify = existing.applyInventory(data);
+        } else if (
+            existing.socket?.readyState === WebSocket.OPEN
             && !shouldApplyAuthoritativeAgentSnapshot(existing, data)
         ) {
             shouldNotify = existing.applyInventory(data);
@@ -16053,6 +16322,7 @@ async function removeServer(serverId, { persist = true } = {}) {
     if (!server || server.isPrimary) return;
 
     server.stopHeartbeat();
+    server.closeAcpBusSocket();
     for (const agentTab of getAgentTabsForServer(serverId)) {
         removeAgentTab(agentTab.key);
     }

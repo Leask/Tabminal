@@ -116,6 +116,7 @@ async function withBusManager(prefix, options, callback) {
         cacheSessionLimit: options.cacheSessionLimit || 10,
         snapshotFlushDelayMs: options.snapshotFlushDelayMs || 25,
         discoveryCwd: '/tmp/discovery',
+        controllerSnapshotProvider: options.controllerSnapshotProvider,
         runtimeFactory: (definition, runtimeOptions) => {
             const runtime = new FakeBusRuntime(definition, runtimeOptions);
             runtimeInstances.push(runtime);
@@ -247,6 +248,136 @@ describe('AcpBusManager', () => {
             );
             const cold = manager.getSession('codex', 'c-1');
             assert.equal(cold.continuityState, 'resync_required');
+        });
+    });
+
+    it('keeps pinned sessions observed outside the hot set', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: [
+                    {
+                        sessionId: 'c-1',
+                        cwd: '/tmp/codex',
+                        title: 'Hot',
+                        updatedAt: '2026-04-14T10:01:00.000Z'
+                    },
+                    {
+                        sessionId: 'c-2',
+                        cwd: '/tmp/codex',
+                        title: 'Pinned cold',
+                        updatedAt: '2026-04-14T10:00:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            assert.equal(manager.getState().observedSessionCount, 1);
+
+            const pinned = await manager.pinSession(
+                'agent-tab:test',
+                {
+                    agentId: 'codex',
+                    sessionId: 'c-2',
+                    cwd: '/tmp/codex',
+                    title: 'Pinned cold'
+                },
+                'test_attach'
+            );
+
+            assert.equal(pinned.sessionKey, 'codex::c-2');
+            assert.equal(manager.getState().pinnedSessionCount, 1);
+            assert.equal(manager.getState().observedSessionCount, 2);
+            assert.deepEqual(
+                manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
+                ['codex::c-1']
+            );
+            assert.equal(
+                manager.getSession('codex', 'c-2').continuityState,
+                'live'
+            );
+
+            await manager.unpinSession('agent-tab:test', 'test_detach');
+
+            assert.equal(manager.getState().pinnedSessionCount, 0);
+            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal(
+                manager.getSession('codex', 'c-2').continuityState,
+                'resync_required'
+            );
+
+            const observeRuntimes = runtimeInstances.filter((runtime) =>
+                runtime.kind === 'observe'
+            );
+            assert.ok(
+                observeRuntimes.some((runtime) =>
+                    runtime.detachCalls.length > 0
+                )
+            );
+        });
+    });
+
+    it('uses an existing controller snapshot instead of restore attach', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            definitions: [{
+                id: 'test-agent',
+                label: 'Test Agent',
+                busSessions: [{
+                    sessionId: 's-1',
+                    cwd: '/tmp/test-agent',
+                    title: 'Controller-owned session',
+                    updatedAt: '2026-04-14T10:01:00.000Z'
+                }]
+            }],
+            controllerSnapshotProvider: (agentId, sessionId) => {
+                if (agentId !== 'test-agent' || sessionId !== 's-1') {
+                    return null;
+                }
+                return {
+                    id: 'controller-tab-1',
+                    agentId: 'test-agent',
+                    acpSessionId: 's-1',
+                    cwd: '/tmp/test-agent',
+                    title: 'Controller-owned session',
+                    status: 'ready',
+                    busy: false,
+                    errorMessage: '',
+                    messages: [{
+                        id: 'msg-1',
+                        kind: 'message',
+                        role: 'assistant',
+                        text: 'hello from controller'
+                    }],
+                    toolCalls: [],
+                    permissions: [],
+                    plan: [],
+                    terminals: []
+                };
+            }
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+
+            const attached = await manager.pinSession(
+                'agent-tab:test',
+                {
+                    agentId: 'test-agent',
+                    sessionId: 's-1',
+                    cwd: '/tmp/test-agent',
+                    title: 'Controller-owned session'
+                },
+                'controller_attach'
+            );
+
+            assert.equal(attached.sessionKey, 'test-agent::s-1');
+            assert.equal(attached.continuityState, 'live');
+            assert.equal(attached.messageCount, 1);
+            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal(runtimeInstances.filter((runtime) =>
+                runtime.kind === 'observe'
+            ).length, 0);
         });
     });
 

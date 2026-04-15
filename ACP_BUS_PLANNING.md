@@ -2,12 +2,31 @@
 
 ## Status
 
-Draft for the `acp_bus` branch.
+Implemented for the `acp_bus` branch through Phase 1 backend delivery.
 
 This document defines the first backend-only phase of a global ACP session
 control plane for Tabminal. The goal is to build durable indexing,
 persistence, hot-session tracking, and downstream-friendly event emission
 without changing the current frontend UX yet.
+
+### Current State
+
+- [x] Phase 1 backend bus is implemented.
+- [x] SQLite-backed session/cache/event persistence is implemented.
+- [x] Hot-session restore, polling, rebalance, and live snapshot persistence
+  are implemented.
+- [x] Initial downstream backend API is implemented via:
+  - `GET /api/acp-bus/state`
+  - `GET /api/acp-bus/sessions`
+  - `GET /api/acp-bus/sessions/:agentId/:sessionId`
+  - `GET /api/acp-bus/events`
+  - `POST /api/acp-bus/sync`
+  - `WS /ws/acp-bus`
+- [x] Existing agent tabs now hydrate transcript state from the shared ACP bus
+  while keeping prompt/cancel/mode/permission on the controller-tab control
+  path.
+- [ ] Session browser, notifications, and external adapters still use legacy
+  flows and are not yet migrated onto the bus as their primary source of truth.
 
 ## Goals
 
@@ -267,48 +286,54 @@ To prevent uncontrolled growth:
 
 ## Phase 1 Deliverables
 
-1. `src/acp-bus-store.mjs`
-   - SQLite schema and persistence helpers.
+- [x] `src/acp-bus-store.mjs`
+  - SQLite schema and persistence helpers.
 
-2. `src/acp-bus-manager.mjs`
-   - session index polling
-   - hot set selection
-   - observer lifecycle
-   - event emission
+- [x] `src/acp-bus-manager.mjs`
+  - session index polling
+  - hot set selection
+  - observer lifecycle
+  - event emission
 
-3. startup wiring in `src/server.mjs`
-   - restore hot sessions
-   - start polling automatically
-   - dispose cleanly on shutdown
+- [x] startup wiring in `src/server.mjs`
+  - restore hot sessions
+  - start polling automatically
+  - dispose cleanly on shutdown
 
-4. shared ACP runtime support where needed
-   - enough for bus observers to attach/detach safely
+- [x] shared ACP runtime support where needed
+  - enough for bus observers to attach/detach safely
 
-5. tests
-   - persistence round-trip
-   - startup restore
-   - hot rebalance
-   - event emission
-   - bounded eviction
+- [x] backend downstream API
+  - REST inspection endpoints
+  - websocket event stream
 
-## Deferred Items
+- [x] tests
+  - persistence round-trip
+  - startup restore
+  - hot rebalance
+  - event emission
+  - bounded eviction
 
-1. unified downstream websocket/event API
-2. frontend bus-backed session browser
-3. Telegram adapter
-4. unified multi-session chat control plane
-5. optional use of `unstable_resumeSession` for low-cost re-attach when
-   continuity is still trusted
-6. cross-process strong consistency guarantees
+## Next Phase Candidates
+
+- [ ] frontend bus-backed session browser
+- [x] frontend agent-tab hydration from bus snapshots instead of direct
+  upstream state
+- [ ] Telegram adapter
+- [ ] unified multi-session chat control plane
+- [ ] optional use of `unstable_resumeSession` for low-cost re-attach when
+  continuity is still trusted
+- [ ] cross-process strong consistency guarantees
+- [ ] configurable retention and hot-set policy surfaced in product settings
 
 ## Acceptance Criteria For Phase 1
 
-1. Tabminal starts the ACP bus automatically.
-2. The bus restores persisted hot sessions on boot.
-3. The bus indexes discoverable sessions across currently supported ACP
-   providers.
-4. The bus persists recent session snapshots in bounded SQLite storage.
-5. Hot sessions remain attached and receive live updates while the process is
-   running.
-6. The bus emits structured backend events for downstream consumers.
-7. No frontend UX changes are required for the system to function.
+- [x] Tabminal starts the ACP bus automatically.
+- [x] The bus restores persisted hot sessions on boot.
+- [x] The bus indexes discoverable sessions across currently supported ACP
+  providers.
+- [x] The bus persists recent session snapshots in bounded SQLite storage.
+- [x] Hot sessions remain attached and receive live updates while the process
+  is running.
+- [x] The bus emits structured backend events for downstream consumers.
+- [x] No frontend UX changes are required for the system to function.

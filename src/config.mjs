@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = {
     openaiApi: null,
     cloudflareKey: null,
     shell: null,
+    acpBusDbPath: '',
     acpBusPollIntervalMs: 10000,
     acpBusHotSessionLimit: 10,
     acpBusCacheSessionLimit: 100,
@@ -222,6 +223,9 @@ Options:
         finalConfig.acpBusPollIntervalMs =
             finalConfig['acp-bus-poll-interval'];
     }
+    if (finalConfig['acp-bus-db-path']) {
+        finalConfig.acpBusDbPath = finalConfig['acp-bus-db-path'];
+    }
     if (finalConfig['acp-bus-hot-session-limit']) {
         finalConfig.acpBusHotSessionLimit =
             finalConfig['acp-bus-hot-session-limit'];
@@ -302,6 +306,9 @@ Options:
         finalConfig.acpBusPollIntervalMs =
             process.env.TABMINAL_ACP_BUS_POLL_INTERVAL;
     }
+    if (process.env.TABMINAL_ACP_BUS_DB_PATH) {
+        finalConfig.acpBusDbPath = process.env.TABMINAL_ACP_BUS_DB_PATH;
+    }
     if (process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT) {
         finalConfig.acpBusHotSessionLimit =
             process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT;
@@ -361,6 +368,9 @@ Options:
         100,
         'ACP bus event limit'
     );
+    finalConfig.acpBusDbPath = typeof finalConfig.acpBusDbPath === 'string'
+        ? finalConfig.acpBusDbPath.trim()
+        : '';
 
     // Password Logic
     if (!finalConfig.password) {

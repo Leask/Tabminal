@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 const BASE_DIR = path.join(os.homedir(), '.tabminal');
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
 const DEFAULT_EVENT_LIMIT = 2000;
+const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
 function parseJsonText(text, fallback) {
     if (typeof text !== 'string' || text.trim() === '') {
@@ -110,6 +111,9 @@ export class AcpBusStore {
         this.eventLimit = Number.isFinite(options.eventLimit)
             ? Math.max(100, Math.floor(options.eventLimit))
             : DEFAULT_EVENT_LIMIT;
+        this.busyTimeoutMs = Number.isFinite(options.busyTimeoutMs)
+            ? Math.max(0, Math.floor(options.busyTimeoutMs))
+            : DEFAULT_BUSY_TIMEOUT_MS;
         this.now = typeof options.now === 'function' ? options.now : nowIso;
         this.db = null;
     }
@@ -121,6 +125,7 @@ export class AcpBusStore {
         await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
         this.db = new DatabaseSync(this.dbPath);
         this.db.exec(`
+            PRAGMA busy_timeout = ${this.busyTimeoutMs};
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             PRAGMA temp_store = MEMORY;

@@ -2849,6 +2849,10 @@ describe('AcpManager', () => {
             mergeAgentMessageText('Alpha Beta', 'Beta Gamma'),
             'Alpha Beta Gamma'
         );
+        assert.equal(
+            mergeAgentMessageText('OK', 'OK'),
+            'OK'
+        );
     });
 
     it('collapses repeated synthetic turn replay blocks', () => {

@@ -17,6 +17,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
 import { AcpBusManager } from './acp-bus-manager.mjs';
+import { AcpBusStore } from './acp-bus-store.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import {
@@ -104,6 +105,66 @@ function sendWebSocketJson(socket, payload) {
     } catch {
         return false;
     }
+}
+
+function mergeBusControllerTab(controllerTab, busSession) {
+    if (!controllerTab) {
+        return null;
+    }
+    const snapshot = busSession?.snapshot && typeof busSession.snapshot === 'object'
+        ? busSession.snapshot
+        : null;
+    return {
+        ...(snapshot || {}),
+        id: controllerTab.id,
+        runtimeId: controllerTab.runtimeId,
+        runtimeKey: controllerTab.runtimeKey,
+        acpSessionId: controllerTab.acpSessionId,
+        agentId: controllerTab.agentId,
+        agentLabel: controllerTab.agentLabel,
+        commandLabel: controllerTab.commandLabel,
+        title: controllerTab.title || snapshot?.title || '',
+        terminalSessionId: controllerTab.terminalSessionId || '',
+        cwd: controllerTab.cwd || snapshot?.cwd || '',
+        createdAt: controllerTab.createdAt || snapshot?.createdAt || '',
+        status: snapshot?.status || controllerTab.status || 'ready',
+        busy: typeof snapshot?.busy === 'boolean'
+            ? snapshot.busy
+            : !!controllerTab.busy,
+        errorMessage: snapshot?.errorMessage || controllerTab.errorMessage || '',
+        currentModeId: controllerTab.currentModeId || snapshot?.currentModeId || '',
+        availableModes: Array.isArray(controllerTab.availableModes)
+            ? controllerTab.availableModes
+            : (snapshot?.availableModes || []),
+        availableCommands: Array.isArray(controllerTab.availableCommands)
+            ? controllerTab.availableCommands
+            : (snapshot?.availableCommands || []),
+        sessionCapabilities: controllerTab.sessionCapabilities
+            || snapshot?.sessionCapabilities
+            || {},
+        configOptions: Array.isArray(controllerTab.configOptions)
+            ? controllerTab.configOptions
+            : (snapshot?.configOptions || []),
+        messages: Array.isArray(snapshot?.messages)
+            ? snapshot.messages
+            : (controllerTab.messages || []),
+        toolCalls: Array.isArray(snapshot?.toolCalls)
+            ? snapshot.toolCalls
+            : (controllerTab.toolCalls || []),
+        permissions: Array.isArray(snapshot?.permissions)
+            ? snapshot.permissions
+            : (controllerTab.permissions || []),
+        plan: Array.isArray(snapshot?.plan)
+            ? snapshot.plan
+            : (controllerTab.plan || []),
+        usage: snapshot?.usage || controllerTab.usage || null,
+        terminals: Array.isArray(snapshot?.terminals)
+            ? snapshot.terminals
+            : (controllerTab.terminals || []),
+        busConnectionKind: 'shared',
+        busContinuityState: busSession?.continuityState || 'cold',
+        busHotRank: busSession?.hotRank ?? null
+    };
 }
 
 function normalizePromptAttachments(files) {
@@ -335,8 +396,17 @@ router.post('/api/auth/logout-others', async (ctx) => {
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
 const acpManager = new AcpManager({ terminalManager });
+const acpBusStore = new AcpBusStore({
+    dbPath: config.acpBusDbPath || undefined,
+    eventLimit: config.acpBusEventLimit
+});
 const acpBusManager = new AcpBusManager({
     acpManager,
+    store: acpBusStore,
+    controllerSnapshotProvider: (agentId, sessionId) => {
+        const serialized = acpManager.getSerializedTabBySessionId(sessionId);
+        return serialized?.agentId === agentId ? serialized : null;
+    },
     pollIntervalMs: config.acpBusPollIntervalMs,
     hotSessionLimit: config.acpBusHotSessionLimit,
     cacheSessionLimit: config.acpBusCacheSessionLimit,
@@ -362,6 +432,71 @@ function recordAcpBusInterest(serialized, reason) {
                 error?.message || error
             );
         });
+}
+
+function syncAcpBusControllerSnapshot(
+    serialized,
+    reason,
+    { markInterest = false } = {}
+) {
+    const agentId = String(serialized?.agentId || '').trim();
+    const sessionId = String(serialized?.acpSessionId || '').trim();
+    if (!agentId || !sessionId) {
+        return;
+    }
+    void acpBusReadyPromise
+        .then(async () => {
+            if (markInterest) {
+                await acpBusManager.markSessionInterest({
+                    agentId,
+                    sessionId,
+                    cwd: serialized.cwd,
+                    title: serialized.title
+                });
+            }
+            acpBusManager.ingestControllerTab(serialized, reason);
+        })
+        .catch((error) => {
+            console.warn(
+                `[ACP Bus] Failed to sync controller snapshot (${reason}):`,
+                error?.message || error
+            );
+        });
+}
+
+acpManager.on('tab_dirty', ({ tab } = {}) => {
+    if (!tab) {
+        return;
+    }
+    syncAcpBusControllerSnapshot(tab, 'controller_tab_dirty');
+});
+
+async function buildBusBackedAgentTab(tabId, { attach = false } = {}) {
+    const controllerTab = acpManager.getSerializedTab(tabId);
+    if (!controllerTab) {
+        return null;
+    }
+    await acpBusReadyPromise;
+    let busSession = null;
+    if (attach) {
+        busSession = await acpBusManager.pinSession(
+            `agent-tab:${tabId}`,
+            {
+                agentId: controllerTab.agentId,
+                sessionId: controllerTab.acpSessionId,
+                cwd: controllerTab.cwd,
+                title: controllerTab.title
+            },
+            'agent_tab_attach'
+        );
+    } else {
+        busSession = acpBusManager.getSession(
+            controllerTab.agentId,
+            controllerTab.acpSessionId,
+            { includeSnapshot: true }
+        );
+    }
+    return mergeBusControllerTab(controllerTab, busSession);
 }
 
 // Restore sessions
@@ -604,6 +739,39 @@ router.get('/api/acp-bus/sessions/:agentId/:sessionId', async (ctx) => {
     ctx.body = session;
 });
 
+router.get('/api/acp-bus/tabs/:tabId', async (ctx) => {
+    const tab = await buildBusBackedAgentTab(ctx.params.tabId, {
+        attach: false
+    });
+    if (!tab) {
+        ctx.status = 404;
+        ctx.body = { error: 'Agent tab not found' };
+        return;
+    }
+    ctx.body = tab;
+});
+
+router.post('/api/acp-bus/tabs/:tabId/attach', async (ctx) => {
+    const tab = await buildBusBackedAgentTab(ctx.params.tabId, {
+        attach: true
+    });
+    if (!tab) {
+        ctx.status = 404;
+        ctx.body = { error: 'Agent tab not found' };
+        return;
+    }
+    ctx.body = tab;
+});
+
+router.delete('/api/acp-bus/tabs/:tabId/attach', async (ctx) => {
+    await acpBusReadyPromise;
+    await acpBusManager.unpinSession(
+        `agent-tab:${ctx.params.tabId}`,
+        'agent_tab_detach'
+    );
+    ctx.status = 204;
+});
+
 router.get('/api/acp-bus/events', async (ctx) => {
     await acpBusReadyPromise;
     const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
@@ -718,6 +886,7 @@ router.post('/api/agents/tabs', async (ctx) => {
         });
         ctx.body = serialized;
         recordAcpBusInterest(serialized, 'create_tab');
+        syncAcpBusControllerSnapshot(serialized, 'create_tab');
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to create agent tab' };
@@ -757,6 +926,7 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
         });
         ctx.body = serialized;
         recordAcpBusInterest(serialized, 'resume_tab');
+        syncAcpBusControllerSnapshot(serialized, 'resume_tab');
     } catch (error) {
         const message = error?.message || 'Failed to resume agent tab';
         ctx.status = /already open/i.test(message)
@@ -802,10 +972,9 @@ router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
         await acpManager.sendPrompt(tabId, text, attachments);
         ctx.status = 202;
         ctx.body = { ok: true };
-        recordAcpBusInterest(
-            acpManager.getSerializedTab(tabId),
-            'send_prompt'
-        );
+        const serialized = acpManager.getSerializedTab(tabId);
+        recordAcpBusInterest(serialized, 'send_prompt');
+        syncAcpBusControllerSnapshot(serialized, 'send_prompt');
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to send prompt' };
@@ -885,6 +1054,8 @@ router.post('/api/agents/tabs/:tabId/config', async (ctx) => {
 
 router.delete('/api/agents/tabs/:tabId', async (ctx) => {
     const { tabId } = ctx.params;
+    await acpBusReadyPromise;
+    await acpBusManager.unpinSession(`agent-tab:${tabId}`, 'agent_tab_close');
     await acpManager.closeTab(tabId);
     ctx.status = 204;
 });

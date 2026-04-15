@@ -778,7 +778,7 @@ export function buildTerminalSpawnRequest(request = {}) {
 
 function isLikelyReplayTextFragment(value) {
     const text = String(value || '');
-    return text.length >= 3 && /[\p{L}\p{N}]/u.test(text);
+    return text.length >= 2 && /[\p{L}\p{N}]/u.test(text);
 }
 
 export function mergeAgentMessageText(previousText, chunkText) {
@@ -3100,7 +3100,9 @@ export class AcpRuntime extends EventEmitter {
                 });
             }
             tab.syntheticStreams.clear();
-            tab.pendingUserEcho = null;
+            // Some runtimes replay the echoed user turn after prompt completion.
+            // Keep the pending echo matcher alive until it is consumed or a
+            // later prompt replaces it.
             const hydratedChanges = await this.#hydrateFreshSessionMetadata(tab);
             this.#broadcastHydratedSessionMetadata(tab, hydratedChanges);
             this.#broadcast(tab, {
@@ -3120,7 +3122,6 @@ export class AcpRuntime extends EventEmitter {
                 error
             );
             tab.syntheticStreams.clear();
-            tab.pendingUserEcho = null;
             this.#broadcast(tab, {
                 type: 'status',
                 status: tab.status,
@@ -3996,8 +3997,9 @@ export class AcpRuntime extends EventEmitter {
     }
 }
 
-export class AcpManager {
+export class AcpManager extends EventEmitter {
     constructor(options = {}) {
+        super();
         this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
         this.terminalManager = options.terminalManager || null;
         this.runtimeFactory = options.runtimeFactory || (
@@ -4188,8 +4190,15 @@ export class AcpManager {
             };
             this.runtimes.set(runtimeStoreKey, runtimeEntry);
             createdRuntime = true;
-            runtime.on('tab_dirty', () => {
+            runtime.on('tab_dirty', ({ tabId = '' } = {}) => {
                 this.schedulePersistTabs();
+                const serialized = this.getSerializedTab(tabId);
+                if (serialized) {
+                    this.emit('tab_dirty', {
+                        tabId,
+                        tab: serialized
+                    });
+                }
             });
             runtime.on('runtime_exit', () => {
                 if (this.disposing) return;
@@ -4456,6 +4465,10 @@ export class AcpManager {
     getSerializedTab(tabId) {
         const entry = this.tabs.get(tabId);
         return entry ? cloneSerializable(entry.serialize(), null) : null;
+    }
+
+    getSerializedTabBySessionId(sessionId) {
+        return this.#findOpenSerializedTabBySessionId(sessionId);
     }
 
     async createTab(options) {
