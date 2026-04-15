@@ -16,6 +16,7 @@ import { WebSocketServer } from 'ws';
 
 import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
+import { AcpBusManager } from './acp-bus-manager.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import {
@@ -81,6 +82,16 @@ function firstFormFieldValue(value) {
         return typeof value[0] === 'string' ? value[0] : '';
     }
     return typeof value === 'string' ? value : '';
+}
+
+function parseQueryBoolean(value) {
+    if (typeof value !== 'string') {
+        return false;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1'
+        || normalized === 'true'
+        || normalized === 'yes';
 }
 
 function normalizePromptAttachments(files) {
@@ -312,9 +323,37 @@ router.post('/api/auth/logout-others', async (ctx) => {
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
 const acpManager = new AcpManager({ terminalManager });
+const acpBusManager = new AcpBusManager({
+    acpManager,
+    pollIntervalMs: config.acpBusPollIntervalMs,
+    hotSessionLimit: config.acpBusHotSessionLimit,
+    cacheSessionLimit: config.acpBusCacheSessionLimit,
+    eventLimit: config.acpBusEventLimit
+});
+
+function recordAcpBusInterest(serialized, reason) {
+    const agentId = String(serialized?.agentId || '').trim();
+    const sessionId = String(serialized?.acpSessionId || '').trim();
+    if (!agentId || !sessionId) {
+        return;
+    }
+    void acpBusReadyPromise
+        .then(() => acpBusManager.markSessionInterest({
+            agentId,
+            sessionId,
+            cwd: serialized.cwd,
+            title: serialized.title
+        }))
+        .catch((error) => {
+            console.warn(
+                `[ACP Bus] Failed to record session interest (${reason}):`,
+                error?.message || error
+            );
+        });
+}
 
 // Restore sessions
-(async () => {
+const acpBusReadyPromise = (async () => {
     acpManager.restoring = true;
     try {
         const restoredSessions = await persistence.loadSessions();
@@ -325,6 +364,7 @@ const acpManager = new AcpManager({ terminalManager });
             }
         }
         await acpManager.restoreTabs(new Set(terminalManager.sessions.keys()));
+        await acpBusManager.start();
     } finally {
         acpManager.restoring = false;
     }
@@ -511,6 +551,62 @@ router.get('/api/agents', async (ctx) => {
     ctx.body = await acpManager.listState();
 });
 
+router.get('/api/acp-bus/state', async (ctx) => {
+    await acpBusReadyPromise;
+    ctx.body = acpBusManager.getState();
+});
+
+router.get('/api/acp-bus/sessions', async (ctx) => {
+    await acpBusReadyPromise;
+    const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
+    ctx.body = {
+        sessions: acpBusManager.listSessions({
+            agentId: typeof ctx.query.agentId === 'string'
+                ? ctx.query.agentId
+                : '',
+            presentOnly: parseQueryBoolean(String(ctx.query.present || '')),
+            hotOnly: parseQueryBoolean(String(ctx.query.hot || '')),
+            includeSnapshot: parseQueryBoolean(
+                String(ctx.query.snapshot || '')
+            ),
+            limit: Number.isFinite(limit) && limit > 0 ? limit : undefined
+        })
+    };
+});
+
+router.get('/api/acp-bus/sessions/:agentId/:sessionId', async (ctx) => {
+    await acpBusReadyPromise;
+    const includeSnapshot = parseQueryBoolean(
+        String(ctx.query.snapshot || '')
+    );
+    const session = acpBusManager.getSession(
+        ctx.params.agentId,
+        ctx.params.sessionId,
+        { includeSnapshot }
+    );
+    if (!session) {
+        ctx.status = 404;
+        ctx.body = { error: 'ACP bus session not found' };
+        return;
+    }
+    ctx.body = session;
+});
+
+router.get('/api/acp-bus/events', async (ctx) => {
+    await acpBusReadyPromise;
+    const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
+    ctx.body = {
+        events: acpBusManager.listEvents(
+            Number.isFinite(limit) && limit > 0 ? limit : 100
+        )
+    };
+});
+
+router.post('/api/acp-bus/sync', async (ctx) => {
+    await acpBusReadyPromise;
+    ctx.body = await acpBusManager.syncNow('api');
+});
+
 router.get('/api/agents/sessions', async (ctx) => {
     const { agentId = '', cwd = '' } = ctx.query || {};
     if (!agentId || typeof agentId !== 'string') {
@@ -600,7 +696,7 @@ router.post('/api/agents/tabs', async (ctx) => {
 
     try {
         ctx.status = 201;
-        ctx.body = await acpManager.createTab({
+        const serialized = await acpManager.createTab({
             agentId,
             cwd,
             terminalSessionId: typeof terminalSessionId === 'string'
@@ -608,6 +704,8 @@ router.post('/api/agents/tabs', async (ctx) => {
                 : '',
             modeId: typeof modeId === 'string' ? modeId : ''
         });
+        ctx.body = serialized;
+        recordAcpBusInterest(serialized, 'create_tab');
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to create agent tab' };
@@ -635,7 +733,7 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
 
     try {
         ctx.status = 201;
-        ctx.body = await acpManager.resumeTab({
+        const serialized = await acpManager.resumeTab({
             agentId,
             cwd,
             sessionId,
@@ -645,6 +743,8 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
                 ? terminalSessionId
                 : ''
         });
+        ctx.body = serialized;
+        recordAcpBusInterest(serialized, 'resume_tab');
     } catch (error) {
         const message = error?.message || 'Failed to resume agent tab';
         ctx.status = /already open/i.test(message)
@@ -690,6 +790,10 @@ router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
         await acpManager.sendPrompt(tabId, text, attachments);
         ctx.status = 202;
         ctx.body = { ok: true };
+        recordAcpBusInterest(
+            acpManager.getSerializedTab(tabId),
+            'send_prompt'
+        );
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to send prompt' };
@@ -944,6 +1048,7 @@ async function shutdown(signal) {
     try {
         await Promise.all([
             waitForHttpClose,
+            acpBusManager.dispose(),
             acpManager.dispose()
         ]);
         clearTimeout(forceExitTimer);

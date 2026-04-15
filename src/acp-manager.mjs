@@ -398,7 +398,7 @@ function withAgentPath(env = {}) {
     };
 }
 
-function mergeDefinitionEnv(definition, agentConfig = {}) {
+export function mergeDefinitionEnv(definition, agentConfig = {}) {
     const env = withAgentPath({
         ...process.env,
         ...normalizeConfiguredEnv(definition.id, agentConfig.env)
@@ -2097,7 +2097,7 @@ class ManagedTerminalSession extends EventEmitter {
     }
 }
 
-class AcpRuntime extends EventEmitter {
+export class AcpRuntime extends EventEmitter {
     constructor(definition, options = {}) {
         super();
         this.definition = definition;
@@ -3326,6 +3326,26 @@ class AcpRuntime extends EventEmitter {
         this.sessionToTabId.delete(tab.acpSessionId);
     }
 
+    detachTab(tabId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) return false;
+
+        for (const permission of tab.permissions.values()) {
+            if (permission.resolve) {
+                permission.resolve({
+                    outcome: {
+                        outcome: 'cancelled'
+                    }
+                });
+                permission.resolve = null;
+            }
+        }
+
+        this.tabs.delete(tabId);
+        this.sessionToTabId.delete(tab.acpSessionId);
+        return true;
+    }
+
     async dispose() {
         clearTimeout(this.idleTimer);
         this.idleTimer = null;
@@ -4431,6 +4451,11 @@ export class AcpManager {
                 };
             })
         };
+    }
+
+    getSerializedTab(tabId) {
+        const entry = this.tabs.get(tabId);
+        return entry ? cloneSerializable(entry.serialize(), null) : null;
     }
 
     async createTab(options) {

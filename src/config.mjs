@@ -19,7 +19,11 @@ const DEFAULT_CONFIG = {
     openaiKey: null,
     openaiApi: null,
     cloudflareKey: null,
-    shell: null
+    shell: null,
+    acpBusPollIntervalMs: 2000,
+    acpBusHotSessionLimit: 10,
+    acpBusCacheSessionLimit: 100,
+    acpBusEventLimit: 2000
 };
 
 function loadJson(filePath) {
@@ -214,6 +218,21 @@ Options:
     if (finalConfig['history-limit']) {
         finalConfig.historyLimit = finalConfig['history-limit'];
     }
+    if (finalConfig['acp-bus-poll-interval']) {
+        finalConfig.acpBusPollIntervalMs =
+            finalConfig['acp-bus-poll-interval'];
+    }
+    if (finalConfig['acp-bus-hot-session-limit']) {
+        finalConfig.acpBusHotSessionLimit =
+            finalConfig['acp-bus-hot-session-limit'];
+    }
+    if (finalConfig['acp-bus-cache-session-limit']) {
+        finalConfig.acpBusCacheSessionLimit =
+            finalConfig['acp-bus-cache-session-limit'];
+    }
+    if (finalConfig['acp-bus-event-limit']) {
+        finalConfig.acpBusEventLimit = finalConfig['acp-bus-event-limit'];
+    }
 
     if (args.host) {
         finalConfig.host = args.host;
@@ -279,6 +298,30 @@ Options:
     if (process.env.TABMINAL_DEBUG) finalConfig.debug = true;
     if (process.env.TABMINAL_GOOGLE_KEY) finalConfig.googleKey = process.env.TABMINAL_GOOGLE_KEY;
     if (process.env.TABMINAL_GOOGLE_CX) finalConfig.googleCx = process.env.TABMINAL_GOOGLE_CX;
+    if (process.env.TABMINAL_ACP_BUS_POLL_INTERVAL) {
+        finalConfig.acpBusPollIntervalMs =
+            process.env.TABMINAL_ACP_BUS_POLL_INTERVAL;
+    }
+    if (process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT) {
+        finalConfig.acpBusHotSessionLimit =
+            process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT;
+    }
+    if (process.env.TABMINAL_ACP_BUS_HOT_LIMIT) {
+        finalConfig.acpBusHotSessionLimit =
+            process.env.TABMINAL_ACP_BUS_HOT_LIMIT;
+    }
+    if (process.env.TABMINAL_ACP_BUS_CACHE_SESSION_LIMIT) {
+        finalConfig.acpBusCacheSessionLimit =
+            process.env.TABMINAL_ACP_BUS_CACHE_SESSION_LIMIT;
+    }
+    if (process.env.TABMINAL_ACP_BUS_CACHE_LIMIT) {
+        finalConfig.acpBusCacheSessionLimit =
+            process.env.TABMINAL_ACP_BUS_CACHE_LIMIT;
+    }
+    if (process.env.TABMINAL_ACP_BUS_EVENT_LIMIT) {
+        finalConfig.acpBusEventLimit =
+            process.env.TABMINAL_ACP_BUS_EVENT_LIMIT;
+    }
     if (parseBool(process.env.TABMINAL_ACCEPT) || parseBool(process.env.TABMINAL_ACCEPT_TERMS)) {
         finalConfig.acceptTerms = true;
     }
@@ -295,6 +338,28 @@ Options:
     finalConfig.historyLimit = parsePositiveInt(
         finalConfig.historyLimit,
         DEFAULT_CONFIG.historyLimit
+    );
+    finalConfig.acpBusPollIntervalMs = parsePositiveIntWithMin(
+        finalConfig.acpBusPollIntervalMs,
+        DEFAULT_CONFIG.acpBusPollIntervalMs,
+        500,
+        'ACP bus poll interval'
+    );
+    finalConfig.acpBusHotSessionLimit = parsePositiveInt(
+        finalConfig.acpBusHotSessionLimit,
+        DEFAULT_CONFIG.acpBusHotSessionLimit
+    );
+    finalConfig.acpBusCacheSessionLimit = parsePositiveIntWithMin(
+        finalConfig.acpBusCacheSessionLimit,
+        DEFAULT_CONFIG.acpBusCacheSessionLimit,
+        finalConfig.acpBusHotSessionLimit,
+        'ACP bus cache session limit'
+    );
+    finalConfig.acpBusEventLimit = parsePositiveIntWithMin(
+        finalConfig.acpBusEventLimit,
+        DEFAULT_CONFIG.acpBusEventLimit,
+        100,
+        'ACP bus event limit'
     );
 
     // Password Logic
