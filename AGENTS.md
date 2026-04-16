@@ -24,7 +24,7 @@ Current product shape:
 - Persistent terminal sessions remain the core product.
 - There are now two AI surfaces:
   - terminal-native assistant in `src/terminal-session.mjs`
-  - ACP agent workspace in `src/acp-manager.mjs` + `public/app.js`
+  - ACP agent workspace through `src/acp-bus-manager.mjs` + `public/app.js`
 - One web UI can connect to multiple Tabminal hosts.
 - The workspace bar now mixes file tabs, agent tabs, and pinned terminal tabs.
 
@@ -32,9 +32,10 @@ Important persistence files under `~/.tabminal`:
 
 - `config.json`
 - `cluster.json`
-- `agent-tabs.json`
 - `agent-config.json`
 - `auth-sessions.json`
+- ACP open tab identity is stored inside each terminal session's
+  `workspaceState.openAgentTabs`, not in a standalone file.
 
 ## 2) Non-Negotiable Contracts
 

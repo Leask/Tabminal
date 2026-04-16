@@ -22,7 +22,9 @@ class FakeBusRuntime extends EventEmitter {
         this.definition = definition;
         this.options = options;
         this.tabs = new Map();
+        this.createCalls = [];
         this.resumeCalls = [];
+        this.promptCalls = [];
         this.detachCalls = [];
         this.disposed = false;
         this.kind = String(options.runtimeStoreKey || '').includes(':observe:')
@@ -34,35 +36,133 @@ class FakeBusRuntime extends EventEmitter {
         return {
             sessions: Array.isArray(this.definition.busSessions)
                 ? structuredClone(this.definition.busSessions)
-                : []
+                : [],
+            scope: this.definition.busScope || 'all'
         };
+    }
+
+    async createTab(meta) {
+        this.createCalls.push(structuredClone(meta));
+        const sessionId = `new-${this.createCalls.length}`;
+        const tab = {
+            id: meta.id,
+            runtimeId: `runtime-${this.definition.id}`,
+            runtimeKey: this.options.runtimeStoreKey || '',
+            agentId: this.definition.id,
+            agentLabel: this.definition.label,
+            commandLabel: this.definition.commandLabel || '',
+            acpSessionId: sessionId,
+            cwd: meta.cwd,
+            terminalSessionId: meta.terminalSessionId || '',
+            title: `${this.definition.label} ${sessionId}`,
+            status: 'ready',
+            busy: false,
+            errorMessage: '',
+            currentModeId: meta.modeId || '',
+            availableModes: [],
+            availableCommands: [],
+            sessionCapabilities: this.getSessionCapabilities(),
+            configOptions: [],
+            messages: [],
+            toolCalls: [],
+            permissions: [],
+            plan: [],
+            terminals: []
+        };
+        this.tabs.set(meta.id, tab);
+        return this.serializeTab(tab);
     }
 
     async resumeTab(meta) {
         this.resumeCalls.push(structuredClone(meta));
         const tab = {
             id: meta.id,
+            runtimeId: `runtime-${this.definition.id}`,
+            runtimeKey: this.options.runtimeStoreKey || '',
             agentId: this.definition.id,
+            agentLabel: this.definition.label,
+            commandLabel: this.definition.commandLabel || '',
             acpSessionId: meta.acpSessionId,
             cwd: meta.cwd,
+            terminalSessionId: meta.terminalSessionId || '',
             title: meta.title || `${this.definition.label} ${meta.acpSessionId}`,
             status: 'ready',
             busy: false,
             errorMessage: '',
+            currentModeId: '',
+            availableModes: [],
+            availableCommands: [],
+            sessionCapabilities: this.getSessionCapabilities(),
+            configOptions: [],
             messages: [{
                 id: `msg-${meta.acpSessionId}`,
                 kind: 'message',
                 role: 'assistant',
                 text: `loaded ${meta.acpSessionId}`
             }],
-            toolCalls: []
+            toolCalls: [],
+            permissions: [],
+            plan: [],
+            terminals: []
         };
         this.tabs.set(meta.id, tab);
         return this.serializeTab(tab);
     }
 
+    getSessionCapabilities() {
+        return {
+            list: true,
+            listAll: true,
+            resume: true,
+            load: true
+        };
+    }
+
     serializeTab(tab) {
         return structuredClone(tab);
+    }
+
+    async sendPrompt(tabId, text, attachments = []) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        this.promptCalls.push({
+            tabId,
+            text,
+            attachments: structuredClone(attachments)
+        });
+        tab.messages.push({
+            id: `prompt-${this.promptCalls.length}`,
+            kind: 'message',
+            role: 'user',
+            text
+        });
+        this.emit('tab_dirty', { tabId });
+    }
+
+    async cancel() {}
+
+    async resolvePermission() {}
+
+    async setMode(tabId, modeId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        tab.currentModeId = modeId;
+        this.emit('tab_dirty', { tabId });
+        return this.serializeTab(tab);
+    }
+
+    async setConfigOption(tabId, configId, valueId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) {
+            throw new Error('Agent tab not found');
+        }
+        tab.configOptions = [{ id: configId, selectedValueId: valueId }];
+        this.emit('tab_dirty', { tabId });
+        return this.serializeTab(tab);
     }
 
     detachTab(tabId) {
@@ -116,7 +216,8 @@ async function withBusManager(prefix, options, callback) {
         cacheSessionLimit: options.cacheSessionLimit || 10,
         snapshotFlushDelayMs: options.snapshotFlushDelayMs || 25,
         discoveryCwd: '/tmp/discovery',
-        controllerSnapshotProvider: options.controllerSnapshotProvider,
+        loadOpenTabs: options.loadOpenTabs,
+        saveOpenTabs: options.saveOpenTabs,
         runtimeFactory: (definition, runtimeOptions) => {
             const runtime = new FakeBusRuntime(definition, runtimeOptions);
             runtimeInstances.push(runtime);
@@ -139,8 +240,19 @@ async function withBusManager(prefix, options, callback) {
     }
 }
 
+async function waitFor(condition, timeoutMs = 500, intervalMs = 10) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+        if (condition()) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Timed out waiting for condition');
+}
+
 describe('AcpBusManager', () => {
-    it('indexes sessions globally and attaches only the hottest set', async () => {
+    it('indexes sessions globally and attaches the most recently updated set', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 2,
             definitions: [
@@ -206,7 +318,7 @@ describe('AcpBusManager', () => {
         });
     });
 
-    it('promotes interested sessions into the hot set', async () => {
+    it('does not promote local interest ahead of ACP updatedAt', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,
             definitions: [{
@@ -242,16 +354,66 @@ describe('AcpBusManager', () => {
                 title: 'Second'
             });
 
+            await new Promise((resolve) => setTimeout(resolve, 25));
+
             assert.deepEqual(
                 manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
-                ['codex::c-2']
+                ['codex::c-1']
             );
-            const cold = manager.getSession('codex', 'c-1');
-            assert.equal(cold.continuityState, 'resync_required');
+            assert.equal(manager.getState().observedSessionCount, 1);
         });
     });
 
-    it('keeps pinned sessions observed outside the hot set', async () => {
+    it('does not remove sessions when discovery is cwd-scoped', async () => {
+        const definition = {
+            id: 'codex',
+            label: 'Codex',
+            busScope: 'all',
+            busSessions: [
+                {
+                    sessionId: 'c-1',
+                    cwd: '/tmp/codex',
+                    title: 'Visible',
+                    updatedAt: '2026-04-14T10:01:00.000Z'
+                },
+                {
+                    sessionId: 'c-2',
+                    cwd: '/tmp/other',
+                    title: 'Other cwd',
+                    updatedAt: '2026-04-14T10:00:00.000Z'
+                }
+            ]
+        };
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            definitions: [definition]
+        }, async ({ manager }) => {
+            await manager.start();
+            assert.equal(
+                manager.getSession('codex', 'c-2')?.isPresent,
+                true
+            );
+
+            definition.busScope = 'cwd';
+            definition.busSessions = [definition.busSessions[0]];
+            await manager.syncNow('cwd-only');
+
+            assert.equal(
+                manager.getSession('codex', 'c-2')?.isPresent,
+                true
+            );
+
+            definition.busScope = 'all';
+            await manager.syncNow('all');
+
+            assert.equal(
+                manager.getSession('codex', 'c-2')?.isPresent,
+                false
+            );
+        });
+    });
+
+    it('keeps pinned sessions observed outside the updated hot set', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,
             definitions: [{
@@ -272,7 +434,7 @@ describe('AcpBusManager', () => {
                     }
                 ]
             }]
-        }, async ({ manager, runtimeInstances }) => {
+        }, async ({ manager }) => {
             await manager.start();
             assert.equal(manager.getState().observedSessionCount, 1);
 
@@ -292,7 +454,7 @@ describe('AcpBusManager', () => {
             assert.equal(manager.getState().observedSessionCount, 2);
             assert.deepEqual(
                 manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
-                ['codex::c-1']
+                ['codex::c-1', 'codex::c-2']
             );
             assert.equal(
                 manager.getSession('codex', 'c-2').continuityState,
@@ -301,6 +463,8 @@ describe('AcpBusManager', () => {
 
             await manager.unpinSession('agent-tab:test', 'test_detach');
 
+            await waitFor(() => manager.getState().observedSessionCount === 1);
+
             assert.equal(manager.getState().pinnedSessionCount, 0);
             assert.equal(manager.getState().observedSessionCount, 1);
             assert.equal(
@@ -308,76 +472,102 @@ describe('AcpBusManager', () => {
                 'resync_required'
             );
 
-            const observeRuntimes = runtimeInstances.filter((runtime) =>
-                runtime.kind === 'observe'
-            );
-            assert.ok(
-                observeRuntimes.some((runtime) =>
-                    runtime.detachCalls.length > 0
-                )
-            );
         });
     });
 
-    it('uses an existing controller snapshot instead of restore attach', async () => {
+    it('restores workspace open tabs as bus-owned session pins', async () => {
+        const savedTabs = [];
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,
+            loadOpenTabs: async () => [{
+                id: 'open-tab-1',
+                agentId: 'test-agent',
+                acpSessionId: 's-1',
+                cwd: '/tmp/test-agent',
+                terminalSessionId: 'term-1',
+                title: 'Persisted session'
+            }],
+            saveOpenTabs: async (tabs) => {
+                savedTabs.push(structuredClone(tabs));
+            },
             definitions: [{
                 id: 'test-agent',
                 label: 'Test Agent',
                 busSessions: [{
                     sessionId: 's-1',
                     cwd: '/tmp/test-agent',
-                    title: 'Controller-owned session',
+                    title: 'Persisted session',
                     updatedAt: '2026-04-14T10:01:00.000Z'
                 }]
-            }],
-            controllerSnapshotProvider: (agentId, sessionId) => {
-                if (agentId !== 'test-agent' || sessionId !== 's-1') {
-                    return null;
-                }
-                return {
-                    id: 'controller-tab-1',
-                    agentId: 'test-agent',
-                    acpSessionId: 's-1',
-                    cwd: '/tmp/test-agent',
-                    title: 'Controller-owned session',
-                    status: 'ready',
-                    busy: false,
-                    errorMessage: '',
-                    messages: [{
-                        id: 'msg-1',
-                        kind: 'message',
-                        role: 'assistant',
-                        text: 'hello from controller'
-                    }],
-                    toolCalls: [],
-                    permissions: [],
-                    plan: [],
-                    terminals: []
-                };
-            }
+            }]
         }, async ({ manager, runtimeInstances }) => {
-            await manager.start();
+            await manager.start({
+                validTerminalSessionIds: new Set(['term-1'])
+            });
 
-            const attached = await manager.pinSession(
-                'agent-tab:test',
-                {
-                    agentId: 'test-agent',
-                    sessionId: 's-1',
-                    cwd: '/tmp/test-agent',
-                    title: 'Controller-owned session'
-                },
-                'controller_attach'
-            );
+            const tab = manager.getOpenTab('open-tab-1');
 
-            assert.equal(attached.sessionKey, 'test-agent::s-1');
-            assert.equal(attached.continuityState, 'live');
-            assert.equal(attached.messageCount, 1);
+            assert.equal(tab.id, 'open-tab-1');
+            assert.equal(tab.acpSessionId, 's-1');
+            assert.equal(tab.terminalSessionId, 'term-1');
             assert.equal(manager.getState().observedSessionCount, 1);
             assert.equal(runtimeInstances.filter((runtime) =>
                 runtime.kind === 'observe'
-            ).length, 0);
+            ).length, 1);
+            assert.equal(savedTabs.length, 0);
+        });
+    });
+
+    it('creates, resumes, and prompts through bus-owned runtime handles', async () => {
+        const savedTabs = [];
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            loadOpenTabs: async () => [],
+            saveOpenTabs: async (tabs) => {
+                savedTabs.push(structuredClone(tabs));
+            },
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: [{
+                    sessionId: 'c-1',
+                    cwd: '/tmp/codex',
+                    title: 'Existing',
+                    updatedAt: '2026-04-14T10:01:00.000Z'
+                }]
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+
+            const created = await manager.createTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex',
+                terminalSessionId: 'term-1'
+            });
+            assert.equal(created.agentId, 'codex');
+            assert.equal(created.terminalSessionId, 'term-1');
+            assert.equal(manager.listOpenTabs().length, 1);
+
+            await manager.sendPromptForTab(created.id, 'hello bus');
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+                && runtime.promptCalls.length > 0
+            );
+            assert.ok(observeRuntime);
+            assert.equal(observeRuntime.promptCalls[0].text, 'hello bus');
+
+            const resumed = await manager.resumeTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex',
+                sessionId: 'c-1',
+                targetTabId: created.id,
+                terminalSessionId: 'term-1',
+                title: 'Existing'
+            });
+            assert.equal(resumed.serialized.id, created.id);
+            assert.equal(resumed.serialized.acpSessionId, 'c-1');
+            assert.equal(manager.listOpenTabs().length, 1);
+            assert.ok(savedTabs.length >= 2);
         });
     });
 

@@ -1,6 +1,6 @@
 # ACP
 
-Last updated: 2026-03-27
+Last updated: 2026-04-16
 
 This file is no longer a pure implementation plan.
 It is now the ACP status ledger for Tabminal:
@@ -24,7 +24,8 @@ backend, and feel native inside the existing workspace/editor UI.
 
 Implemented:
 
-- ACP supervisor in `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
+- ACP bus supervisor in `/Users/leask/Documents/Tabminal/src/acp-bus-manager.mjs`
+- ACP runtime/definition support in `/Users/leask/Documents/Tabminal/src/acp-manager.mjs`
 - Built-in host-local agent definitions:
   - Gemini CLI
   - Codex CLI
@@ -32,11 +33,12 @@ Implemented:
   - GitHub Copilot
   - ACP Test Agent when `TABMINAL_ENABLE_TEST_AGENT=1`
 - Lazy runtime startup
-- Runtime reuse while tabs are active
+- Runtime reuse while bus-observed sessions are hot or pinned
 - Idle cleanup
-- ACP websocket fan-out to browser clients
+- ACP bus websocket fan-out to browser clients via `/ws/acp-bus`
 - Session restore for ACP runtimes that support `loadSession`
 - Per-agent saved config/env persistence
+- Open agent tab identity stored in terminal `workspaceState.openAgentTabs`
 
 ### Frontend
 
@@ -73,7 +75,7 @@ The following items are effectively shipped and usable.
   - `POST /api/agents/tabs/:tabId/config`
   - `POST /api/agents/tabs/:tabId/permissions/:permissionId`
   - `DELETE /api/agents/tabs/:tabId`
-- ACP websocket endpoint live
+- ACP bus websocket endpoint live
 
 ### 3.2 Agent tab UX
 

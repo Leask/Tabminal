@@ -43,6 +43,7 @@ class FakeRuntime extends EventEmitter {
         this.listRequests = [];
         this.resumedTabs = [];
         this.resumeDelayMs = options.resumeDelayMs || 0;
+        this.resumeReturnsRestoring = !!options.resumeReturnsRestoring;
         this.sessionCapabilities = {
             load: true,
             list: true,
@@ -259,6 +260,53 @@ class FakeRuntime extends EventEmitter {
     }
 
     async resumeTab(meta) {
+        if (this.resumeReturnsRestoring) {
+            const tab = {
+                id: meta.id,
+                runtimeId: this.runtimeId,
+                runtimeKey: this.runtimeKey,
+                acpSessionId: meta.acpSessionId,
+                agentId: this.definition.id,
+                agentLabel: this.definition.label,
+                commandLabel: this.definition.commandLabel,
+                terminalSessionId: meta.terminalSessionId || '',
+                cwd: meta.cwd,
+                createdAt: '2026-03-28T00:00:00.000Z',
+                status: 'restoring',
+                busy: true,
+                errorMessage: '',
+                currentModeId: '',
+                title: meta.title || 'Previous run',
+                availableModes: [],
+                availableCommands: [],
+                configOptions: [],
+                sessionCapabilities: { ...this.sessionCapabilities },
+                messages: [],
+                toolCalls: [],
+                permissions: [],
+                plan: [],
+                usage: null,
+                terminals: []
+            };
+            this.tabs.set(tab.id, tab);
+            this.resumedTabs.push(meta.acpSessionId);
+            setTimeout(() => {
+                const current = this.tabs.get(tab.id);
+                if (!current) {
+                    return;
+                }
+                current.status = 'ready';
+                current.busy = false;
+                current.messages = [{
+                    id: 'restored-message',
+                    role: 'assistant',
+                    kind: 'message',
+                    text: 'restored transcript'
+                }];
+                this.emit('tab_dirty', { tabId: tab.id });
+            }, this.resumeDelayMs || 0);
+            return { ...tab };
+        }
         if (this.resumeDelayMs > 0) {
             await new Promise((resolve) => {
                 setTimeout(resolve, this.resumeDelayMs);
@@ -314,6 +362,51 @@ class FakeRuntime extends EventEmitter {
     }
 
     async resumeIntoTab(tabId, meta) {
+        if (this.resumeReturnsRestoring) {
+            const tab = this.tabs.get(tabId);
+            if (!tab) {
+                throw new Error('Agent tab not found');
+            }
+            const existingTab = Array.from(this.tabs.values()).find(
+                (entry) => (
+                    entry.id !== tabId
+                    && entry.acpSessionId === meta.acpSessionId
+                )
+            );
+            if (existingTab) {
+                throw new Error('Session is already open');
+            }
+            tab.acpSessionId = meta.acpSessionId;
+            tab.terminalSessionId = meta.terminalSessionId || '';
+            tab.cwd = meta.cwd;
+            tab.title = meta.title || 'Previous run';
+            tab.createdAt = '2026-03-28T00:00:00.000Z';
+            tab.status = 'restoring';
+            tab.busy = true;
+            tab.messages = [];
+            tab.toolCalls = [];
+            tab.permissions = [];
+            tab.plan = [];
+            tab.usage = null;
+            tab.terminals = [];
+            this.resumedTabs.push(meta.acpSessionId);
+            setTimeout(() => {
+                const current = this.tabs.get(tabId);
+                if (!current) {
+                    return;
+                }
+                current.status = 'ready';
+                current.busy = false;
+                current.messages = [{
+                    id: 'restored-message',
+                    role: 'assistant',
+                    kind: 'message',
+                    text: 'restored transcript'
+                }];
+                this.emit('tab_dirty', { tabId });
+            }, this.resumeDelayMs || 0);
+            return { ...tab };
+        }
         if (this.resumeDelayMs > 0) {
             await new Promise((resolve) => {
                 setTimeout(resolve, this.resumeDelayMs);
@@ -406,6 +499,17 @@ class FakeRuntime extends EventEmitter {
     async dispose() {
         this.disposed = true;
     }
+}
+
+async function waitFor(condition, timeoutMs = 500, intervalMs = 10) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+        if (condition()) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Timed out waiting for condition');
 }
 
 class FailingRuntime extends FakeRuntime {
@@ -876,7 +980,8 @@ describe('AcpManager', () => {
             loadConfigs: async () => persistedConfigs,
             saveConfigs: async (configs) => {
                 persistedConfigs = structuredClone(configs);
-            }
+            },
+            transcriptPersistDelayMs: options.transcriptPersistDelayMs
         });
         manager.definitions = [{
             id: 'codex',
@@ -1184,9 +1289,64 @@ describe('AcpManager', () => {
         assert.equal(tab.acpSessionId, 'hist-1');
         assert.equal(tab.terminalSessionId, 'term-1');
         assert.equal(tab.title, 'Previous run');
-        assert.equal(getPersistedTabs().length, 1);
+        await waitFor(() => getPersistedTabs().length === 1);
         const runtimeEntry = manager.runtimes.values().next().value;
         assert.deepEqual(runtimeEntry.runtime.resumedTabs, ['hist-1']);
+    });
+
+    it('finds an open ACP session without serializing unrelated tabs', async () => {
+        const { manager } = createManager();
+
+        const first = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project'
+        });
+        const second = await manager.createTab({
+            agentId: 'codex',
+            cwd: '/tmp/project'
+        });
+
+        const firstEntry = manager.tabs.get(first.id);
+        assert.ok(firstEntry);
+        firstEntry.serialize = () => {
+            throw new Error('should not serialize unrelated tab');
+        };
+
+        const found = manager.getSerializedTabBySessionId(second.acpSessionId);
+        assert.equal(found.id, second.id);
+        assert.equal(found.acpSessionId, second.acpSessionId);
+    });
+
+    it('returns restoring immediately and settles resume in the background', async () => {
+        const { manager, getPersistedTabs } = createManager({
+            fakeRuntimeOptions: {
+                resumeReturnsRestoring: true,
+                resumeDelayMs: 20
+            },
+            transcriptPersistDelayMs: 5
+        });
+
+        const tab = await manager.resumeTab({
+            agentId: 'codex',
+            cwd: '/tmp/project',
+            terminalSessionId: 'term-1',
+            sessionId: 'hist-1',
+            title: 'Previous run'
+        });
+
+        assert.equal(tab.status, 'restoring');
+        assert.equal(tab.busy, true);
+        await waitFor(() => getPersistedTabs().length === 1);
+        assert.equal(manager.getSerializedTab(tab.id).status, 'restoring');
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 60);
+        });
+
+        const settled = manager.getSerializedTab(tab.id);
+        assert.equal(settled.status, 'ready');
+        assert.equal(settled.busy, false);
+        assert.equal(settled.messages.length, 1);
     });
 
     it('resumes a historical session into an existing tab', async () => {

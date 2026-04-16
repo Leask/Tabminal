@@ -137,6 +137,9 @@ const editorPane = document.getElementById('editor-pane');
 // #region Configuration
 const HEARTBEAT_INTERVAL_MS = 1000;
 const RECONNECT_RETRY_MS = 5000;
+const ACP_BUS_HEALTH_INTERVAL_MS = 10_000;
+const ACP_BUS_RECONNECT_BASE_MS = 1500;
+const ACP_BUS_RECONNECT_MAX_MS = 15_000;
 const FILE_TREE_REFRESH_INTERVAL_MS = 3000;
 const FILE_VERSION_CHECK_INTERVAL_MS = 3000;
 const AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 30;
@@ -627,6 +630,41 @@ function uniqueStringList(values) {
     ));
 }
 
+function normalizeWorkspaceAgentTabs(values, fallback = []) {
+    const source = Array.isArray(values) ? values : fallback;
+    if (!Array.isArray(source)) return [];
+    const seen = new Set();
+    const normalized = [];
+    for (const entry of source) {
+        if (!entry || typeof entry !== 'object') continue;
+        const id = String(entry.id || '').trim();
+        const agentId = String(entry.agentId || '').trim();
+        const acpSessionId = String(
+            entry.acpSessionId
+            || entry.sessionId
+            || ''
+        ).trim();
+        const cwd = String(entry.cwd || '').trim();
+        if (!id || !agentId || !acpSessionId || !cwd || seen.has(id)) {
+            continue;
+        }
+        seen.add(id);
+        normalized.push({
+            id,
+            agentId,
+            acpSessionId,
+            cwd,
+            terminalSessionId: String(entry.terminalSessionId || '').trim(),
+            createdAt: String(entry.createdAt || '').trim(),
+            title: typeof entry.title === 'string' ? entry.title : '',
+            currentModeId: typeof entry.currentModeId === 'string'
+                ? entry.currentModeId
+                : ''
+        });
+    }
+    return normalized;
+}
+
 function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
     const source = input && typeof input === 'object' ? input : {};
     const base = fallback && typeof fallback === 'object' ? fallback : {};
@@ -681,7 +719,11 @@ function normalizeWorkspaceSnapshot(input = {}, fallback = {}) {
             : 'auto',
         expandedPaths: uniqueStringList(source.expandedPaths),
         markdownSplitPath,
-        activeWorkspaceTabKey
+        activeWorkspaceTabKey,
+        openAgentTabs: normalizeWorkspaceAgentTabs(
+            source.openAgentTabs,
+            base.openAgentTabs
+        )
     };
 }
 
@@ -711,6 +753,7 @@ function buildWorkspaceSnapshotForSession(session, overrides = {}) {
         expandedPaths: session.sharedWorkspaceState.expandedPaths,
         markdownSplitPath: session.workspaceState.markdownSplitPath,
         activeWorkspaceTabKey: session.workspaceState.activeTabKey,
+        openAgentTabs: getWorkspaceAgentTabSnapshots(session),
         ...overrides
     });
 }
@@ -966,6 +1009,9 @@ class ServerClient {
         this.acpBusSocket = null;
         this.acpBusConnectPromise = null;
         this.acpBusReconnectTimer = null;
+        this.acpBusHealthTimer = null;
+        this.acpBusLifecycleEnabled = false;
+        this.acpBusReconnectAttempt = 0;
         this.acpBusState = null;
         this.loadStoredAuth();
     }
@@ -1041,20 +1087,6 @@ class ServerClient {
         return wsUrl.toString();
     }
 
-    resolveAgentWsUrl(tabId) {
-        const base = new URL(this.baseUrl);
-        const shouldUseSecureWs = (
-            base.protocol === 'https:'
-            || window.location.protocol === 'https:'
-        );
-        const wsProtocol = shouldUseSecureWs ? 'wss:' : 'ws:';
-        const wsUrl = new URL(
-            `/ws/agents/${tabId}`,
-            `${wsProtocol}//${base.host}`
-        );
-        return wsUrl.toString();
-    }
-
     resolveAcpBusWsUrl() {
         const base = new URL(this.baseUrl);
         const shouldUseSecureWs = (
@@ -1113,6 +1145,7 @@ class ServerClient {
         this.needsAccessLogin = false;
         this.accessLoginUrl = '';
         renderServerControls();
+        this.startAcpBusLifecycle();
         await syncServer(this);
         this.startHeartbeat();
     }
@@ -1263,7 +1296,7 @@ class ServerClient {
         this.accessLoginUrl = '';
         this.agentStateLoaded = false;
         this.stopHeartbeat();
-        this.closeAcpBusSocket();
+        this.stopAcpBusLifecycle();
     }
 
     async fetchWithoutAuth(path, options = {}) {
@@ -1346,7 +1379,7 @@ class ServerClient {
         const wasRequired = this.needsAccessLogin;
         this.needsAccessLogin = true;
         this.accessLoginUrl = loginUrl;
-        this.closeAcpBusSocket();
+        this.stopAcpBusLifecycle();
         setStatus(this, 'reconnecting');
         renderServerControls();
         if (!wasRequired) {
@@ -1374,6 +1407,73 @@ class ServerClient {
         this.heartbeatTimer = null;
     }
 
+    startAcpBusLifecycle() {
+        if (!this.isAuthenticated) {
+            return;
+        }
+        this.acpBusLifecycleEnabled = true;
+        this.ensureAcpBusHealthTimer();
+        this.refreshAcpBusHealth();
+    }
+
+    stopAcpBusLifecycle() {
+        this.acpBusLifecycleEnabled = false;
+        this.acpBusReconnectAttempt = 0;
+        if (this.acpBusReconnectTimer) {
+            clearTimeout(this.acpBusReconnectTimer);
+            this.acpBusReconnectTimer = null;
+        }
+        if (this.acpBusHealthTimer) {
+            clearInterval(this.acpBusHealthTimer);
+            this.acpBusHealthTimer = null;
+        }
+        this.closeAcpBusSocket();
+    }
+
+    ensureAcpBusHealthTimer() {
+        if (this.acpBusHealthTimer) {
+            return;
+        }
+        this.acpBusHealthTimer = window.setInterval(() => {
+            this.refreshAcpBusHealth();
+        }, ACP_BUS_HEALTH_INTERVAL_MS);
+    }
+
+    refreshAcpBusHealth() {
+        if (!this.acpBusLifecycleEnabled || !this.isAuthenticated) {
+            return;
+        }
+        const socketState = this.acpBusSocket?.readyState;
+        if (
+            socketState === WebSocket.OPEN
+            || socketState === WebSocket.CONNECTING
+            || this.acpBusConnectPromise
+        ) {
+            return;
+        }
+        void this.ensureAcpBusConnected();
+    }
+
+    scheduleAcpBusReconnect() {
+        if (
+            !this.acpBusLifecycleEnabled
+            || !this.isAuthenticated
+            || this.acpBusReconnectTimer
+        ) {
+            return;
+        }
+        const delayMs = Math.min(
+            ACP_BUS_RECONNECT_BASE_MS
+                * (2 ** Math.min(this.acpBusReconnectAttempt, 4)),
+            ACP_BUS_RECONNECT_MAX_MS
+        );
+        this.acpBusReconnectAttempt += 1;
+        this.acpBusReconnectTimer = window.setTimeout(() => {
+            this.acpBusReconnectTimer = null;
+            this.refreshAcpBusHealth();
+        }, delayMs);
+    }
+
     async ensureAcpBusConnected() {
         if (
             this.acpBusSocket
@@ -1395,6 +1495,7 @@ class ServerClient {
                 this.resolveAcpBusWsUrl(),
                 this.getWebSocketProtocols()
             );
+            this.acpBusSocket = socket;
 
             return await new Promise((resolve) => {
                 let settled = false;
@@ -1407,7 +1508,6 @@ class ServerClient {
                 };
 
                 socket.addEventListener('open', () => {
-                    this.acpBusSocket = socket;
                     this.handleAcpBusOpen();
                     settle(true);
                 });
@@ -1442,6 +1542,7 @@ class ServerClient {
             clearTimeout(this.acpBusReconnectTimer);
             this.acpBusReconnectTimer = null;
         }
+        this.acpBusReconnectAttempt = 0;
         for (const agentTab of getAgentTabsForServer(this.id)) {
             agentTab.connect();
         }
@@ -1455,15 +1556,10 @@ class ServerClient {
         if (
             !shouldReconnect
             || !this.isAuthenticated
-            || getAgentTabsForServer(this.id).length === 0
-            || this.acpBusReconnectTimer
         ) {
             return;
         }
-        this.acpBusReconnectTimer = window.setTimeout(() => {
-            this.acpBusReconnectTimer = null;
-            void this.ensureAcpBusConnected();
-        }, 1500);
+        this.scheduleAcpBusReconnect();
     }
 
     closeAcpBusSocket() {
@@ -1500,10 +1596,28 @@ class ServerClient {
 
     handleAcpBusEvent(event) {
         const session = event?.payload?.session;
+        const pinId = typeof event?.payload?.pinId === 'string'
+            ? event.payload.pinId.trim()
+            : '';
+        const targetTabId = pinId.startsWith('agent-tab:')
+            ? pinId.slice('agent-tab:'.length)
+            : '';
+        const deliveredTabs = new Set();
+        if (targetTabId) {
+            const targetKey = makeAgentTabKey(this.id, targetTabId);
+            const targetTab = state.agentTabs.get(targetKey);
+            if (targetTab) {
+                deliveredTabs.add(targetKey);
+                targetTab.handleBusEvent(event);
+            }
+        }
         if (!session?.agentId || !session?.sessionId) {
             return;
         }
         for (const agentTab of getAgentTabsForServer(this.id)) {
+            if (deliveredTabs.has(agentTab.key)) {
+                continue;
+            }
             if (
                 agentTab.agentId === session.agentId
                 && agentTab.acpSessionId === session.sessionId
@@ -6552,6 +6666,40 @@ class EditorManager {
         if (!agentTab || agentTab.historyWindowLoading) {
             return;
         }
+        if (agentTab.timelinePagingActive) {
+            if (!agentTab.timelinePage?.hasOlder) {
+                return;
+            }
+            const timeline = getAgentTimelineItems(agentTab);
+            const firstOrder = Number(timeline[0]?.order);
+            const minOrder = Number(agentTab.timelinePage?.minOrder);
+            if (
+                Number.isFinite(firstOrder)
+                && Number.isFinite(minOrder)
+                && firstOrder <= minOrder
+            ) {
+                return;
+            }
+            const anchor = this.captureAgentTranscriptAnchor(
+                getAgentTimelineItemKey(timeline[0], 0)
+            );
+            agentTab.scrollToBottomOnNextRender = false;
+            agentTab.historyWindowLoading = true;
+            try {
+                await agentTab.loadTimelinePage({
+                    mode: 'prepend',
+                    before: agentTab.timelinePage.prevCursor,
+                    limit: AGENT_TRANSCRIPT_WINDOW_STEP
+                });
+                this.renderAgentPanel(agentTab, {
+                    reason: 'history-older',
+                    preserveTranscriptAnchor: anchor
+                });
+            } finally {
+                agentTab.historyWindowLoading = false;
+            }
+            return;
+        }
         const timeline = getAgentTimelineItems(agentTab);
         const transcriptWindow = getAgentTranscriptWindow(
             agentTab,
@@ -6592,6 +6740,40 @@ class EditorManager {
 
     async loadNewerAgentTimeline(agentTab) {
         if (!agentTab || agentTab.historyWindowLoading) {
+            return;
+        }
+        if (agentTab.timelinePagingActive) {
+            if (!agentTab.timelinePage?.hasNewer) {
+                return;
+            }
+            const timeline = getAgentTimelineItems(agentTab);
+            const lastOrder = Number(timeline.at(-1)?.order);
+            const maxOrder = Number(agentTab.timelinePage?.maxOrder);
+            if (
+                Number.isFinite(lastOrder)
+                && Number.isFinite(maxOrder)
+                && lastOrder >= maxOrder
+            ) {
+                return;
+            }
+            const anchor = this.captureAgentTranscriptAnchor(
+                getAgentTimelineItemKey(timeline.at(-1), timeline.length - 1)
+            );
+            agentTab.scrollToBottomOnNextRender = false;
+            agentTab.historyWindowLoading = true;
+            try {
+                await agentTab.loadTimelinePage({
+                    mode: 'append',
+                    after: agentTab.timelinePage.nextCursor,
+                    limit: AGENT_TRANSCRIPT_WINDOW_STEP
+                });
+                this.renderAgentPanel(agentTab, {
+                    reason: 'history-newer',
+                    preserveTranscriptAnchor: anchor
+                });
+            } finally {
+                agentTab.historyWindowLoading = false;
+            }
             return;
         }
         const timeline = getAgentTimelineItems(agentTab);
@@ -6874,9 +7056,12 @@ class EditorManager {
 
     buildAgentPlanHistoryNode(agentTab, planEntry) {
         const item = document.createElement('div');
-        item.className = 'agent-message agent-plan-history';
+        const active = !!planEntry?.active;
+        item.className = active
+            ? 'agent-message agent-plan-history active'
+            : 'agent-message agent-plan-history';
         item.appendChild(buildAgentTimelineHeader(
-            buildAgentTimelineRoleLabel(agentTab, 'plan')
+            buildAgentTimelineRoleLabel(agentTab, active ? 'active plan' : 'plan')
         ));
         const body = document.createElement('div');
         body.className = 'agent-plan-history-body';
@@ -7978,6 +8163,26 @@ class EditorManager {
     scrollAgentTranscriptToBottom() {
         const activeTab = getActiveAgentTab();
         if (activeTab) {
+            if (
+                activeTab.timelinePagingActive
+                && activeTab.timelinePage?.hasNewer
+            ) {
+                void activeTab.loadTimelinePage({
+                    mode: 'replace',
+                    limit: AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+                }).then(() => {
+                    activeTab.scrollToBottomOnNextRender = true;
+                    this.renderAgentPanel(activeTab, {
+                        reason: 'scroll-latest'
+                    });
+                }).catch((error) => {
+                    console.warn(
+                        'Failed to load latest agent timeline:',
+                        error?.message || error
+                    );
+                });
+                return;
+            }
             const total = getAgentTimelineItems(activeTab).length;
             const transcriptWindow = getAgentTranscriptWindow(
                 activeTab,
@@ -8369,14 +8574,11 @@ class EditorManager {
             if (!agentTab) return;
             const session = agentTab.getLinkedSession();
             if (!session) return;
-            this.#renderAgentCommandSuggestions([{
-                kind: 'info',
-                label: 'Opening previous session...',
-                description: command.displayName
-                    || command.title
-                    || command.sessionId
-                    || ''
-            }]);
+            agentTab.promptDraft = '';
+            this.setAgentPromptValue('', agentTab, {
+                suppressCommandMenu: true
+            });
+            this.hideAgentCommandMenu();
             try {
                 let targetAgentTab = null;
                 let targetPromptDraft = '';
@@ -10082,9 +10284,28 @@ class AgentTab {
         this.scrollToBottomOnNextRender = true;
         this.busySyncTimer = null;
         this.planHistory = [];
+        this.timelineItems = [];
+        this.timelinePage = {
+            total: 0,
+            hasOlder: false,
+            hasNewer: false,
+            minOrder: 0,
+            maxOrder: 0,
+            firstOrder: 0,
+            lastOrder: 0,
+            prevCursor: '',
+            nextCursor: ''
+        };
+        this.timelinePagingActive = false;
+        this.timelinePagePromise = null;
         this.historyWindowStart = -1;
         this.historyWindowEnd = -1;
         this.historyWindowLoading = false;
+        this.messages = [];
+        this.toolCalls = new Map();
+        this.permissions = new Map();
+        this.terminals = new Map();
+        this.plan = [];
         this.streamingAssistantStreamKey = '';
         this.resumeSessions = [];
         this.resumeSessionsLoadedAt = 0;
@@ -10172,12 +10393,42 @@ class AgentTab {
             this.resumeSessions = [];
             this.resumeSessionsLoadedAt = 0;
         }
-        if (previousObservedSessionKey !== this.getObservedSessionKey()) {
+        const currentObservedSessionKey = this.getObservedSessionKey();
+        const observedSessionChanged = (
+            previousObservedSessionKey
+            && currentObservedSessionKey
+            && previousObservedSessionKey !== currentObservedSessionKey
+        );
+        if (previousObservedSessionKey !== currentObservedSessionKey) {
             this.busAttachedSessionKey = '';
+        }
+        const hasTranscriptPayload = [
+            data.messages,
+            data.toolCalls,
+            data.permissions,
+            data.plan,
+            data.terminals
+        ].some(Array.isArray);
+        if (observedSessionChanged) {
+            this.timelineItems = [];
+            this.timelinePage = {
+                total: 0,
+                hasOlder: false,
+                hasNewer: false,
+                minOrder: 0,
+                maxOrder: 0,
+                firstOrder: 0,
+                lastOrder: 0,
+                prevCursor: '',
+                nextCursor: ''
+            };
+            this.timelinePagingActive = false;
+            this.historyWindowStart = -1;
+            this.historyWindowEnd = -1;
         }
         const nextPlan = Array.isArray(data.plan)
             ? data.plan.map((entry) => this.#normalizePlanEntry(entry))
-            : [];
+            : (hasTranscriptPayload ? [] : this.plan || []);
         this.usage = this.#normalizeUsageState(data.usage);
         this.needsAttention = Boolean(this.needsAttention);
         this.runCounter = Number.isFinite(this.runCounter)
@@ -10188,10 +10439,12 @@ class AgentTab {
         )
             ? this.lastCompletedRunCounter
             : 0;
-        this.timelineCounter = 0;
+        if (hasTranscriptPayload || observedSessionChanged) {
+            this.timelineCounter = 0;
+        }
         this.messages = Array.isArray(data.messages)
             ? data.messages.map((message) => this.#normalizeMessage(message))
-            : [];
+            : (hasTranscriptPayload || observedSessionChanged ? [] : this.messages || []);
         const transcriptPromptHistory = this.messages
             .filter((message) => (
                 String(message?.role || '').toLowerCase() === 'user'
@@ -10203,31 +10456,37 @@ class AgentTab {
         if (transcriptPromptHistory.length >= this.promptHistory.length) {
             this.promptHistory = transcriptPromptHistory;
         }
-        this.toolCalls = new Map();
-        for (const toolCall of data.toolCalls || []) {
-            if (toolCall?.toolCallId) {
-                this.toolCalls.set(
-                    toolCall.toolCallId,
-                    this.#normalizeTimelineEntry(toolCall)
-                );
+        if (hasTranscriptPayload || observedSessionChanged) {
+            this.toolCalls = new Map();
+            for (const toolCall of data.toolCalls || []) {
+                if (toolCall?.toolCallId) {
+                    this.toolCalls.set(
+                        toolCall.toolCallId,
+                        this.#normalizeTimelineEntry(toolCall)
+                    );
+                }
             }
         }
-        this.permissions = new Map();
-        for (const permission of data.permissions || []) {
-            if (permission?.id) {
-                this.permissions.set(
-                    permission.id,
-                    this.#normalizeTimelineEntry(permission)
-                );
+        if (hasTranscriptPayload || observedSessionChanged) {
+            this.permissions = new Map();
+            for (const permission of data.permissions || []) {
+                if (permission?.id) {
+                    this.permissions.set(
+                        permission.id,
+                        this.#normalizeTimelineEntry(permission)
+                    );
+                }
             }
         }
-        this.terminals = new Map();
-        for (const terminal of data.terminals || []) {
-            if (terminal?.terminalId) {
-                this.terminals.set(
-                    terminal.terminalId,
-                    this.#normalizeTerminalSummary(terminal)
-                );
+        if (hasTranscriptPayload || observedSessionChanged) {
+            this.terminals = new Map();
+            for (const terminal of data.terminals || []) {
+                if (terminal?.terminalId) {
+                    this.terminals.set(
+                        terminal.terminalId,
+                        this.#normalizeTerminalSummary(terminal)
+                    );
+                }
             }
         }
         for (const summary of this.terminals.values()) {
@@ -10238,7 +10497,9 @@ class AgentTab {
                 );
             }
         }
-        this.#applyPlanState(nextPlan);
+        if (hasTranscriptPayload || observedSessionChanged) {
+            this.#applyPlanState(nextPlan);
+        }
         this.#syncBusyWatchdog();
     }
 
@@ -10351,9 +10612,20 @@ class AgentTab {
                 );
             }
             const data = await response.json();
+            const shouldLoadLatestTimeline = (
+                attach
+                || this.timelineItems.length === 0
+                || !this.timelinePage?.hasNewer
+            );
             this.update(data);
             this.busAttachedSessionKey = this.getObservedSessionKey();
-            this.scrollToBottomOnNextRender = true;
+            if (shouldLoadLatestTimeline) {
+                await this.loadTimelinePage({
+                    mode: 'replace',
+                    limit: AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+                });
+                this.scrollToBottomOnNextRender = true;
+            }
             this.notifyUi({
                 full: true,
                 authoritativeSync: true
@@ -10364,6 +10636,130 @@ class AgentTab {
         });
 
         return this.busSyncPromise;
+    }
+
+    async loadTimelinePage({
+        mode = 'replace',
+        before = '',
+        after = '',
+        limit = AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+    } = {}) {
+        if (!this.server.isAuthenticated) {
+            return false;
+        }
+        const params = new URLSearchParams({
+            limit: String(limit)
+        });
+        if (before) {
+            params.set('before', before);
+        }
+        if (after) {
+            params.set('after', after);
+        }
+        const requestKey = `${mode}:${params.toString()}`;
+        if (this.timelinePagePromise?.key === requestKey) {
+            return await this.timelinePagePromise.promise;
+        }
+        const promise = (async () => {
+            const response = await this.server.fetch(
+                `/api/acp-bus/tabs/${this.id}/timeline?${params.toString()}`
+            );
+            if (!response.ok) {
+                await throwResponseError(
+                    response,
+                    'Failed to load agent timeline'
+                );
+            }
+            const page = await response.json();
+            this.applyTimelinePage(page, { mode });
+            return true;
+        })().finally(() => {
+            if (this.timelinePagePromise?.key === requestKey) {
+                this.timelinePagePromise = null;
+            }
+        });
+        this.timelinePagePromise = { key: requestKey, promise };
+        return await promise;
+    }
+
+    applyTimelinePage(page, { mode = 'replace' } = {}) {
+        const rawItems = Array.isArray(page?.items) ? page.items : [];
+        const nextItems = rawItems.map((item) => ({
+            type: item.type,
+            order: Number.isFinite(item.order) ? item.order : 0,
+            itemKey: String(item.itemKey || ''),
+            cursor: String(item.cursor || ''),
+            value: this.#normalizePagedTimelineValue(item)
+        })).filter((item) => item.type && item.value);
+        const mergeItems = (items) => {
+            const seen = new Set();
+            const merged = [];
+            for (const item of items) {
+                const key = getAgentTimelineItemKey(item, merged.length);
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                merged.push(item);
+            }
+            merged.sort((left, right) => {
+                if (left.order !== right.order) {
+                    return left.order - right.order;
+                }
+                return String(left.itemKey || '').localeCompare(
+                    String(right.itemKey || '')
+                );
+            });
+            return merged;
+        };
+        let droppedOlder = false;
+        let droppedNewer = false;
+        if (mode === 'prepend') {
+            const merged = mergeItems([
+                ...nextItems,
+                ...this.timelineItems
+            ]);
+            droppedNewer = merged.length > AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS;
+            this.timelineItems = merged.slice(
+                0,
+                AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+            );
+        } else if (mode === 'append') {
+            const merged = mergeItems([
+                ...this.timelineItems,
+                ...nextItems
+            ]);
+            droppedOlder = merged.length > AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS;
+            this.timelineItems = merged.slice(
+                Math.max(0, merged.length - AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS)
+            );
+        } else {
+            this.timelineItems = nextItems;
+        }
+        this.timelinePagingActive = true;
+        const first = this.timelineItems[0] || null;
+        const last = this.timelineItems.at(-1) || null;
+        const minOrder = Number.isFinite(page?.minOrder) ? page.minOrder : 0;
+        const maxOrder = Number.isFinite(page?.maxOrder) ? page.maxOrder : 0;
+        const firstOrder = Number.isFinite(first?.order) ? first.order : 0;
+        const lastOrder = Number.isFinite(last?.order) ? last.order : 0;
+        this.timelinePage = {
+            total: Number.isFinite(page?.total) ? page.total : this.timelineItems.length,
+            hasOlder: mode === 'append'
+                ? droppedOlder || firstOrder > minOrder
+                : !!page?.hasOlder,
+            hasNewer: mode === 'prepend'
+                ? droppedNewer || lastOrder < maxOrder
+                : !!page?.hasNewer,
+            minOrder,
+            maxOrder,
+            firstOrder,
+            lastOrder,
+            prevCursor: first?.cursor || page?.prevCursor || '',
+            nextCursor: last?.cursor || page?.nextCursor || ''
+        };
+        this.historyWindowStart = 0;
+        this.historyWindowEnd = this.timelineItems.length;
     }
 
     scheduleBusSnapshotSync(
@@ -10387,6 +10783,10 @@ class AgentTab {
     handleBusEvent(event) {
         if (!event?.payload?.session) {
             return;
+        }
+        if (event.type === 'session_ui_attached') {
+            const session = event.payload.session;
+            this.busAttachedSessionKey = `${session.agentId}::${session.sessionId}`;
         }
         this.scheduleBusSnapshotSync(event.type || 'event');
     }
@@ -10679,6 +11079,24 @@ class AgentTab {
             ? fallbackOrder
             : this.#nextTimelineOrder();
         return nextEntry;
+    }
+
+    #normalizePagedTimelineValue(item) {
+        const type = String(item?.type || '');
+        const value = item?.value && typeof item.value === 'object'
+            ? item.value
+            : {};
+        const order = Number.isFinite(item?.order) ? item.order : value.order;
+        if (type === 'message') {
+            return this.#normalizeMessage(value, order);
+        }
+        if (type === 'tool' || type === 'permission') {
+            return this.#normalizeTimelineEntry(value, order);
+        }
+        if (type === 'plan') {
+            return this.#normalizeTimelineEntry(value, order);
+        }
+        return null;
     }
 
     #normalizeMessage(message, fallbackOrder = null) {
@@ -11564,6 +11982,20 @@ function getAgentTabsForSession(session) {
     return getAgentTabsForServer(session.serverId).filter(
         (tab) => tab.terminalSessionId === session.id
     );
+}
+
+function getWorkspaceAgentTabSnapshots(session) {
+    if (!session) return [];
+    return getAgentTabsForSession(session).map((tab) => ({
+        id: tab.id,
+        agentId: tab.agentId,
+        acpSessionId: tab.acpSessionId,
+        cwd: tab.cwd,
+        terminalSessionId: tab.terminalSessionId || session.id,
+        createdAt: tab.createdAt,
+        title: tab.title,
+        currentModeId: tab.currentModeId
+    }));
 }
 
 function getWorkspaceTabKeysForSession(session) {
@@ -12462,6 +12894,12 @@ function buildAgentTimelineHeader(roleLabel, trailingNode = null) {
 
 function getAgentTimelineItems(agentTab) {
     if (!agentTab) return [];
+    if (
+        agentTab.timelinePagingActive
+        && Array.isArray(agentTab.timelineItems)
+    ) {
+        return agentTab.timelineItems;
+    }
     const items = [];
 
     for (const message of agentTab.messages || []) {
@@ -12515,6 +12953,18 @@ function getAgentTimelineItems(agentTab) {
 function getAgentTimelineItemKey(entry, absoluteIndex = 0) {
     if (!entry) {
         return `unknown:${absoluteIndex}`;
+    }
+    if (entry.itemKey) {
+        return String(entry.itemKey);
+    }
+    const value = entry.value || {};
+    const identity = value.id
+        || value.toolCallId
+        || value.streamKey
+        || value.terminalId
+        || '';
+    if (identity) {
+        return `${entry.type}:${identity}`;
     }
     const order = Number.isFinite(entry.order) ? entry.order : -1;
     return `${entry.type}:${order}:${absoluteIndex}`;
@@ -12685,6 +13135,9 @@ function isAgentTranscriptWindowNearLatest(agentTab, totalCount = 0) {
         : 0;
     if (!agentTab) {
         return true;
+    }
+    if (agentTab.timelinePagingActive) {
+        return !agentTab.timelinePage?.hasNewer;
     }
     if (
         !Number.isFinite(agentTab.historyWindowStart)
@@ -14632,12 +15085,14 @@ async function jumpToTerminalSession(server, sessionId) {
     return true;
 }
 
-function upsertAgentTab(server, data) {
+function upsertAgentTab(server, data, options = {}) {
     const key = makeAgentTabKey(server.id, data.id);
     const existing = state.agentTabs.get(key);
     if (existing) {
         let shouldNotify = true;
-        if (existing.usesSharedBus()) {
+        if (options.authoritative) {
+            existing.update(data);
+        } else if (existing.usesSharedBus()) {
             shouldNotify = existing.applyInventory(data);
         } else if (
             existing.socket?.readyState === WebSocket.OPEN
@@ -14656,6 +15111,58 @@ function upsertAgentTab(server, data) {
     const agentTab = new AgentTab(data, server);
     state.agentTabs.set(key, agentTab);
     return agentTab;
+}
+
+function buildAgentTabResumePlaceholder(agentTab, data) {
+    const source = data && typeof data === 'object' ? data : {};
+    return {
+        id: source.id || agentTab?.id || '',
+        runtimeId: source.runtimeId || agentTab?.runtimeId || '',
+        runtimeKey: source.runtimeKey || agentTab?.runtimeKey || '',
+        acpSessionId: source.acpSessionId || agentTab?.acpSessionId || '',
+        agentId: source.agentId || agentTab?.agentId || '',
+        agentLabel: source.agentLabel || agentTab?.agentLabel || 'Agent',
+        title: typeof source.title === 'string'
+            ? source.title
+            : (agentTab?.title || ''),
+        commandLabel: source.commandLabel || agentTab?.commandLabel || '',
+        terminalSessionId: source.terminalSessionId
+            || agentTab?.terminalSessionId
+            || '',
+        cwd: source.cwd || agentTab?.cwd || '',
+        createdAt: source.createdAt || agentTab?.createdAt || new Date().toISOString(),
+        status: source.status || 'restoring',
+        busy: typeof source.busy === 'boolean' ? source.busy : true,
+        errorMessage: source.errorMessage || '',
+        currentModeId: source.currentModeId || agentTab?.currentModeId || '',
+        availableModes: Array.isArray(source.availableModes)
+            ? source.availableModes
+            : (agentTab?.availableModes || []),
+        availableCommands: Array.isArray(source.availableCommands)
+            ? source.availableCommands
+            : (agentTab?.availableCommands || []),
+        sessionCapabilities: source.sessionCapabilities
+            || agentTab?.sessionCapabilities
+            || {},
+        configOptions: Array.isArray(source.configOptions)
+            ? source.configOptions
+            : (agentTab?.configOptions || []),
+        busConnectionKind: typeof source.busConnectionKind === 'string'
+            ? source.busConnectionKind
+            : (agentTab?.busConnectionKind || 'shared'),
+        busContinuityState: typeof source.busContinuityState === 'string'
+            ? source.busContinuityState
+            : (agentTab?.busContinuityState || ''),
+        busHotRank: Number.isFinite(source.busHotRank)
+            ? source.busHotRank
+            : (agentTab?.busHotRank ?? null),
+        messages: [],
+        toolCalls: [],
+        permissions: [],
+        plan: [],
+        usage: null,
+        terminals: []
+    };
 }
 
 function buildComparableAgentTimelineTail(source, limit = 6) {
@@ -14974,7 +15481,9 @@ async function createAgentTab(session, agentId, options = {}) {
     const data = await response.json();
     return await activateAgentTab(
         session,
-        upsertAgentTab(session.server, data)
+        upsertAgentTab(session.server, data, {
+            authoritative: true
+        })
     );
 }
 
@@ -15033,11 +15542,54 @@ async function resumeAgentTabFromHistory(session, agentTab, historySession) {
         if (!response.ok) {
             await throwResponseError(response, 'Failed to resume agent session');
         }
-        const data = await response.json();
-        return await activateAgentTab(
-            session,
-            upsertAgentTab(session.server, data)
-        );
+        const payload = await response.json();
+        const tabData = payload?.tab && typeof payload.tab === 'object'
+            ? payload.tab
+            : payload;
+        let nextAgentTab = agentTab;
+
+        if (nextAgentTab && nextAgentTab.id === tabData?.id) {
+            if (nextAgentTab.acpSessionId === tabData.acpSessionId) {
+                const alreadySettled = (
+                    nextAgentTab.status === 'ready'
+                    && !nextAgentTab.busy
+                    && (
+                        nextAgentTab.messages.length > 0
+                        || nextAgentTab.toolCalls.size > 0
+                        || nextAgentTab.permissions.size > 0
+                    )
+                );
+                if (!alreadySettled) {
+                    nextAgentTab.applyInventory(tabData);
+                }
+            } else {
+                nextAgentTab.update(
+                    buildAgentTabResumePlaceholder(nextAgentTab, tabData)
+                );
+            }
+            nextAgentTab.busAttachedSessionKey = nextAgentTab.getObservedSessionKey();
+            nextAgentTab.scrollToBottomOnNextRender = true;
+            nextAgentTab.notifyUi({
+                full: true,
+                authoritativeSync: true
+            });
+        } else {
+            nextAgentTab = upsertAgentTab(
+                session.server,
+                buildAgentTabResumePlaceholder(null, tabData),
+                { authoritative: true }
+            );
+            nextAgentTab.busAttachedSessionKey = nextAgentTab.getObservedSessionKey();
+        }
+
+        void nextAgentTab.syncFromBus().catch((error) => {
+            console.warn(
+                'Failed to reconcile resumed agent tab from ACP bus:',
+                error?.message || error
+            );
+        });
+
+        return await activateAgentTab(session, nextAgentTab);
     })();
     pendingAgentHistoryResumes.set(resumeKey, resumePromise);
 
@@ -15260,6 +15812,7 @@ async function fetchExpandedPaths(server) {
 
 async function syncServer(server) {
     if (!server || !server.isAuthenticated) return;
+    server.startAcpBusLifecycle();
     if (server.syncPromise) {
         return server.syncPromise;
     }
@@ -16322,7 +16875,7 @@ async function removeServer(serverId, { persist = true } = {}) {
     if (!server || server.isPrimary) return;
 
     server.stopHeartbeat();
-    server.closeAcpBusSocket();
+    server.stopAcpBusLifecycle();
     for (const agentTab of getAgentTabsForServer(serverId)) {
         removeAgentTab(agentTab.key);
     }
@@ -16891,6 +17444,9 @@ window.addEventListener('focus', () => {
     editorManager.refreshVisibleSessionTrees();
     editorManager.updateTreeAutoRefresh();
     void editorManager.checkActiveFileVersion();
+    for (const server of state.servers.values()) {
+        server.refreshAcpBusHealth();
+    }
 });
 window.addEventListener('pageshow', () => {
     noteAppInteraction();
@@ -16898,6 +17454,14 @@ window.addEventListener('pageshow', () => {
     editorManager.refreshVisibleSessionTrees();
     editorManager.updateTreeAutoRefresh();
     void editorManager.checkActiveFileVersion();
+    for (const server of state.servers.values()) {
+        server.refreshAcpBusHealth();
+    }
+});
+window.addEventListener('online', () => {
+    for (const server of state.servers.values()) {
+        server.refreshAcpBusHealth();
+    }
 });
 
 document.addEventListener('click', () => {
@@ -16910,6 +17474,9 @@ document.addEventListener('visibilitychange', () => {
         clearVisibleAttentionState();
         editorManager.refreshVisibleSessionTrees();
         void editorManager.checkActiveFileVersion();
+        for (const server of state.servers.values()) {
+            server.refreshAcpBusHealth();
+        }
     }
     editorManager.updateTreeAutoRefresh();
 });
@@ -17547,6 +18114,7 @@ window.addEventListener('beforeunload', () => {
     }
     for (const server of state.servers.values()) {
         server.stopHeartbeat();
+        server.stopAcpBusLifecycle();
     }
 });
 
@@ -17567,6 +18135,7 @@ async function initApp() {
     for (const server of state.servers.values()) {
         await server.bootstrapAuth();
         if (!server.isAuthenticated) continue;
+        server.startAcpBusLifecycle();
         await fetchExpandedPaths(server);
         await syncServer(server);
         server.startHeartbeat();

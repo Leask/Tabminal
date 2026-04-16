@@ -77,6 +77,42 @@ function uniqueStringList(values) {
     ));
 }
 
+function normalizeWorkspaceAgentTabs(values, fallback = []) {
+    const source = Array.isArray(values) ? values : fallback;
+    if (!Array.isArray(source)) return [];
+
+    const seen = new Set();
+    const normalized = [];
+    for (const entry of source) {
+        if (!entry || typeof entry !== 'object') continue;
+        const id = String(entry.id || '').trim();
+        const agentId = String(entry.agentId || '').trim();
+        const acpSessionId = String(
+            entry.acpSessionId
+            || entry.sessionId
+            || ''
+        ).trim();
+        const cwd = String(entry.cwd || '').trim();
+        if (!id || !agentId || !acpSessionId || !cwd || seen.has(id)) {
+            continue;
+        }
+        seen.add(id);
+        normalized.push({
+            id,
+            agentId,
+            acpSessionId,
+            cwd,
+            terminalSessionId: String(entry.terminalSessionId || '').trim(),
+            createdAt: String(entry.createdAt || '').trim(),
+            title: typeof entry.title === 'string' ? entry.title : '',
+            currentModeId: typeof entry.currentModeId === 'string'
+                ? entry.currentModeId
+                : ''
+        });
+    }
+    return normalized;
+}
+
 function normalizeWorkspaceState(input = {}, fallback = {}) {
     const source = input && typeof input === 'object' ? input : {};
     const base = fallback && typeof fallback === 'object' ? fallback : {};
@@ -116,8 +152,24 @@ function normalizeWorkspaceState(input = {}, fallback = {}) {
             : 'auto',
         expandedPaths: uniqueStringList(source.expandedPaths),
         markdownSplitPath,
-        activeWorkspaceTabKey
+        activeWorkspaceTabKey,
+        openAgentTabs: normalizeWorkspaceAgentTabs(
+            source.openAgentTabs,
+            base.openAgentTabs
+        )
     };
+}
+
+function serializeWorkspaceAgentTab(tab, terminalSessionId = '') {
+    const normalized = normalizeWorkspaceAgentTabs([{
+        ...tab,
+        terminalSessionId: tab?.terminalSessionId || terminalSessionId
+    }])[0];
+    return normalized || null;
+}
+
+function agentTabListSignature(tabs) {
+    return JSON.stringify(normalizeWorkspaceAgentTabs(tabs));
 }
 
 function compareWorkspaceState(left, right) {
@@ -490,6 +542,62 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
                 this.saveSessionState(session);
             }
         }
+    }
+
+    loadOpenAgentTabsFromWorkspace() {
+        const tabs = [];
+        for (const session of this.sessions.values()) {
+            const sessionTabs = normalizeWorkspaceAgentTabs(
+                session.editorState?.openAgentTabs
+            );
+            for (const tab of sessionTabs) {
+                tabs.push({
+                    ...tab,
+                    terminalSessionId: tab.terminalSessionId || session.id
+                });
+            }
+        }
+        return tabs;
+    }
+
+    async saveOpenAgentTabsToWorkspace(tabs) {
+        const grouped = new Map();
+        for (const rawTab of Array.isArray(tabs) ? tabs : []) {
+            const tab = serializeWorkspaceAgentTab(rawTab);
+            if (!tab?.terminalSessionId) continue;
+            if (!this.sessions.has(tab.terminalSessionId)) continue;
+            if (!grouped.has(tab.terminalSessionId)) {
+                grouped.set(tab.terminalSessionId, []);
+            }
+            grouped.get(tab.terminalSessionId).push(tab);
+        }
+
+        const savePromises = [];
+        for (const session of this.sessions.values()) {
+            const nextTabs = normalizeWorkspaceAgentTabs(
+                grouped.get(session.id) || []
+            );
+            const previousTabs = normalizeWorkspaceAgentTabs(
+                session.editorState?.openAgentTabs
+            );
+            if (
+                agentTabListSignature(previousTabs)
+                === agentTabListSignature(nextTabs)
+            ) {
+                continue;
+            }
+            session.editorState = normalizeWorkspaceState({
+                ...session.editorState,
+                updatedAt: Date.now(),
+                updatedBy: 'server:acp-bus',
+                openAgentTabs: nextTabs
+            }, session.editorState);
+            if (session.persistent) {
+                savePromises.push(this.saveSessionState(session));
+            }
+        }
+        await Promise.all(savePromises);
+        return savePromises.length;
     }
 
     scheduleSnapshotPersist(id) {

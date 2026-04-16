@@ -107,63 +107,61 @@ function sendWebSocketJson(socket, payload) {
     }
 }
 
-function mergeBusControllerTab(controllerTab, busSession) {
-    if (!controllerTab) {
+function buildAgentTabAttachAck(
+    agentTab,
+    busSession,
+    { attachSource = '' } = {}
+) {
+    if (!agentTab) {
         return null;
     }
-    const snapshot = busSession?.snapshot && typeof busSession.snapshot === 'object'
-        ? busSession.snapshot
-        : null;
+    const continuityState = typeof busSession?.continuityState === 'string'
+        ? busSession.continuityState
+        : 'cold';
+    const normalizedAttachSource = attachSource || (
+        continuityState === 'live'
+            ? 'hot'
+            : continuityState === 'cached'
+                ? 'cache'
+                : 'cold'
+    );
     return {
-        ...(snapshot || {}),
-        id: controllerTab.id,
-        runtimeId: controllerTab.runtimeId,
-        runtimeKey: controllerTab.runtimeKey,
-        acpSessionId: controllerTab.acpSessionId,
-        agentId: controllerTab.agentId,
-        agentLabel: controllerTab.agentLabel,
-        commandLabel: controllerTab.commandLabel,
-        title: controllerTab.title || snapshot?.title || '',
-        terminalSessionId: controllerTab.terminalSessionId || '',
-        cwd: controllerTab.cwd || snapshot?.cwd || '',
-        createdAt: controllerTab.createdAt || snapshot?.createdAt || '',
-        status: snapshot?.status || controllerTab.status || 'ready',
-        busy: typeof snapshot?.busy === 'boolean'
-            ? snapshot.busy
-            : !!controllerTab.busy,
-        errorMessage: snapshot?.errorMessage || controllerTab.errorMessage || '',
-        currentModeId: controllerTab.currentModeId || snapshot?.currentModeId || '',
-        availableModes: Array.isArray(controllerTab.availableModes)
-            ? controllerTab.availableModes
-            : (snapshot?.availableModes || []),
-        availableCommands: Array.isArray(controllerTab.availableCommands)
-            ? controllerTab.availableCommands
-            : (snapshot?.availableCommands || []),
-        sessionCapabilities: controllerTab.sessionCapabilities
-            || snapshot?.sessionCapabilities
-            || {},
-        configOptions: Array.isArray(controllerTab.configOptions)
-            ? controllerTab.configOptions
-            : (snapshot?.configOptions || []),
-        messages: Array.isArray(snapshot?.messages)
-            ? snapshot.messages
-            : (controllerTab.messages || []),
-        toolCalls: Array.isArray(snapshot?.toolCalls)
-            ? snapshot.toolCalls
-            : (controllerTab.toolCalls || []),
-        permissions: Array.isArray(snapshot?.permissions)
-            ? snapshot.permissions
-            : (controllerTab.permissions || []),
-        plan: Array.isArray(snapshot?.plan)
-            ? snapshot.plan
-            : (controllerTab.plan || []),
-        usage: snapshot?.usage || controllerTab.usage || null,
-        terminals: Array.isArray(snapshot?.terminals)
-            ? snapshot.terminals
-            : (controllerTab.terminals || []),
-        busConnectionKind: 'shared',
-        busContinuityState: busSession?.continuityState || 'cold',
-        busHotRank: busSession?.hotRank ?? null
+        ok: true,
+        attach: {
+            ok: true,
+            source: normalizedAttachSource,
+            continuityState
+        },
+        tab: {
+            id: agentTab.id,
+            runtimeId: agentTab.runtimeId,
+            runtimeKey: agentTab.runtimeKey,
+            acpSessionId: agentTab.acpSessionId,
+            agentId: agentTab.agentId,
+            agentLabel: agentTab.agentLabel,
+            commandLabel: agentTab.commandLabel,
+            title: agentTab.title || '',
+            terminalSessionId: agentTab.terminalSessionId || '',
+            cwd: agentTab.cwd || '',
+            createdAt: agentTab.createdAt || '',
+            status: agentTab.status || 'ready',
+            busy: !!agentTab.busy,
+            errorMessage: agentTab.errorMessage || '',
+            currentModeId: agentTab.currentModeId || '',
+            availableModes: Array.isArray(agentTab.availableModes)
+                ? agentTab.availableModes
+                : [],
+            availableCommands: Array.isArray(agentTab.availableCommands)
+                ? agentTab.availableCommands
+                : [],
+            sessionCapabilities: agentTab.sessionCapabilities || {},
+            configOptions: Array.isArray(agentTab.configOptions)
+                ? agentTab.configOptions
+                : [],
+            busConnectionKind: 'shared',
+            busContinuityState: continuityState,
+            busHotRank: busSession?.hotRank ?? null
+        }
     };
 }
 
@@ -403,118 +401,44 @@ const acpBusStore = new AcpBusStore({
 const acpBusManager = new AcpBusManager({
     acpManager,
     store: acpBusStore,
-    controllerSnapshotProvider: (agentId, sessionId) => {
-        const serialized = acpManager.getSerializedTabBySessionId(sessionId);
-        return serialized?.agentId === agentId ? serialized : null;
-    },
+    loadOpenTabs: () => terminalManager.loadOpenAgentTabsFromWorkspace(),
+    saveOpenTabs: (tabs) =>
+        terminalManager.saveOpenAgentTabsToWorkspace(tabs),
     pollIntervalMs: config.acpBusPollIntervalMs,
     hotSessionLimit: config.acpBusHotSessionLimit,
     cacheSessionLimit: config.acpBusCacheSessionLimit,
     eventLimit: config.acpBusEventLimit
 });
 
-function recordAcpBusInterest(serialized, reason) {
-    const agentId = String(serialized?.agentId || '').trim();
-    const sessionId = String(serialized?.acpSessionId || '').trim();
-    if (!agentId || !sessionId) {
-        return;
-    }
-    void acpBusReadyPromise
-        .then(() => acpBusManager.markSessionInterest({
-            agentId,
-            sessionId,
-            cwd: serialized.cwd,
-            title: serialized.title
-        }))
-        .catch((error) => {
-            console.warn(
-                `[ACP Bus] Failed to record session interest (${reason}):`,
-                error?.message || error
-            );
-        });
-}
-
-function syncAcpBusControllerSnapshot(
-    serialized,
-    reason,
-    { markInterest = false } = {}
+async function buildBusBackedAgentTab(
+    tabId,
+    { attach = false } = {}
 ) {
-    const agentId = String(serialized?.agentId || '').trim();
-    const sessionId = String(serialized?.acpSessionId || '').trim();
-    if (!agentId || !sessionId) {
-        return;
+    await acpBusReadyPromise;
+    if (attach) {
+        const result = await acpBusManager.attachOpenTab(tabId);
+        return result?.tab || null;
     }
-    void acpBusReadyPromise
-        .then(async () => {
-            if (markInterest) {
-                await acpBusManager.markSessionInterest({
-                    agentId,
-                    sessionId,
-                    cwd: serialized.cwd,
-                    title: serialized.title
-                });
-            }
-            acpBusManager.ingestControllerTab(serialized, reason);
-        })
-        .catch((error) => {
-            console.warn(
-                `[ACP Bus] Failed to sync controller snapshot (${reason}):`,
-                error?.message || error
-            );
-        });
+    return acpBusManager.getOpenTab(tabId);
 }
 
-acpManager.on('tab_dirty', ({ tab } = {}) => {
-    if (!tab) {
-        return;
-    }
-    syncAcpBusControllerSnapshot(tab, 'controller_tab_dirty');
-});
-
-async function buildBusBackedAgentTab(tabId, { attach = false } = {}) {
-    const controllerTab = acpManager.getSerializedTab(tabId);
-    if (!controllerTab) {
-        return null;
-    }
+async function buildBusTimelinePage(tabId, query = {}) {
     await acpBusReadyPromise;
-    let busSession = null;
-    if (attach) {
-        busSession = await acpBusManager.pinSession(
-            `agent-tab:${tabId}`,
-            {
-                agentId: controllerTab.agentId,
-                sessionId: controllerTab.acpSessionId,
-                cwd: controllerTab.cwd,
-                title: controllerTab.title
-            },
-            'agent_tab_attach'
-        );
-    } else {
-        busSession = acpBusManager.getSession(
-            controllerTab.agentId,
-            controllerTab.acpSessionId,
-            { includeSnapshot: true }
-        );
-    }
-    return mergeBusControllerTab(controllerTab, busSession);
+    return acpBusManager.getTimelinePageForTab(tabId, query);
 }
 
 // Restore sessions
 const acpBusReadyPromise = (async () => {
-    acpManager.restoring = true;
-    try {
-        const restoredSessions = await persistence.loadSessions();
-        if (restoredSessions.length > 0) {
-            console.log(`[Server] Restoring ${restoredSessions.length} sessions...`);
-            for (const data of restoredSessions) {
-                terminalManager.createSession(data);
-            }
+    const restoredSessions = await persistence.loadSessions();
+    if (restoredSessions.length > 0) {
+        console.log(`[Server] Restoring ${restoredSessions.length} sessions...`);
+        for (const data of restoredSessions) {
+            terminalManager.createSession(data);
         }
-        await acpManager.restoreTabs(new Set(terminalManager.sessions.keys()));
-        await acpBusManager.start();
-    } finally {
-        acpManager.restoring = false;
     }
+    await acpBusManager.start({
+        validTerminalSessionIds: new Set(terminalManager.sessions.keys())
+    });
 })();
 
 // Setup FS Routes
@@ -592,7 +516,7 @@ router.all('/api/heartbeat', async (ctx) => {
 
     ctx.body = {
         sessions: terminalManager.listSessions(),
-        agents: await acpManager.listInventory(),
+        agents: await acpBusManager.listInventory(),
         fileWriteResults,
         system: systemMonitor.getStats(),
         runtime: {
@@ -621,11 +545,11 @@ router.delete('/api/sessions/:id', async (ctx) => {
     const { id } = ctx.params;
     const session = terminalManager.getSession(id);
     if (session?.managed?.kind === 'agent-terminal') {
-        await acpManager.releaseManagedTerminalSession(id, { destroy: true });
+        await acpBusManager.releaseManagedTerminalSession(id, { destroy: true });
         ctx.status = 204;
         return;
     }
-    await acpManager.closeTabsForTerminalSession(id);
+    await acpBusManager.closeTabsForTerminalSession(id);
     await terminalManager.removeSession(id);
     ctx.status = 204;
 });
@@ -695,7 +619,8 @@ router.put('/api/cluster', async (ctx) => {
 });
 
 router.get('/api/agents', async (ctx) => {
-    ctx.body = await acpManager.listState();
+    await acpBusReadyPromise;
+    ctx.body = await acpBusManager.listState();
 });
 
 router.get('/api/acp-bus/state', async (ctx) => {
@@ -749,6 +674,16 @@ router.get('/api/acp-bus/tabs/:tabId', async (ctx) => {
         return;
     }
     ctx.body = tab;
+});
+
+router.get('/api/acp-bus/tabs/:tabId/timeline', async (ctx) => {
+    const page = await buildBusTimelinePage(ctx.params.tabId, ctx.query || {});
+    if (!page) {
+        ctx.status = 404;
+        ctx.body = { error: 'Agent tab not found' };
+        return;
+    }
+    ctx.body = page;
 });
 
 router.post('/api/acp-bus/tabs/:tabId/attach', async (ctx) => {
@@ -876,7 +811,8 @@ router.post('/api/agents/tabs', async (ctx) => {
 
     try {
         ctx.status = 201;
-        const serialized = await acpManager.createTab({
+        await acpBusReadyPromise;
+        const serialized = await acpBusManager.createTabForUi({
             agentId,
             cwd,
             terminalSessionId: typeof terminalSessionId === 'string'
@@ -885,8 +821,6 @@ router.post('/api/agents/tabs', async (ctx) => {
             modeId: typeof modeId === 'string' ? modeId : ''
         });
         ctx.body = serialized;
-        recordAcpBusInterest(serialized, 'create_tab');
-        syncAcpBusControllerSnapshot(serialized, 'create_tab');
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to create agent tab' };
@@ -914,7 +848,12 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
 
     try {
         ctx.status = 201;
-        const serialized = await acpManager.resumeTab({
+        await acpBusReadyPromise;
+        const {
+            serialized,
+            busSession,
+            attachSource
+        } = await acpBusManager.resumeTabForUi({
             agentId,
             cwd,
             sessionId,
@@ -924,9 +863,46 @@ router.post('/api/agents/tabs/resume', async (ctx) => {
                 ? terminalSessionId
                 : ''
         });
-        ctx.body = serialized;
-        recordAcpBusInterest(serialized, 'resume_tab');
-        syncAcpBusControllerSnapshot(serialized, 'resume_tab');
+        ctx.body = buildAgentTabAttachAck(serialized, busSession, {
+            attachSource
+        }) || {
+            ok: true,
+            attach: {
+                ok: true,
+                source: attachSource,
+                continuityState: 'cold'
+            },
+            tab: {
+                id: serialized.id,
+                runtimeId: serialized.runtimeId,
+                runtimeKey: serialized.runtimeKey,
+                acpSessionId: serialized.acpSessionId,
+                agentId: serialized.agentId,
+                agentLabel: serialized.agentLabel,
+                commandLabel: serialized.commandLabel,
+                title: serialized.title || '',
+                terminalSessionId: serialized.terminalSessionId || '',
+                cwd: serialized.cwd || '',
+                createdAt: serialized.createdAt || '',
+                status: serialized.status || 'restoring',
+                busy: !!serialized.busy,
+                errorMessage: serialized.errorMessage || '',
+                currentModeId: serialized.currentModeId || '',
+                availableModes: Array.isArray(serialized.availableModes)
+                    ? serialized.availableModes
+                    : [],
+                availableCommands: Array.isArray(serialized.availableCommands)
+                    ? serialized.availableCommands
+                    : [],
+                sessionCapabilities: serialized.sessionCapabilities || {},
+                configOptions: Array.isArray(serialized.configOptions)
+                    ? serialized.configOptions
+                    : [],
+                busConnectionKind: 'shared',
+                busContinuityState: 'cold',
+                busHotRank: null
+            }
+        };
     } catch (error) {
         const message = error?.message || 'Failed to resume agent tab';
         ctx.status = /already open/i.test(message)
@@ -969,12 +945,10 @@ router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
     }
 
     try {
-        await acpManager.sendPrompt(tabId, text, attachments);
+        await acpBusReadyPromise;
+        await acpBusManager.sendPromptForTab(tabId, text, attachments);
         ctx.status = 202;
         ctx.body = { ok: true };
-        const serialized = acpManager.getSerializedTab(tabId);
-        recordAcpBusInterest(serialized, 'send_prompt');
-        syncAcpBusControllerSnapshot(serialized, 'send_prompt');
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to send prompt' };
@@ -984,7 +958,8 @@ router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
 router.post('/api/agents/tabs/:tabId/cancel', async (ctx) => {
     const { tabId } = ctx.params;
     try {
-        await acpManager.cancel(tabId);
+        await acpBusReadyPromise;
+        await acpBusManager.cancelForTab(tabId);
         ctx.status = 202;
         ctx.body = { ok: true };
     } catch (error) {
@@ -999,7 +974,8 @@ router.post(
         const { tabId, permissionId } = ctx.params;
         const { optionId } = ctx.request.body || {};
         try {
-            await acpManager.resolvePermission(
+            await acpBusReadyPromise;
+            await acpBusManager.resolvePermissionForTab(
                 tabId,
                 permissionId,
                 typeof optionId === 'string' ? optionId : ''
@@ -1024,7 +1000,8 @@ router.post('/api/agents/tabs/:tabId/mode', async (ctx) => {
         return;
     }
     try {
-        ctx.body = await acpManager.setMode(tabId, modeId);
+        await acpBusReadyPromise;
+        ctx.body = await acpBusManager.setModeForTab(tabId, modeId);
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to switch mode' };
@@ -1045,7 +1022,12 @@ router.post('/api/agents/tabs/:tabId/config', async (ctx) => {
         return;
     }
     try {
-        ctx.body = await acpManager.setConfigOption(tabId, configId, valueId);
+        await acpBusReadyPromise;
+        ctx.body = await acpBusManager.setConfigOptionForTab(
+            tabId,
+            configId,
+            valueId
+        );
     } catch (error) {
         ctx.status = 500;
         ctx.body = { error: error?.message || 'Failed to update agent setting' };
@@ -1055,8 +1037,7 @@ router.post('/api/agents/tabs/:tabId/config', async (ctx) => {
 router.delete('/api/agents/tabs/:tabId', async (ctx) => {
     const { tabId } = ctx.params;
     await acpBusReadyPromise;
-    await acpBusManager.unpinSession(`agent-tab:${tabId}`, 'agent_tab_close');
-    await acpManager.closeTab(tabId);
+    await acpBusManager.closeTabForUi(tabId);
     ctx.status = 204;
 });
 
@@ -1106,20 +1087,6 @@ httpServer.on('upgrade', (request, socket, head) => {
                 kind: 'acp-bus'
             });
         });
-    } else if (pathname.startsWith('/ws/agents/')) {
-        const match = pathname.match(/^\/ws\/agents\/([a-zA-Z0-9-]+)$/);
-        if (!match) {
-            socket.destroy();
-            return;
-        }
-
-        const tabId = match[1];
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            wss.emit('connection', ws, {
-                kind: 'agent',
-                tabId
-            });
-        });
     } else if (pathname.startsWith('/ws/')) {
         const match = pathname.match(/^\/ws\/([a-zA-Z0-9-]+)$/);
         if (!match) {
@@ -1159,13 +1126,6 @@ wss.on('connection', (socket, target) => {
             + `${target.session.id} [${target.ua}]`
         );
         target.session.attach(socket);
-        return;
-    }
-    if (target.kind === 'agent') {
-        debugLog(
-            `[Server] WebSocket connected to agent tab ${target.tabId}`
-        );
-        acpManager.attachSocket(target.tabId, socket);
         return;
     }
     if (target.kind === 'acp-bus') {

@@ -23,7 +23,7 @@ const DEFAULT_CONFIG = {
     acpBusDbPath: '',
     acpBusPollIntervalMs: 10000,
     acpBusHotSessionLimit: 10,
-    acpBusCacheSessionLimit: 100,
+    acpBusCacheSessionLimit: 1000,
     acpBusEventLimit: 2000
 };
 

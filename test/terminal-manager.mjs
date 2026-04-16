@@ -14,6 +14,7 @@ function createWorkspaceState(overrides = {}) {
         expandedPaths: [],
         markdownSplitPath: '',
         activeWorkspaceTabKey: '',
+        openAgentTabs: [],
         ...overrides
     };
 }
@@ -162,6 +163,54 @@ describe('TerminalManager workspace sync', () => {
             session.editorState.activeWorkspaceTabKey,
             'preview:/tmp/readme.md'
         );
+    });
+
+    it('stores open agent tabs inside shared workspace snapshots', async () => {
+        const manager = new TerminalManager();
+        const saveCalls = [];
+        manager.saveSessionState = (session) => {
+            saveCalls.push(session.id);
+            return Promise.resolve();
+        };
+        manager.sessions.set('session-5', {
+            id: 'session-5',
+            editorState: createWorkspaceState({
+                updatedAt: 10,
+                updatedBy: 'device-a'
+            }),
+            persistent: true
+        });
+
+        const changed = await manager.saveOpenAgentTabsToWorkspace([{
+            id: 'agent-tab-1',
+            agentId: 'codex',
+            acpSessionId: 'acp-1',
+            cwd: '/tmp/project',
+            terminalSessionId: 'session-5',
+            createdAt: '2026-04-16T00:00:00.000Z',
+            title: 'Investigate',
+            currentModeId: 'default'
+        }]);
+
+        assert.equal(changed, 1);
+        assert.deepEqual(
+            manager.sessions.get('session-5').editorState.openAgentTabs,
+            [{
+                id: 'agent-tab-1',
+                agentId: 'codex',
+                acpSessionId: 'acp-1',
+                cwd: '/tmp/project',
+                terminalSessionId: 'session-5',
+                createdAt: '2026-04-16T00:00:00.000Z',
+                title: 'Investigate',
+                currentModeId: 'default'
+            }]
+        );
+        assert.deepEqual(
+            manager.loadOpenAgentTabsFromWorkspace(),
+            manager.sessions.get('session-5').editorState.openAgentTabs
+        );
+        assert.deepEqual(saveCalls, ['session-5']);
     });
 
     it('selects the latest workspace cwd for new sessions', () => {

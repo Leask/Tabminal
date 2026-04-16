@@ -1,6 +1,6 @@
 # Tabminal API
 
-Last updated: 2026-04-10
+Last updated: 2026-04-16
 
 This document is the canonical API contract between Tabminal clients and a
 Tabminal server.
@@ -52,7 +52,7 @@ Broadly:
 There are two websocket namespaces:
 
 - terminal sessions: `/ws/:sessionId`
-- ACP agent tabs: `/ws/agents/:tabId`
+- ACP bus stream: `/ws/acp-bus`
 
 ## 3. Authentication
 
@@ -525,6 +525,10 @@ Typical fields:
 
 - `workspaceState`
 - `editorState`
+
+`workspaceState.openAgentTabs` is the lightweight source of truth for which
+agent workspace tabs are open inside that terminal workspace. Transcript
+history is not stored there; it is served from the ACP bus timeline store.
 
 Response:
 
@@ -1253,237 +1257,126 @@ Server responds with:
 }
 ```
 
-## 14. WebSocket API: ACP Agent Tabs
+## 14. WebSocket API: ACP Bus
 
 Endpoint:
 
-- `/ws/agents/:tabId`
+- `/ws/acp-bus`
 
-The agent websocket is currently server-to-client only for transcript and tab
-realtime updates. Prompt submission and command actions stay on HTTP.
+The ACP bus websocket is the only agent realtime stream. Legacy per-tab agent
+websockets are removed. Agent tab identity, control actions, and timeline pages
+are resolved through HTTP APIs; realtime changes arrive as bus events.
 
 Authentication uses the same WebSocket subprotocol contract as terminal
 websockets.
 
 ### 14.1 Initial message
 
-On attach, the server sends:
+After the bus is ready, the server sends a process-level snapshot:
 
 ```json
 {
   "type": "snapshot",
-  "tab": { "...serialized tab..." }
-}
-```
-
-### 14.2 Tab serialization shape
-
-A serialized agent tab includes:
-
-- `id`
-- `runtimeId`
-- `runtimeKey`
-- `acpSessionId`
-- `agentId`
-- `agentLabel`
-- `commandLabel`
-- `title`
-- `terminalSessionId`
-- `cwd`
-- `createdAt`
-- `status`
-- `busy`
-- `errorMessage`
-- `currentModeId`
-- `availableModes`
-- `availableCommands`
-- `sessionCapabilities`
-- `configOptions`
-- `messages`
-- `toolCalls`
-- `permissions`
-- `plan`
-- `usage`
-- `terminals`
-
-`messages`, `toolCalls`, `permissions`, and `plan` are ordered by the server's
-timeline `order` field.
-
-### 14.3 Server -> client incremental messages
-
-#### `message_open`
-
-Creates a new transcript block.
-
-```json
-{
-  "type": "message_open",
-  "message": {
-    "id": "local-message-id",
-    "streamKey": "stream-id-or-message-id",
-    "role": "assistant",
-    "kind": "message",
-    "text": "Starting text",
-    "createdAt": "2026-04-10T12:34:56.000Z",
-    "order": 123
-  }
-}
-```
-
-#### `message_chunk`
-
-Appends to an existing transcript block.
-
-```json
-{
-  "type": "message_chunk",
-  "streamKey": "stream-id-or-message-id",
-  "role": "assistant",
-  "kind": "message",
-  "text": "delta text",
-  "order": 124
-}
-```
-
-Contract:
-
-- the server may bump `order` when a block is touched again
-- clients must treat `order` as authoritative transcript order
-- `streamKey` groups chunk updates for one logical block
-
-#### `session_update`
-
-Generic ACP update envelope.
-
-```json
-{
-  "type": "session_update",
-  "update": {
-    "sessionUpdate": "tool_call_update"
+  "state": {
+    "started": true,
+    "restoring": false,
+    "observedSessionCount": 2,
+    "openTabCount": 1
   },
-  "tab": {
-    "title": "Session title",
-    "currentModeId": "high",
-    "availableModes": [],
-    "availableCommands": [],
-    "configOptions": []
+  "sessions": []
+}
+```
+
+`sessions` is a bounded cache summary from the ACP bus store. Clients should
+use it as a hint, not as the only source of visible tab state.
+
+### 14.2 Event messages
+
+Every later message is an event envelope:
+
+```json
+{
+  "type": "event",
+  "event": {
+    "id": 123,
+    "type": "session_snapshot_updated",
+    "createdAt": "2026-04-16T12:34:56.000Z",
+    "payload": {
+      "session": {
+        "sessionKey": "codex::upstream-session-id",
+        "agentId": "codex",
+        "sessionId": "upstream-session-id",
+        "title": "Session title",
+        "cwd": "/Users/leask/Documents/Tabminal",
+        "continuityState": "live",
+        "busy": false,
+        "status": "ready"
+      },
+      "pinId": "agent-tab:open-tab-id"
+    }
   }
 }
 ```
 
-Observed `sessionUpdate` kinds currently include:
+Current event types include:
 
-- `tool_call`
-- `tool_call_update`
-- `current_mode_update`
-- `available_commands_update`
-- `config_option_update`
-- `session_info_update`
-- `plan`
-- `usage_update`
+- `session_index_created`
+- `session_index_updated`
+- `session_index_removed`
+- `session_hot_attached`
+- `session_hot_detached`
+- `session_snapshot_updated`
+- `session_ui_attached`
+- `session_ui_detached`
+- `session_resync_required`
+- `session_runtime_exit`
 
-#### `permission_request`
+Clients should route events to visible agent tabs by `pinId` when present, or
+by `(agentId, sessionId)` otherwise. Events are invalidation/delta signals; the
+client may fetch authoritative tab metadata or timeline pages after receiving
+one.
+
+### 14.3 Open agent tab state
+
+Open agent tabs are not stored in a separate `agent-tabs.json` file. They live
+inside the owning terminal session workspace snapshot:
 
 ```json
 {
-  "type": "permission_request",
-  "permission": {
-    "id": "permission-id",
-    "sessionId": "acp-session-id",
-    "toolCall": {},
-    "options": [],
-    "status": "pending",
-    "createdAt": "2026-04-10T12:34:56.000Z",
-    "order": 125,
-    "selectedOptionId": ""
+  "workspaceState": {
+    "activeWorkspaceTabKey": "agent:main:open-tab-id",
+    "openAgentTabs": [
+      {
+        "id": "open-tab-id",
+        "agentId": "codex",
+        "acpSessionId": "upstream-session-id",
+        "cwd": "/Users/leask/Documents/Tabminal",
+        "terminalSessionId": "terminal-session-id",
+        "createdAt": "2026-04-16T12:34:56.000Z",
+        "title": "Session title",
+        "currentModeId": "default"
+      }
+    ]
   }
 }
 ```
 
-#### `permission_resolved`
+This state answers which tabs should reopen with the workspace. ACP transcript
+content, tool calls, plans, permissions, and managed terminal summaries are
+stored in the ACP bus database and fetched through bus-backed APIs.
 
-```json
-{
-  "type": "permission_resolved",
-  "permissionId": "permission-id",
-  "status": "selected",
-  "selectedOptionId": "approve"
-}
-```
+### 14.4 Authority model
 
-#### `terminal_update`
+The bus websocket gives low-latency invalidation and event delivery. It does
+not replace:
 
-Managed ACP terminal summary changed.
-
-```json
-{
-  "type": "terminal_update",
-  "terminal": {
-    "terminalId": "terminal-id",
-    "sessionId": "acp-session-id",
-    "terminalSessionId": "linked-terminal-session-id",
-    "command": "python script.py",
-    "cwd": "/Users/leask/Documents/Tabminal",
-    "output": "recent output tail",
-    "createdAt": "2026-04-10T12:34:56.000Z",
-    "updatedAt": "2026-04-10T12:35:10.000Z",
-    "running": true,
-    "released": false,
-    "exitStatus": null
-  }
-}
-```
-
-#### `usage_state`
-
-```json
-{
-  "type": "usage_state",
-  "usage": {
-    "used": 1000,
-    "size": 100000,
-    "totals": {},
-    "updatedAt": "",
-    "resetAt": "",
-    "vendorLabel": "",
-    "sessionId": "",
-    "summary": "",
-    "windows": []
-  }
-}
-```
-
-#### `status`
-
-```json
-{
-  "type": "status",
-  "status": "running",
-  "busy": true,
-  "errorMessage": ""
-}
-```
-
-#### `complete`
-
-```json
-{
-  "type": "complete",
-  "status": "ready",
-  "busy": false
-}
-```
-
-### 14.4 Agent websocket authority model
-
-The websocket gives low-latency transcript and tool updates. It does not
-replace:
-
-- `/api/agents` for full-state reconciliation
+- `/api/agents` for definitions, config, and open-tab inventory
+- `/api/acp-bus/tabs/:tabId` for authoritative open-tab metadata
+- `/api/acp-bus/tabs/:tabId/timeline` for paged transcript history
 - `/api/agents/tabs/:tabId/*` HTTP mutations
 
-Clients should expect the HTTP snapshot to correct drift after reconnects,
-restore, or missed deltas.
+Clients should expect HTTP snapshots and timeline pages to correct drift after
+reconnects, restore, or missed websocket events.
 
 ## 15. Error Model
 
@@ -1647,4 +1540,4 @@ collapsed into one websocket namespace.
 - `POST /api/agents/tabs/:tabId/mode`
 - `POST /api/agents/tabs/:tabId/config`
 - `DELETE /api/agents/tabs/:tabId`
-- `WS /ws/agents/:tabId`
+- `WS /ws/acp-bus`
