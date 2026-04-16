@@ -11778,6 +11778,77 @@ if (typeof window !== 'undefined') {
             return Array.from(state.sessions.values())
                 .filter((session) => isAgentManagedSession(session))
                 .map((session) => session.key);
+        },
+        async getActiveAgentTimelineState() {
+            const agentTab = getActiveAgentTab();
+            if (!agentTab) {
+                return {
+                    ok: false,
+                    reason: 'no-active-agent-tab'
+                };
+            }
+            await new Promise((resolve) => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(resolve);
+                });
+            });
+            const timeline = getAgentTimelineItems(agentTab);
+            const keys = timeline.map((entry, index) => (
+                getAgentTimelineItemKey(entry, index)
+            ));
+            const orders = timeline.map((entry) => (
+                Number.isFinite(entry?.order) ? entry.order : null
+            ));
+            return {
+                ok: true,
+                tabId: agentTab.id,
+                count: timeline.length,
+                keys,
+                orders,
+                timelinePagingActive: !!agentTab.timelinePagingActive,
+                page: { ...(agentTab.timelinePage || {}) },
+                domKeys: Array.from(
+                    editorManager.agentTranscript?.children || []
+                ).map((node) => node.dataset.timelineKey || '')
+            };
+        },
+        async loadActiveAgentTimelinePage(direction = 'older') {
+            const agentTab = getActiveAgentTab();
+            if (!agentTab) {
+                return {
+                    ok: false,
+                    reason: 'no-active-agent-tab'
+                };
+            }
+            const normalizedDirection = String(direction || '').toLowerCase();
+            if (normalizedDirection === 'older') {
+                await agentTab.loadTimelinePage({
+                    mode: 'prepend',
+                    before: agentTab.timelinePage?.prevCursor || '',
+                    limit: AGENT_TRANSCRIPT_WINDOW_STEP
+                });
+            } else if (normalizedDirection === 'newer') {
+                await agentTab.loadTimelinePage({
+                    mode: 'append',
+                    after: agentTab.timelinePage?.nextCursor || '',
+                    limit: AGENT_TRANSCRIPT_WINDOW_STEP
+                });
+            } else if (normalizedDirection === 'latest') {
+                await agentTab.loadTimelinePage({
+                    mode: 'replace',
+                    limit: AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+                });
+            } else {
+                return {
+                    ok: false,
+                    reason: `unknown-direction:${normalizedDirection}`
+                };
+            }
+            editorManager.renderAgentPanel(agentTab, {
+                reason: `smoke-timeline-${normalizedDirection}`
+            });
+            return await window.__tabminalSmoke
+                .getActiveAgentTimelineState();
         }
     };
 }

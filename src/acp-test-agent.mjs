@@ -129,6 +129,10 @@ class TabminalTestAgent {
                     description: 'Show assistant text around a tool call'
                 },
                 {
+                    name: 'timeline',
+                    description: 'Emit enough blocks to test timeline paging'
+                },
+                {
                     name: 'fail',
                     description: 'Throw a prompt error to test error handling'
                 }
@@ -376,6 +380,58 @@ class TabminalTestAgent {
 
             if (commandName === 'fail' || /fail-prompt/i.test(promptText)) {
                 throw new Error('prompt dispatch failed');
+            }
+
+            if (
+                commandName === 'timeline'
+                || /timeline-paging/i.test(promptText)
+            ) {
+                for (let index = 1; index <= 48; index += 1) {
+                    const padded = String(index).padStart(2, '0');
+                    await this.connection.sessionUpdate({
+                        sessionId: params.sessionId,
+                        update: {
+                            sessionUpdate: 'agent_message_chunk',
+                            messageId: `timeline-${padded}`,
+                            content: {
+                                type: 'text',
+                                text: `Timeline paging fixture item ${padded}.`
+                            }
+                        }
+                    });
+                    if (index % 8 === 0) {
+                        await sleep(10, signal);
+                    }
+                }
+                await this.sendPlan(params.sessionId, [
+                    {
+                        content: 'Inspect the request and summarize the task',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Run the necessary tool calls',
+                        priority: 'high',
+                        status: 'completed'
+                    },
+                    {
+                        content: 'Write the final response',
+                        priority: 'medium',
+                        status: 'completed'
+                    }
+                ]);
+                await this.connection.sessionUpdate({
+                    sessionId: params.sessionId,
+                    update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        messageId: 'timeline-final',
+                        content: {
+                            type: 'text',
+                            text: 'All set. Timeline paging fixture complete.'
+                        }
+                    }
+                });
+                return { stopReason: 'end_turn' };
             }
 
             if (

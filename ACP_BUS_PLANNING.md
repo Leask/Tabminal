@@ -54,6 +54,8 @@ model.
   up/down loading steps.
 - [x] Frontend transcript render work is debounced and keyed so unchanged
   historical nodes are not rebuilt on every update.
+- [x] Browser smoke can exercise Test Agent timeline paging with a long
+  transcript and verify latest -> older -> newer window transitions.
 
 ### Still Open
 
@@ -543,6 +545,8 @@ Implemented tests cover:
    - `/resume` suggestions still call `GET /api/agents/sessions`.
    - This can be slow because it depends on upstream provider listing.
    - The bus index is the natural future source for this menu.
+   - This migration is intentionally deferred because not every provider
+     supports global session listing with the same completeness guarantees.
 
 3. Bus sync is pull-after-event
    - The websocket currently notifies that something changed.
@@ -563,12 +567,15 @@ Implemented tests cover:
 
 ## Next Phase Candidates
 
-### Phase 2A: Make Resume Picker Bus-First
+### Phase 2A: Resume Picker Bus-First (Deferred)
 
 - Use `GET /api/acp-bus/sessions` for the initial `/resume` menu.
 - Fall back to upstream `GET /api/agents/sessions` only when bus data is empty
   or explicitly refreshed.
 - Mark source in UI/debug state: `hot`, `cache`, `cold`, or `upstream`.
+- Current decision: do not proceed in this branch. Provider `session/list(all)`
+  coverage is not uniform enough to make the bus index the primary picker
+  source without adding product complexity.
 
 ### Phase 2B: Harden Ranged Timeline APIs
 
@@ -580,10 +587,16 @@ GET /api/acp-bus/tabs/:tabId/timeline?limit=&before=&after=
 
 Remaining work:
 
-- Add stronger browser smoke coverage for older/newer page transitions.
 - Add native-app-facing API examples.
 - Decide whether native clients should use cursors only or also rely on
   `minOrder`/`maxOrder` bounds for pagination controls.
+
+Done:
+
+- Added `TABMINAL_EXPECT_TIMELINE_PAGING=1` browser smoke coverage that uses
+  the Test Agent `/timeline` fixture, verifies the latest 30-block window,
+  loads 10 older blocks while dropping the newest 10, then loads 10 newer
+  blocks and verifies the latest window is restored.
 
 ### Phase 2C: Add Event Delta Payloads
 
@@ -624,8 +637,8 @@ notification should resume/attach the session.
 
 ## Current Review Questions
 
-1. Should the frontend resume picker become bus-first, given that not every
-   provider supports global `session/list(all)` equally?
+1. Should Phase 2A stay deferred until provider session-list scope semantics
+   are better normalized?
 2. Should bus timeline pages expose absolute indexes, or are opaque cursors
    enough for native clients?
 3. Should `resync_required` sessions auto-load when opened, or wait for an

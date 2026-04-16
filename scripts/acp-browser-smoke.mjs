@@ -37,6 +37,8 @@ const expectTerminalLive = process.env.TABMINAL_EXPECT_TERMINAL_LIVE === '1';
 const expectManagedTerminalUi =
     process.env.TABMINAL_EXPECT_MANAGED_TERMINAL_UI === '1';
 const requireResumeCoverage = process.env.TABMINAL_REQUIRE_RESUME === '1';
+const expectTimelinePaging = process.env.TABMINAL_EXPECT_TIMELINE_PAGING
+    === '1';
 const expectTitlePattern = process.env.TABMINAL_EXPECT_TITLE_PATTERN || '';
 const targetMode = process.env.TABMINAL_TARGET_MODE || '';
 const expectToolCount = Math.max(
@@ -63,15 +65,24 @@ const attachmentFiles = String(
     .map((value) => value.trim())
     .filter(Boolean);
 const debugKeepTarget = process.env.TABMINAL_DEBUG_KEEP_TARGET === '1';
-const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
-    || (
+
+function getDefaultAgentPrompt() {
+    if (/test agent/i.test(targetAgentLabel) && expectTimelinePaging) {
+        return '/timeline';
+    }
+    if (
         /test agent/i.test(targetAgentLabel)
         && (expectDiffEditor || expectCodeEditor)
-            ? '/diff'
-            : `Read ${process.cwd()}/package.json `
-                + `and ${process.cwd()}/README.md, `
-                + 'then summarize this project briefly.'
-    );
+    ) {
+        return '/diff';
+    }
+    return `Read ${process.cwd()}/package.json `
+        + `and ${process.cwd()}/README.md, `
+        + 'then summarize this project briefly.';
+}
+
+const agentPrompt = process.env.TABMINAL_AGENT_PROMPT
+    || getDefaultAgentPrompt();
 
 function log(step, data = '') {
     const suffix = data ? ` ${data}` : '';
@@ -1963,30 +1974,43 @@ async function main() {
         `)
     );
     if (resumeCommandAvailable) {
-        await waitFor('resume-command-probe', async () => {
-            return await evaluate(
+        let resumeCommandProbeOpened = false;
+        try {
+            await waitFor('resume-command-probe', async () => {
+                return await evaluate(
+                    toExpression(`
+                        () => document.querySelectorAll(
+                            '.agent-command-option'
+                        ).length > 0
+                    `),
+                    15000,
+                    250
+                );
+            });
+            resumeCommandProbeOpened = true;
+        } catch (error) {
+            if (requireResumeCoverage) {
+                throw error;
+            }
+            log('resume-command-probe', 'skipped-empty-history');
+        }
+        if (resumeCommandProbeOpened) {
+            const hasResumeCommand = await evaluate(
                 toExpression(`
-                    () => document.querySelectorAll(
-                        '.agent-command-option'
-                    ).length > 0
-                `),
-                15000,
-                250
+                    () => Array.from(
+                        document.querySelectorAll('.agent-command-option-name')
+                    ).some((el) => (el.textContent || '').trim().length > 0)
+                `)
             );
-        });
-        const hasResumeCommand = await evaluate(
-            toExpression(`
-                () => Array.from(
-                    document.querySelectorAll('.agent-command-option-name')
-                ).some((el) => (el.textContent || '').trim().length > 0)
-            `)
-        );
-        if (hasResumeCommand) {
-            await exerciseResumeFlowIfSupported();
-        } else if (requireResumeCoverage) {
-            throw new Error('Resume coverage required but command menu stayed empty');
-        } else {
-            log('resume-flow', 'command-unavailable');
+            if (hasResumeCommand) {
+                await exerciseResumeFlowIfSupported();
+            } else if (requireResumeCoverage) {
+                throw new Error(
+                    'Resume coverage required but command menu stayed empty'
+                );
+            } else {
+                log('resume-flow', 'command-unavailable');
+            }
         }
     }
 
@@ -2439,6 +2463,120 @@ async function main() {
                 `)
             );
         }, 20000, 250);
+    }
+
+    if (expectTimelinePaging) {
+        const readTimelineState = async () => await evaluate(
+            toExpression(`
+                async () => {
+                    if (
+                        !window.__tabminalSmoke
+                        || typeof window.__tabminalSmoke
+                            .getActiveAgentTimelineState !== 'function'
+                    ) {
+                        return { ok: false, reason: 'missing-smoke-hook' };
+                    }
+                    return await window.__tabminalSmoke
+                        .getActiveAgentTimelineState();
+                }
+            `)
+        );
+        const loadTimelineDirection = async (direction) => await evaluate(
+            toExpression(`
+                async () => {
+                    if (
+                        !window.__tabminalSmoke
+                        || typeof window.__tabminalSmoke
+                            .loadActiveAgentTimelinePage !== 'function'
+                    ) {
+                        return { ok: false, reason: 'missing-smoke-hook' };
+                    }
+                    return await window.__tabminalSmoke
+                        .loadActiveAgentTimelinePage(${
+                            JSON.stringify(direction)
+                        });
+                }
+            `)
+        );
+        const assertTimeline = (condition, label, state) => {
+            if (condition) return;
+            throw new Error(
+                `${label}: ${JSON.stringify(state)}`
+            );
+        };
+        const initialTimeline = await waitFor(
+            'timeline-window-latest',
+            async () => {
+                const state = await readTimelineState();
+                return state?.ok
+                    && state.timelinePagingActive
+                    && state.count === 30
+                    && Number(state.page?.total || 0) > 30
+                    && state.page?.hasOlder === true
+                    && state.page?.hasNewer === false
+                    && state.domKeys?.length === state.keys?.length
+                    ? state
+                    : null;
+            },
+            30000,
+            250
+        );
+        const olderTimeline = await loadTimelineDirection('older');
+        assertTimeline(
+            olderTimeline?.ok
+                && olderTimeline.count === 30
+                && olderTimeline.page?.hasNewer === true,
+            'older timeline page did not load correctly',
+            olderTimeline
+        );
+        assertTimeline(
+            olderTimeline.orders[0] < initialTimeline.orders[0]
+                && olderTimeline.orders.at(-1) < initialTimeline.orders.at(-1),
+            'older timeline page did not move the window backward',
+            { initialTimeline, olderTimeline }
+        );
+        assertTimeline(
+            olderTimeline.domKeys?.length === olderTimeline.keys?.length,
+            'older timeline DOM keys did not match local window',
+            olderTimeline
+        );
+        const newerTimeline = await loadTimelineDirection('newer');
+        assertTimeline(
+            newerTimeline?.ok
+                && newerTimeline.count === 30
+                && newerTimeline.page?.hasOlder === true
+                && newerTimeline.page?.hasNewer === false,
+            'newer timeline page did not load correctly',
+            newerTimeline
+        );
+        assertTimeline(
+            JSON.stringify(newerTimeline.keys)
+                === JSON.stringify(initialTimeline.keys),
+            'newer timeline page did not restore the latest window',
+            { initialTimeline, newerTimeline }
+        );
+        assertTimeline(
+            newerTimeline.domKeys?.length === newerTimeline.keys?.length,
+            'newer timeline DOM keys did not match local window',
+            newerTimeline
+        );
+        log('timeline-paging', JSON.stringify({
+            initial: {
+                first: initialTimeline.orders[0],
+                last: initialTimeline.orders.at(-1),
+                total: initialTimeline.page?.total
+            },
+            older: {
+                first: olderTimeline.orders[0],
+                last: olderTimeline.orders.at(-1),
+                hasNewer: olderTimeline.page?.hasNewer
+            },
+            newer: {
+                first: newerTimeline.orders[0],
+                last: newerTimeline.orders.at(-1),
+                hasNewer: newerTimeline.page?.hasNewer
+            }
+        }));
     }
 
     if (/needs approval/i.test(finalHint.pill)) {
