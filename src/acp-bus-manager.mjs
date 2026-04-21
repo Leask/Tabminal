@@ -341,10 +341,10 @@ export class AcpBusManager extends EventEmitter {
                 total: 0,
                 hasOlder: false,
                 hasNewer: false,
-                minOrder: 0,
-                maxOrder: 0,
-                firstOrder: 0,
-                lastOrder: 0,
+                minIndex: 0,
+                maxIndex: 0,
+                firstIndex: 0,
+                lastIndex: 0,
                 prevCursor: '',
                 nextCursor: ''
             };
@@ -426,9 +426,13 @@ export class AcpBusManager extends EventEmitter {
         runtimeEntry.sessionKeys.add(handle.sessionKey);
         await this.#rememberOpenTab(serialized, 'agent_tab_create');
         if (persisted.changed) {
-            this.#emitEvent('session_snapshot_updated', persisted.record, {
-                reason: 'agent_tab_create'
-            });
+            this.#emitEvent(
+                'session_snapshot_updated',
+                persisted.record,
+                this.#buildSnapshotEventExtra(persisted, {
+                    reason: 'agent_tab_create'
+                })
+            );
         }
         this.#emitEvent('session_ui_attached', persisted.record, {
             reason: 'agent_tab_create',
@@ -512,9 +516,13 @@ export class AcpBusManager extends EventEmitter {
                 preserveSnapshotContent: true
             });
             if (persisted.changed) {
-                this.#emitEvent('session_snapshot_updated', persisted.record, {
-                    reason: 'resume_tab'
-                });
+                this.#emitEvent(
+                    'session_snapshot_updated',
+                    persisted.record,
+                    this.#buildSnapshotEventExtra(persisted, {
+                        reason: 'resume_tab'
+                    })
+                );
             }
         }
 
@@ -755,9 +763,11 @@ export class AcpBusManager extends EventEmitter {
         });
         tab.authoritativeSnapshot = false;
         if (persisted.changed) {
-            this.#emitEvent('session_snapshot_updated', persisted.record, {
-                reason
-            });
+            this.#emitEvent(
+                'session_snapshot_updated',
+                persisted.record,
+                this.#buildSnapshotEventExtra(persisted, { reason })
+            );
         }
         return serialized;
     }
@@ -1361,10 +1371,14 @@ export class AcpBusManager extends EventEmitter {
             liveAt: attachedAt,
             preserveSnapshotContent: true
         });
-        this.#emitEvent('session_hot_attached', persisted.record, {
-            reason,
-            replayHistory
-        });
+        this.#emitEvent(
+            'session_hot_attached',
+            persisted.record,
+            this.#buildSnapshotEventExtra(persisted, {
+                reason,
+                replayHistory
+            })
+        );
         return handle;
     }
 
@@ -1440,9 +1454,13 @@ export class AcpBusManager extends EventEmitter {
         });
         tab.authoritativeSnapshot = false;
         if (persisted.changed) {
-            this.#emitEvent('session_snapshot_updated', persisted.record, {
-                reason: 'runtime_update'
-            });
+            this.#emitEvent(
+                'session_snapshot_updated',
+                persisted.record,
+                this.#buildSnapshotEventExtra(persisted, {
+                    reason: 'runtime_update'
+                })
+            );
         }
     }
 
@@ -1487,6 +1505,24 @@ export class AcpBusManager extends EventEmitter {
         }
     }
 
+    #buildSnapshotEventExtra(persisted, extra = {}) {
+        const delta = persisted?.timelineDelta || {};
+        return {
+            ...extra,
+            snapshotVersion: Number.isFinite(delta.snapshotVersion)
+                ? delta.snapshotVersion
+                : (persisted?.record?.snapshotVersion || 0),
+            timelineIndex: delta.timelineIndex || null,
+            changedItems: Array.isArray(delta.changedItems)
+                ? delta.changedItems
+                : [],
+            removedItemKeys: Array.isArray(delta.removedItemKeys)
+                ? delta.removedItemKeys
+                : [],
+            requiresFullSync: !!delta.requiresFullSync
+        };
+    }
+
     #emitEvent(type, row, extra = {}) {
         const payload = {
             ...extra,
@@ -1508,7 +1544,8 @@ export class AcpBusManager extends EventEmitter {
                     errorMessage: row.errorMessage,
                     messageCount: row.messageCount,
                     toolCallCount: row.toolCallCount,
-                    isPresent: row.isPresent
+                    isPresent: row.isPresent,
+                    snapshotVersion: row.snapshotVersion
                 }
                 : null
         };

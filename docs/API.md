@@ -369,8 +369,8 @@ Clients should tolerate:
 Transport ordering and display ordering are separate concerns.
 
 - ACP transcript blocks do not currently have an upstream timestamp contract
-- agent transcript ordering must therefore rely on server-maintained timeline
-  order, not inferred timestamps
+- agent transcript display must therefore rely on the server-maintained
+  timeline index, not inferred timestamps
 - session history and cluster inventory timestamps are normal data fields and
   may be used directly when present
 
@@ -1082,7 +1082,302 @@ Response:
 
 - `204 No Content`
 
-## 13. WebSocket API: Terminal Sessions
+## 13. ACP Bus HTTP API
+
+The ACP bus is the authoritative transcript and session-cache layer for ACP
+clients. Web and native clients should use these routes to hydrate open agent
+tabs and page transcript history.
+
+The bus websocket is only a realtime invalidation stream. HTTP responses from
+this section are the source of truth after reconnects, restore, or missed
+events.
+
+### 13.1 `GET /api/acp-bus/state`
+
+Returns process-level ACP bus status.
+
+Response:
+
+```json
+{
+  "started": true,
+  "restoring": false,
+  "observedSessionCount": 2,
+  "openTabCount": 1
+}
+```
+
+### 13.2 `GET /api/acp-bus/sessions`
+
+Returns indexed ACP bus sessions from local bus storage.
+
+Query params:
+
+- `agentId`: optional agent filter
+- `present`: optional boolean; only include sessions still present upstream
+- `hot`: optional boolean; only include currently hot/observed sessions
+- `snapshot`: optional boolean; include cached snapshot payloads
+- `limit`: optional positive integer
+
+Response:
+
+```json
+{
+  "sessions": [
+    {
+      "sessionKey": "codex::upstream-session-id",
+      "agentId": "codex",
+      "sessionId": "upstream-session-id",
+      "cwd": "/Users/leask/Documents/Tabminal",
+      "title": "Session title",
+      "upstreamUpdatedAt": "2026-04-16T12:34:56.000Z",
+      "continuityState": "live",
+      "hotRank": 1,
+      "status": "ready",
+      "busy": false,
+      "messageCount": 12,
+      "toolCallCount": 3,
+      "snapshot": {}
+    }
+  ]
+}
+```
+
+Notes:
+
+- `snapshot` is only present when `snapshot=1`.
+- This endpoint is useful for diagnostics and future session browsers.
+- The current `/resume` picker still uses `/api/agents/sessions`; it is not
+  bus-first yet because global upstream listing support differs by provider.
+
+### 13.3 `GET /api/acp-bus/sessions/:agentId/:sessionId`
+
+Returns one indexed ACP bus session.
+
+Query params:
+
+- `snapshot`: optional boolean; include cached snapshot payload
+
+Errors:
+
+- `404` session not found
+
+### 13.4 `GET /api/acp-bus/tabs/:tabId`
+
+Returns authoritative metadata for an open bus-backed agent tab.
+
+Response:
+
+```json
+{
+  "id": "open-tab-id",
+  "agentId": "codex",
+  "acpSessionId": "upstream-session-id",
+  "cwd": "/Users/leask/Documents/Tabminal",
+  "title": "Session title",
+  "status": "ready",
+  "busy": false,
+  "busConnectionKind": "shared",
+  "continuityState": "live",
+  "availableCommands": [],
+  "availableModes": [],
+  "currentModeId": "default",
+  "configOptions": []
+}
+```
+
+Use this endpoint after bus websocket invalidation events when the client needs
+fresh tab-level metadata but does not need transcript rows.
+
+### 13.5 `GET /api/acp-bus/tabs/:tabId/timeline`
+
+Returns one ordered page of transcript blocks from bus storage.
+
+Query params:
+
+- `limit`: optional page size; default `30`, maximum `200`
+- `before`: optional opaque cursor from a previous page
+- `after`: optional opaque cursor from a previous page
+
+Cursor rules:
+
+- omit both `before` and `after` to fetch the latest page
+- pass `before=<prevCursor>` to fetch older rows before the current first row
+- pass `after=<nextCursor>` to fetch newer rows after the current last row
+- clients must treat cursors as opaque strings
+- if both `before` and `after` are supplied, current server behavior gives
+  `before` precedence; clients should not send both
+
+Response:
+
+```json
+{
+  "sessionKey": "codex::upstream-session-id",
+  "items": [
+    {
+      "itemKey": "message:assistant-message-id",
+      "cursor": "opaque-cursor",
+      "type": "message",
+      "index": 42,
+      "updatedAt": "2026-04-16T12:34:56.000Z",
+      "value": {
+        "id": "assistant-message-id",
+        "role": "assistant",
+        "kind": "message",
+        "text": "Hello",
+        "index": 42
+      }
+    }
+  ],
+  "total": 52,
+  "hasOlder": true,
+  "hasNewer": false,
+  "minIndex": 1,
+  "maxIndex": 52,
+  "firstIndex": 24,
+  "lastIndex": 52,
+  "prevCursor": "cursor-for-first-item",
+  "nextCursor": "cursor-for-last-item"
+}
+```
+
+Item types:
+
+- `message`: user, assistant, thought, or other agent message block
+- `tool`: tool-call card and terminal/resource summaries
+- `permission`: pending or resolved permission request
+- `plan`: active or completed plan block
+
+Ordering contract:
+
+- `items` are returned in display order from oldest to newest.
+- `index` is a server-maintained, contiguous timeline index starting at `1`.
+- `itemKey` is the stable row identity within the session timeline.
+- `minIndex` and `maxIndex` are page-independent timeline bounds for the
+  session.
+- `firstIndex` and `lastIndex` describe the returned page.
+- `hasOlder` and `hasNewer` are the primary UI booleans for pagination controls.
+- If an authoritative replay shows that upstream removed timeline rows, the
+  server may reassign indexes by rebuilding the session timeline.
+- Clients should treat fetched pages as authoritative and dedupe by `itemKey`.
+
+Native client fixed-window example:
+
+1. Fetch latest visible history:
+
+   ```http
+   GET /api/acp-bus/tabs/open-tab-id/timeline?limit=30
+   ```
+
+2. Store `items`, `prevCursor`, `nextCursor`, `hasOlder`, and `hasNewer`.
+
+3. When the user scrolls up and `hasOlder` is true:
+
+   ```http
+   GET /api/acp-bus/tabs/open-tab-id/timeline?limit=10&before=<prevCursor>
+   ```
+
+   Prepend the returned rows, dedupe by `itemKey`, sort by `(index, itemKey)`,
+   then drop the newest rows if keeping a fixed 30-block local window.
+
+4. When the user scrolls down and `hasNewer` is true:
+
+   ```http
+   GET /api/acp-bus/tabs/open-tab-id/timeline?limit=10&after=<nextCursor>
+   ```
+
+   Append the returned rows, dedupe by `itemKey`, sort by `(index, itemKey)`,
+   then drop the oldest rows if keeping a fixed 30-block local window.
+
+5. When the client is following the latest page and receives a bus websocket
+   event for the same tab/session, first apply safe `changedItems` deltas if
+   present. If `requiresFullSync` is true or the delta cannot be merged safely,
+   fetch the latest page again:
+
+   ```http
+   GET /api/acp-bus/tabs/open-tab-id/timeline?limit=30
+   ```
+
+   If the user has scrolled away from latest, do not yank the viewport. Update
+   only rows already inside the visible window. Mark that newer content may
+   exist, then fetch newer rows only when the user moves down or explicitly
+   jumps to latest.
+
+Recommended native behavior:
+
+- Keep cursors as the canonical pagination input.
+- Use `hasOlder` and `hasNewer` to enable or disable scroll pagination.
+- Use `minIndex` and `maxIndex` only as bounds for UI state, diagnostics, and
+  avoiding obviously exhausted requests.
+- Do not derive timestamps from timeline rows for display ordering.
+- Do not parse cursor contents or persist assumptions about cursor encoding.
+
+### 13.6 `POST /api/acp-bus/tabs/:tabId/attach`
+
+Pins an open agent tab into the bus and ensures the bus observes that upstream
+ACP session.
+
+Response:
+
+- authoritative open tab metadata, same shape as
+  `GET /api/acp-bus/tabs/:tabId`
+
+Native clients should call this after restoring an open workspace tab and before
+expecting bus events for that tab.
+
+### 13.7 `DELETE /api/acp-bus/tabs/:tabId/attach`
+
+Removes the UI pin for an open agent tab.
+
+Response:
+
+```json
+{
+  "ok": true
+}
+```
+
+### 13.8 `GET /api/acp-bus/events`
+
+Returns a bounded recent ACP bus event log.
+
+Query params:
+
+- `sinceId`: optional integer event id cursor
+- `limit`: optional positive integer
+
+Response:
+
+```json
+{
+  "events": [
+    {
+      "id": 123,
+      "type": "session_snapshot_updated",
+      "createdAt": "2026-04-16T12:34:56.000Z",
+      "agentId": "codex",
+      "sessionId": "upstream-session-id",
+      "payload": {
+        "snapshotVersion": 7,
+        "timelineIndex": {
+          "total": 52,
+          "minIndex": 1,
+          "maxIndex": 52
+        },
+        "changedItems": [],
+        "removedItemKeys": [],
+        "requiresFullSync": true
+      }
+    }
+  ]
+}
+```
+
+This endpoint is useful for reconnect catch-up and diagnostics. It is bounded,
+so clients must still use authoritative tab metadata and timeline pages when
+correctness matters.
+
+## 14. WebSocket API: Terminal Sessions
 
 Endpoint:
 
@@ -1106,7 +1401,7 @@ Sec-WebSocket-Protocol: tabminal.v1
 `?token=<access-token>` remains accepted as a legacy compatibility path, but
 new clients should not use it.
 
-### 13.1 Connection behavior
+### 14.1 Connection behavior
 
 On connection:
 
@@ -1118,7 +1413,7 @@ On connection:
    - `status`
 4. queued realtime payloads collected during init are replayed
 
-### 13.2 Server -> client messages
+### 14.2 Server -> client messages
 
 #### `snapshot`
 
@@ -1209,7 +1504,7 @@ Typical shapes:
 }
 ```
 
-### 13.3 Client -> server messages
+### 14.3 Client -> server messages
 
 #### `input`
 
@@ -1257,7 +1552,7 @@ Server responds with:
 }
 ```
 
-## 14. WebSocket API: ACP Bus
+## 15. WebSocket API: ACP Bus
 
 Endpoint:
 
@@ -1270,7 +1565,7 @@ are resolved through HTTP APIs; realtime changes arrive as bus events.
 Authentication uses the same WebSocket subprotocol contract as terminal
 websockets.
 
-### 14.1 Initial message
+### 15.1 Initial message
 
 After the bus is ready, the server sends a process-level snapshot:
 
@@ -1290,7 +1585,7 @@ After the bus is ready, the server sends a process-level snapshot:
 `sessions` is a bounded cache summary from the ACP bus store. Clients should
 use it as a hint, not as the only source of visible tab state.
 
-### 14.2 Event messages
+### 15.2 Event messages
 
 Every later message is an event envelope:
 
@@ -1310,9 +1605,34 @@ Every later message is an event envelope:
         "cwd": "/Users/leask/Documents/Tabminal",
         "continuityState": "live",
         "busy": false,
-        "status": "ready"
+        "status": "ready",
+        "snapshotVersion": 7
       },
-      "pinId": "agent-tab:open-tab-id"
+      "pinId": "agent-tab:open-tab-id",
+      "snapshotVersion": 7,
+      "timelineIndex": {
+        "total": 52,
+        "minIndex": 1,
+        "maxIndex": 52
+      },
+      "changedItems": [
+        {
+          "itemKey": "message:assistant-message-id",
+          "cursor": "opaque-cursor",
+          "type": "message",
+          "index": 52,
+          "updatedAt": "2026-04-16T12:34:56.000Z",
+          "value": {
+            "id": "assistant-message-id",
+            "role": "assistant",
+            "kind": "message",
+            "text": "Hello",
+            "index": 52
+          }
+        }
+      ],
+      "removedItemKeys": [],
+      "requiresFullSync": false
     }
   }
 }
@@ -1332,11 +1652,27 @@ Current event types include:
 - `session_runtime_exit`
 
 Clients should route events to visible agent tabs by `pinId` when present, or
-by `(agentId, sessionId)` otherwise. Events are invalidation/delta signals; the
-client may fetch authoritative tab metadata or timeline pages after receiving
-one.
+by `(agentId, sessionId)` otherwise. `session_snapshot_updated` and
+`session_hot_attached` may carry structured timeline deltas:
 
-### 14.3 Open agent tab state
+- `snapshotVersion`: monotonic per-session version for observed snapshot writes.
+- `timelineIndex`: page-independent timeline bounds after the write.
+- `changedItems`: timeline rows that were inserted or updated and are safe to
+  merge by `itemKey`.
+- `removedItemKeys`: row keys removed by the write; non-empty removals currently
+  require an authoritative timeline fetch.
+- `requiresFullSync`: when true, ignore `changedItems` and fetch tab metadata plus
+  an authoritative timeline page.
+
+A client following the latest timeline page may merge `changedItems`, sort by
+`(index, itemKey)`, and trim to its fixed local window. A client that has
+scrolled away from latest should only update rows already in its visible window;
+it should not append unseen latest rows and yank the viewport. For ambiguous
+cases, or any event with `requiresFullSync = true`, use
+`GET /api/acp-bus/tabs/:tabId` and
+`GET /api/acp-bus/tabs/:tabId/timeline`.
+
+### 15.3 Open agent tab state
 
 Open agent tabs are not stored in a separate `agent-tabs.json` file. They live
 inside the owning terminal session workspace snapshot:
@@ -1365,7 +1701,7 @@ This state answers which tabs should reopen with the workspace. ACP transcript
 content, tool calls, plans, permissions, and managed terminal summaries are
 stored in the ACP bus database and fetched through bus-backed APIs.
 
-### 14.4 Authority model
+### 15.4 Authority model
 
 The bus websocket gives low-latency invalidation and event delivery. It does
 not replace:
@@ -1378,7 +1714,7 @@ not replace:
 Clients should expect HTTP snapshots and timeline pages to correct drift after
 reconnects, restore, or missed websocket events.
 
-## 15. Error Model
+## 16. Error Model
 
 Tabminal uses plain HTTP status codes plus JSON bodies of the form:
 
@@ -1408,7 +1744,7 @@ Common statuses:
 - `500` internal server/runtime failure
 - `501` runtime capability not supported
 
-### 15.1 Heartbeat write conflict
+### 16.1 Heartbeat write conflict
 
 Heartbeat file writes may return per-file conflicts through
 `fileWriteResults`:
@@ -1431,21 +1767,22 @@ Heartbeat file writes may return per-file conflicts through
 
 This is the canonical optimistic concurrency path for text editing.
 
-## 16. Native Client Requirements
+## 17. Native Client Requirements
 
 Future native clients should follow the same API contract as web.
 
-### 16.1 Required shared behavior
+### 17.1 Required shared behavior
 
 - use `/api/version` for runtime boot identity
 - authenticate with the same login/refresh/access-token contract
 - use `/api/heartbeat` for authoritative session and agent inventory
-- use terminal and agent websockets for realtime streaming
+- use terminal websockets and `/ws/acp-bus` for realtime streaming
 - submit agent prompts and actions over HTTP, not websocket
+- hydrate ACP tab metadata and transcript pages through bus HTTP APIs
 - treat `/api/cluster` as authoritative host registry
 - preserve host isolation
 
-### 16.2 Client-specific storage may differ
+### 17.2 Client-specific storage may differ
 
 Storage location is a client detail, not an API contract.
 
@@ -1455,7 +1792,7 @@ However, the logical behavior should remain:
 - secondary hosts may require independent upstream auth state
 - clients must be able to present and maintain per-host auth state cleanly
 
-### 16.3 Reconnect behavior
+### 17.3 Reconnect behavior
 
 Current production web behavior is:
 
@@ -1465,11 +1802,11 @@ Current production web behavior is:
 Native clients do not have to match the exact implementation, but should not
 weaken freshness or reconnect behavior without evidence.
 
-## 17. Stability Notes and Non-Negotiables
+## 18. Stability Notes and Non-Negotiables
 
 These are constraints future API changes should preserve.
 
-### 17.1 Do not move authoritative state to the browser
+### 18.1 Do not move authoritative state to the browser
 
 In particular:
 
@@ -1477,22 +1814,22 @@ In particular:
 - ACP tab persistence stays server-authored
 - session inventory remains heartbeat-authored
 
-### 17.2 Do not make websocket the only source of truth
+### 18.2 Do not make websocket the only source of truth
 
 Websocket loss or reconnect must remain survivable through HTTP resync.
 
-### 17.3 Do not fragment web and native APIs
+### 18.3 Do not fragment web and native APIs
 
 Any new native app should consume the same route structure and websocket
 contracts unless there is a very strong reason to split.
 
-### 17.4 Keep terminal and agent transports separate
+### 18.4 Keep terminal and agent transports separate
 
 Terminal sessions and ACP agent tabs are different products with different
 message models. They may share host auth and heartbeat, but they should not be
 collapsed into one websocket namespace.
 
-## 18. Appendix: Current Endpoint Index
+## 19. Appendix: Current Endpoint Index
 
 ### Public
 
@@ -1540,4 +1877,15 @@ collapsed into one websocket namespace.
 - `POST /api/agents/tabs/:tabId/mode`
 - `POST /api/agents/tabs/:tabId/config`
 - `DELETE /api/agents/tabs/:tabId`
+
+### ACP bus
+
+- `GET /api/acp-bus/state`
+- `GET /api/acp-bus/sessions`
+- `GET /api/acp-bus/sessions/:agentId/:sessionId`
+- `GET /api/acp-bus/tabs/:tabId`
+- `GET /api/acp-bus/tabs/:tabId/timeline`
+- `POST /api/acp-bus/tabs/:tabId/attach`
+- `DELETE /api/acp-bus/tabs/:tabId/attach`
+- `GET /api/acp-bus/events`
 - `WS /ws/acp-bus`

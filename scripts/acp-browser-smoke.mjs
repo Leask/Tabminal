@@ -2530,8 +2530,8 @@ async function main() {
             olderTimeline
         );
         assertTimeline(
-            olderTimeline.orders[0] < initialTimeline.orders[0]
-                && olderTimeline.orders.at(-1) < initialTimeline.orders.at(-1),
+            olderTimeline.indexes[0] < initialTimeline.indexes[0]
+                && olderTimeline.indexes.at(-1) < initialTimeline.indexes.at(-1),
             'older timeline page did not move the window backward',
             { initialTimeline, olderTimeline }
         );
@@ -2562,18 +2562,18 @@ async function main() {
         );
         log('timeline-paging', JSON.stringify({
             initial: {
-                first: initialTimeline.orders[0],
-                last: initialTimeline.orders.at(-1),
+                first: initialTimeline.indexes[0],
+                last: initialTimeline.indexes.at(-1),
                 total: initialTimeline.page?.total
             },
             older: {
-                first: olderTimeline.orders[0],
-                last: olderTimeline.orders.at(-1),
+                first: olderTimeline.indexes[0],
+                last: olderTimeline.indexes.at(-1),
                 hasNewer: olderTimeline.page?.hasNewer
             },
             newer: {
-                first: newerTimeline.orders[0],
-                last: newerTimeline.orders.at(-1),
+                first: newerTimeline.indexes[0],
+                last: newerTimeline.indexes.at(-1),
                 hasNewer: newerTimeline.page?.hasNewer
             }
         }));

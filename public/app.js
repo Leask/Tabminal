@@ -6671,12 +6671,12 @@ class EditorManager {
                 return;
             }
             const timeline = getAgentTimelineItems(agentTab);
-            const firstOrder = Number(timeline[0]?.order);
-            const minOrder = Number(agentTab.timelinePage?.minOrder);
+            const firstIndex = Number(timeline[0]?.index);
+            const minIndex = Number(agentTab.timelinePage?.minIndex);
             if (
-                Number.isFinite(firstOrder)
-                && Number.isFinite(minOrder)
-                && firstOrder <= minOrder
+                Number.isFinite(firstIndex)
+                && Number.isFinite(minIndex)
+                && firstIndex <= minIndex
             ) {
                 return;
             }
@@ -6747,12 +6747,12 @@ class EditorManager {
                 return;
             }
             const timeline = getAgentTimelineItems(agentTab);
-            const lastOrder = Number(timeline.at(-1)?.order);
-            const maxOrder = Number(agentTab.timelinePage?.maxOrder);
+            const lastIndex = Number(timeline.at(-1)?.index);
+            const maxIndex = Number(agentTab.timelinePage?.maxIndex);
             if (
-                Number.isFinite(lastOrder)
-                && Number.isFinite(maxOrder)
-                && lastOrder >= maxOrder
+                Number.isFinite(lastIndex)
+                && Number.isFinite(maxIndex)
+                && lastIndex >= maxIndex
             ) {
                 return;
             }
@@ -10271,6 +10271,7 @@ class AgentTab {
         this.busAttachedSessionKey = '';
         this.busSyncTimer = null;
         this.busSyncPromise = null;
+        this.busSyncNeedsTimeline = false;
         this.needsAttention = false;
         this.runCounter = 0;
         this.lastCompletedRunCounter = 0;
@@ -10289,10 +10290,10 @@ class AgentTab {
             total: 0,
             hasOlder: false,
             hasNewer: false,
-            minOrder: 0,
-            maxOrder: 0,
-            firstOrder: 0,
-            lastOrder: 0,
+            minIndex: 0,
+            maxIndex: 0,
+            firstIndex: 0,
+            lastIndex: 0,
             prevCursor: '',
             nextCursor: ''
         };
@@ -10415,10 +10416,10 @@ class AgentTab {
                 total: 0,
                 hasOlder: false,
                 hasNewer: false,
-                minOrder: 0,
-                maxOrder: 0,
-                firstOrder: 0,
-                lastOrder: 0,
+                minIndex: 0,
+                maxIndex: 0,
+                firstIndex: 0,
+                lastIndex: 0,
                 prevCursor: '',
                 nextCursor: ''
             };
@@ -10590,13 +10591,18 @@ class AgentTab {
         return this.connectionKind === 'bus';
     }
 
-    async syncFromBus({ attach = false } = {}) {
+    async syncFromBus({ attach = false, timeline = true } = {}) {
         if (!this.server.isAuthenticated) {
             return false;
         }
         if (this.busSyncPromise) {
+            if (timeline) {
+                this.busSyncNeedsTimeline = true;
+            }
             return this.busSyncPromise;
         }
+        const requestedTimeline = !!timeline || this.busSyncNeedsTimeline;
+        this.busSyncNeedsTimeline = false;
 
         this.busSyncPromise = (async () => {
             const response = await this.server.fetch(
@@ -10613,9 +10619,12 @@ class AgentTab {
             }
             const data = await response.json();
             const shouldLoadLatestTimeline = (
-                attach
-                || this.timelineItems.length === 0
-                || !this.timelinePage?.hasNewer
+                requestedTimeline
+                && (
+                    attach
+                    || this.timelineItems.length === 0
+                    || !this.timelinePage?.hasNewer
+                )
             );
             this.update(data);
             this.busAttachedSessionKey = this.getObservedSessionKey();
@@ -10633,6 +10642,13 @@ class AgentTab {
             return true;
         })().finally(() => {
             this.busSyncPromise = null;
+            if (this.busSyncNeedsTimeline) {
+                this.busSyncNeedsTimeline = false;
+                this.scheduleBusSnapshotSync('pending_timeline_sync', {
+                    delayMs: 0,
+                    timeline: true
+                });
+            }
         });
 
         return this.busSyncPromise;
@@ -10684,13 +10700,16 @@ class AgentTab {
 
     applyTimelinePage(page, { mode = 'replace' } = {}) {
         const rawItems = Array.isArray(page?.items) ? page.items : [];
-        const nextItems = rawItems.map((item) => ({
-            type: item.type,
-            order: Number.isFinite(item.order) ? item.order : 0,
-            itemKey: String(item.itemKey || ''),
-            cursor: String(item.cursor || ''),
-            value: this.#normalizePagedTimelineValue(item)
-        })).filter((item) => item.type && item.value);
+        const nextItems = rawItems.map((item) => {
+            const index = Number.isFinite(item.index) ? item.index : 0;
+            return {
+                type: item.type,
+                index,
+                itemKey: String(item.itemKey || ''),
+                cursor: String(item.cursor || ''),
+                value: this.#normalizePagedTimelineValue(item)
+            };
+        }).filter((item) => item.type && item.value);
         const mergeItems = (items) => {
             const seen = new Set();
             const merged = [];
@@ -10703,8 +10722,8 @@ class AgentTab {
                 merged.push(item);
             }
             merged.sort((left, right) => {
-                if (left.order !== right.order) {
-                    return left.order - right.order;
+                if (left.index !== right.index) {
+                    return left.index - right.index;
                 }
                 return String(left.itemKey || '').localeCompare(
                     String(right.itemKey || '')
@@ -10739,22 +10758,26 @@ class AgentTab {
         this.timelinePagingActive = true;
         const first = this.timelineItems[0] || null;
         const last = this.timelineItems.at(-1) || null;
-        const minOrder = Number.isFinite(page?.minOrder) ? page.minOrder : 0;
-        const maxOrder = Number.isFinite(page?.maxOrder) ? page.maxOrder : 0;
-        const firstOrder = Number.isFinite(first?.order) ? first.order : 0;
-        const lastOrder = Number.isFinite(last?.order) ? last.order : 0;
+        const minIndex = Number.isFinite(page?.minIndex)
+            ? page.minIndex
+            : 0;
+        const maxIndex = Number.isFinite(page?.maxIndex)
+            ? page.maxIndex
+            : 0;
+        const firstIndex = Number.isFinite(first?.index) ? first.index : 0;
+        const lastIndex = Number.isFinite(last?.index) ? last.index : 0;
         this.timelinePage = {
             total: Number.isFinite(page?.total) ? page.total : this.timelineItems.length,
             hasOlder: mode === 'append'
-                ? droppedOlder || firstOrder > minOrder
+                ? droppedOlder || firstIndex > minIndex
                 : !!page?.hasOlder,
             hasNewer: mode === 'prepend'
-                ? droppedNewer || lastOrder < maxOrder
+                ? droppedNewer || lastIndex < maxIndex
                 : !!page?.hasNewer,
-            minOrder,
-            maxOrder,
-            firstOrder,
-            lastOrder,
+            minIndex,
+            maxIndex,
+            firstIndex,
+            lastIndex,
             prevCursor: first?.cursor || page?.prevCursor || '',
             nextCursor: last?.cursor || page?.nextCursor || ''
         };
@@ -10762,16 +10785,142 @@ class AgentTab {
         this.historyWindowEnd = this.timelineItems.length;
     }
 
+    applyBusTimelineDelta(payload = {}) {
+        if (payload?.requiresFullSync) {
+            return false;
+        }
+        if (!this.timelinePagingActive || !this.timelinePage) {
+            return false;
+        }
+        const rawItems = Array.isArray(payload?.changedItems)
+            ? payload.changedItems
+            : [];
+        if (rawItems.length === 0) {
+            return true;
+        }
+        const incoming = rawItems.map((item) => {
+            const index = Number.isFinite(item.index) ? item.index : 0;
+            return {
+                type: item.type,
+                index,
+                itemKey: String(item.itemKey || ''),
+                cursor: String(item.cursor || ''),
+                value: this.#normalizePagedTimelineValue(item)
+            };
+        }).filter((item) => item.type && item.itemKey && item.value);
+        if (incoming.length === 0) {
+            return true;
+        }
+
+        const currentByKey = new Map();
+        for (const [index, item] of this.timelineItems.entries()) {
+            currentByKey.set(getAgentTimelineItemKey(item, index), item);
+        }
+        const firstIndex = Number(this.timelinePage.firstIndex || 0);
+        const lastIndex = Number(this.timelinePage.lastIndex || 0);
+        const canAppendLatest = !this.timelinePage.hasNewer;
+        const merged = [...this.timelineItems];
+        let changed = false;
+        for (const item of incoming) {
+            const key = getAgentTimelineItemKey(item, merged.length);
+            const existing = currentByKey.get(key);
+            if (existing) {
+                const index = merged.indexOf(existing);
+                if (index !== -1) {
+                    merged[index] = item;
+                    changed = true;
+                }
+                continue;
+            }
+            if (canAppendLatest && item.index >= lastIndex) {
+                merged.push(item);
+                changed = true;
+                continue;
+            }
+            if (item.index >= firstIndex && item.index <= lastIndex) {
+                return false;
+            }
+        }
+        if (!changed) {
+            return true;
+        }
+
+        const deduped = [];
+        const seen = new Set();
+        for (const item of merged) {
+            const key = getAgentTimelineItemKey(item, deduped.length);
+            if (seen.has(key)) {
+                continue;
+            }
+            seen.add(key);
+            deduped.push(item);
+        }
+        deduped.sort((left, right) => {
+            if (left.index !== right.index) {
+                return left.index - right.index;
+            }
+            return String(left.itemKey || '').localeCompare(
+                String(right.itemKey || '')
+            );
+        });
+        const droppedOlder = (
+            deduped.length > AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+        );
+        this.timelineItems = deduped.slice(
+            Math.max(0, deduped.length - AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS)
+        );
+        const first = this.timelineItems[0] || null;
+        const last = this.timelineItems.at(-1) || null;
+        const timelineIndex = payload.timelineIndex || {};
+        const minIndex = Number.isFinite(timelineIndex.minIndex)
+            ? timelineIndex.minIndex
+            : this.timelinePage.minIndex;
+        const maxIndex = Number.isFinite(timelineIndex.maxIndex)
+            ? timelineIndex.maxIndex
+            : this.timelinePage.maxIndex;
+        this.timelinePage = {
+            ...this.timelinePage,
+            total: Number.isFinite(timelineIndex.total)
+                ? timelineIndex.total
+                : this.timelinePage.total,
+            minIndex,
+            maxIndex,
+            firstIndex: Number.isFinite(first?.index) ? first.index : 0,
+            lastIndex: Number.isFinite(last?.index) ? last.index : 0,
+            hasOlder: droppedOlder || (
+                Number.isFinite(first?.index) && first.index > minIndex
+            ),
+            hasNewer: Number.isFinite(last?.index) && last.index < maxIndex,
+            prevCursor: first?.cursor || this.timelinePage.prevCursor || '',
+            nextCursor: last?.cursor || this.timelinePage.nextCursor || ''
+        };
+        this.historyWindowStart = 0;
+        this.historyWindowEnd = this.timelineItems.length;
+        this.notifyUi({
+            full: false,
+            delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+            updateTabs: false
+        });
+        return true;
+    }
+
     scheduleBusSnapshotSync(
         reason = 'runtime_update',
-        { delayMs = AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS } = {}
+        {
+            delayMs = AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+            timeline = true
+        } = {}
     ) {
+        if (timeline) {
+            this.busSyncNeedsTimeline = true;
+        }
         if (this.busSyncTimer) {
             clearTimeout(this.busSyncTimer);
         }
         this.busSyncTimer = setTimeout(() => {
             this.busSyncTimer = null;
-            void this.syncFromBus().catch((error) => {
+            const requestedTimeline = timeline || this.busSyncNeedsTimeline;
+            void this.syncFromBus({ timeline: requestedTimeline }).catch((error) => {
                 console.warn(
                     `Failed to sync agent tab from ACP bus (${reason}):`,
                     error?.message || error
@@ -10788,7 +10937,34 @@ class AgentTab {
             const session = event.payload.session;
             this.busAttachedSessionKey = `${session.agentId}::${session.sessionId}`;
         }
-        this.scheduleBusSnapshotSync(event.type || 'event');
+        if (
+            event.type === 'session_snapshot_updated'
+            || event.type === 'session_hot_attached'
+        ) {
+            const changedItems = Array.isArray(event.payload.changedItems)
+                ? event.payload.changedItems
+                : [];
+            if (event.payload.requiresFullSync) {
+                this.scheduleBusSnapshotSync(event.type || 'event', {
+                    timeline: true
+                });
+                return;
+            }
+            if (changedItems.length > 0) {
+                const applied = this.applyBusTimelineDelta(event.payload);
+                this.scheduleBusSnapshotSync(event.type || 'event', {
+                    timeline: !applied
+                });
+                return;
+            }
+            this.scheduleBusSnapshotSync(event.type || 'event', {
+                timeline: false
+            });
+            return;
+        }
+        this.scheduleBusSnapshotSync(event.type || 'event', {
+            timeline: false
+        });
     }
 
     handleBusDisconnected() {
@@ -11071,13 +11247,20 @@ class AgentTab {
         nextEntry.createdAt = typeof nextEntry.createdAt === 'string'
             ? nextEntry.createdAt
             : '';
-        if (Number.isFinite(nextEntry.order)) {
-            this.timelineCounter = Math.max(this.timelineCounter, nextEntry.order);
+        const entryIndex = Number.isFinite(nextEntry.index)
+            ? nextEntry.index
+            : nextEntry.order;
+        if (Number.isFinite(entryIndex)) {
+            nextEntry.index = entryIndex;
+            nextEntry.order = entryIndex;
+            this.timelineCounter = Math.max(this.timelineCounter, entryIndex);
             return nextEntry;
         }
-        nextEntry.order = Number.isFinite(fallbackOrder)
+        const nextOrder = Number.isFinite(fallbackOrder)
             ? fallbackOrder
             : this.#nextTimelineOrder();
+        nextEntry.index = nextOrder;
+        nextEntry.order = nextOrder;
         return nextEntry;
     }
 
@@ -11086,17 +11269,21 @@ class AgentTab {
         const value = item?.value && typeof item.value === 'object'
             ? item.value
             : {};
-        const order = Number.isFinite(item?.order) ? item.order : value.order;
+        const index = Number.isFinite(item?.index) ? item.index : value.index;
+        let normalized = null;
         if (type === 'message') {
-            return this.#normalizeMessage(value, order);
+            normalized = this.#normalizeMessage(value, index);
+        } else if (type === 'tool' || type === 'permission') {
+            normalized = this.#normalizeTimelineEntry(value, index);
+        } else if (type === 'plan') {
+            normalized = this.#normalizeTimelineEntry(value, index);
         }
-        if (type === 'tool' || type === 'permission') {
-            return this.#normalizeTimelineEntry(value, order);
+        if (!normalized || typeof normalized !== 'object') {
+            return null;
         }
-        if (type === 'plan') {
-            return this.#normalizeTimelineEntry(value, order);
-        }
-        return null;
+        normalized.index = index;
+        delete normalized.order;
+        return normalized;
     }
 
     #normalizeMessage(message, fallbackOrder = null) {
@@ -11796,15 +11983,15 @@ if (typeof window !== 'undefined') {
             const keys = timeline.map((entry, index) => (
                 getAgentTimelineItemKey(entry, index)
             ));
-            const orders = timeline.map((entry) => (
-                Number.isFinite(entry?.order) ? entry.order : null
+            const indexes = timeline.map((entry) => (
+                Number.isFinite(entry?.index) ? entry.index : null
             ));
             return {
                 ok: true,
                 tabId: agentTab.id,
                 count: timeline.length,
                 keys,
-                orders,
+                indexes,
                 timelinePagingActive: !!agentTab.timelinePagingActive,
                 page: { ...(agentTab.timelinePage || {}) },
                 domKeys: Array.from(

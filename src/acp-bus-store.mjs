@@ -8,6 +8,7 @@ const BASE_DIR = path.join(os.homedir(), '.tabminal');
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
 const DEFAULT_EVENT_LIMIT = 2000;
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+const MAX_EVENT_DELTA_ITEMS = 50;
 
 function parseJsonText(text, fallback) {
     if (typeof text !== 'string' || text.trim() === '') {
@@ -51,8 +52,9 @@ function encodeTimelineCursor(row) {
     if (!row) {
         return '';
     }
+    const index = Number(row.item_index || row.itemIndex || row.index || 0);
     const payload = JSON.stringify({
-        order: Number(row.item_order || row.order || 0),
+        index,
         key: String(row.item_key || row.itemKey || '')
     });
     return Buffer.from(payload, 'utf8').toString('base64url');
@@ -66,12 +68,12 @@ function decodeTimelineCursor(cursor) {
         const parsed = JSON.parse(
             Buffer.from(cursor.trim(), 'base64url').toString('utf8')
         );
-        const order = Number(parsed?.order);
+        const index = Number(parsed?.index);
         const key = String(parsed?.key || '');
-        if (!Number.isFinite(order) || !key) {
+        if (!Number.isFinite(index) || !key) {
             return null;
         }
-        return { order, key };
+        return { index, key };
     } catch {
         return null;
     }
@@ -135,6 +137,119 @@ function compareTimelinePayload(left, right) {
     );
 }
 
+function compareTimelineRows(left, right) {
+    const leftIndex = Number(left?.itemIndex);
+    const rightIndex = Number(right?.itemIndex);
+    if (Number.isFinite(leftIndex) && Number.isFinite(rightIndex)) {
+        if (leftIndex !== rightIndex) {
+            return leftIndex - rightIndex;
+        }
+    } else if (Number.isFinite(leftIndex)) {
+        return -1;
+    } else if (Number.isFinite(rightIndex)) {
+        return 1;
+    }
+    return String(left?.itemKey || '').localeCompare(String(right?.itemKey || ''));
+}
+
+function normalizeTimelineRows(rows = []) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return [];
+    }
+    return [...rows]
+        .sort(compareTimelineRows)
+        .map((row, index) => {
+            const itemIndex = index + 1;
+            const value = parseJsonText(row.payloadJson, {});
+            const payload = value && typeof value === 'object'
+                ? { ...value, index: itemIndex }
+                : value;
+            if (payload && typeof payload === 'object') {
+                delete payload.order;
+            }
+            return {
+                ...row,
+                itemIndex,
+                payloadJson: JSON.stringify(payload)
+            };
+        });
+}
+
+function timelineRowValue(row) {
+    const index = Number(row?.item_index || row?.itemIndex || row?.index || 0);
+    const value = parseJsonText(row?.payload_json ?? row?.payloadJson, {});
+    const payload = value && typeof value === 'object'
+        ? { ...value, index }
+        : value;
+    if (payload && typeof payload === 'object') {
+        delete payload.order;
+    }
+    return payload;
+}
+
+function timelineRowToItem(row) {
+    const index = Number(row?.item_index || row?.itemIndex || row?.index || 0);
+    return {
+        itemKey: String(row?.item_key || row?.itemKey || ''),
+        cursor: encodeTimelineCursor(row),
+        type: String(row?.item_type || row?.itemType || ''),
+        index,
+        updatedAt: String(row?.updated_at || row?.updatedAt || ''),
+        value: timelineRowValue(row)
+    };
+}
+
+function timelineRowSignature(row) {
+    return JSON.stringify({
+        itemType: String(row?.item_type || row?.itemType || ''),
+        itemId: String(row?.item_id || row?.itemId || ''),
+        itemIndex: Number(row?.item_index || row?.itemIndex || 0),
+        role: String(row?.role || ''),
+        kind: String(row?.kind || ''),
+        status: String(row?.status || ''),
+        payloadJson: String(row?.payload_json ?? row?.payloadJson ?? '{}')
+    });
+}
+
+function buildTimelineDelta(previousRows, nextRows, options = {}) {
+    const previous = Array.isArray(previousRows) ? previousRows : [];
+    const next = Array.isArray(nextRows) ? nextRows : [];
+    const previousByKey = new Map(
+        previous.map((row) => [String(row.item_key || row.itemKey || ''), row])
+    );
+    const nextKeys = new Set(
+        next.map((row) => String(row.item_key || row.itemKey || ''))
+    );
+    const removedItemKeys = previous
+        .map((row) => String(row.item_key || row.itemKey || ''))
+        .filter((key) => key && !nextKeys.has(key));
+    const changedRows = next.filter((row) => {
+        const key = String(row.item_key || row.itemKey || '');
+        const previousRow = previousByKey.get(key);
+        return !previousRow
+            || timelineRowSignature(previousRow) !== timelineRowSignature(row);
+    });
+    const tooLarge = changedRows.length > MAX_EVENT_DELTA_ITEMS;
+    const requiresFullSync = options.authoritativeSnapshot === true
+        || removedItemKeys.length > 0
+        || tooLarge;
+    const total = next.length;
+    const timelineIndex = {
+        total,
+        minIndex: total > 0 ? 1 : 0,
+        maxIndex: total
+    };
+    return {
+        changed: requiresFullSync || changedRows.length > 0,
+        requiresFullSync,
+        changedItems: requiresFullSync
+            ? []
+            : changedRows.map((row) => timelineRowToItem(row)),
+        removedItemKeys,
+        timelineIndex
+    };
+}
+
 function mergeSnapshotArray(previousItems, nextItems, type) {
     const previous = Array.isArray(previousItems) ? previousItems : [];
     const next = Array.isArray(nextItems) ? nextItems : [];
@@ -181,13 +296,13 @@ function isPlanComplete(entries = []) {
 }
 
 function getPlanOrder(entries, fallbackOrder) {
-    const orders = normalizePlanEntries(entries)
+    const planSortIndexes = normalizePlanEntries(entries)
         .map((entry) => Number(entry.order))
         .filter(Number.isFinite);
-    if (orders.length === 0) {
+    if (planSortIndexes.length === 0) {
         return Number.isFinite(fallbackOrder) ? fallbackOrder : 0;
     }
-    return Math.max(...orders) + 0.5;
+    return Math.max(...planSortIndexes) + 0.5;
 }
 
 function buildPlanHistoryEntry(entries, observedAt, fallbackOrder) {
@@ -257,7 +372,7 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
                 itemKey,
                 itemType: type,
                 itemId: identity,
-                itemOrder: normalizeTimelineOrder(value, rows.length + 1),
+                itemIndex: normalizeTimelineOrder(value, rows.length + 1),
                 role: String(value.role || ''),
                 kind: String(value.kind || ''),
                 status: String(value.status || ''),
@@ -281,7 +396,7 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
             entries: activePlan
         }]);
     }
-    return rows;
+    return normalizeTimelineRows(rows);
 }
 
 function rowToSession(row, includeSnapshot = false) {
@@ -315,6 +430,9 @@ function rowToSession(row, includeSnapshot = false) {
             ? row.tool_call_count
             : 0,
         isPresent: !!row.is_present,
+        snapshotVersion: Number.isFinite(row.snapshot_version)
+            ? row.snapshot_version
+            : 0,
         snapshot
     };
 }
@@ -396,7 +514,8 @@ function sessionChanged(previous, next) {
         'errorMessage',
         'messageCount',
         'toolCallCount',
-        'isPresent'
+        'isPresent',
+        'snapshotVersion'
     ].some((field) => previous[field] !== next[field]);
 }
 
@@ -450,6 +569,7 @@ export class AcpBusStore {
                 message_count INTEGER NOT NULL DEFAULT 0,
                 tool_call_count INTEGER NOT NULL DEFAULT 0,
                 is_present INTEGER NOT NULL DEFAULT 1,
+                snapshot_version INTEGER NOT NULL DEFAULT 0,
                 snapshot_json TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_acp_bus_sessions_agent
@@ -463,7 +583,7 @@ export class AcpBusStore {
                 item_key TEXT NOT NULL,
                 item_type TEXT NOT NULL,
                 item_id TEXT NOT NULL DEFAULT '',
-                item_order REAL NOT NULL DEFAULT 0,
+                item_index INTEGER NOT NULL DEFAULT 0,
                 role TEXT NOT NULL DEFAULT '',
                 kind TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT '',
@@ -471,8 +591,6 @@ export class AcpBusStore {
                 payload_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY(session_key, item_key)
             );
-            CREATE INDEX IF NOT EXISTS idx_acp_bus_timeline_order
-                ON acp_bus_timeline_items(session_key, item_order, item_key);
             CREATE TABLE IF NOT EXISTS acp_bus_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -494,6 +612,12 @@ export class AcpBusStore {
             'last_detached_at',
             "TEXT NOT NULL DEFAULT ''"
         );
+        this.#ensureColumn(
+            'acp_bus_sessions',
+            'snapshot_version',
+            'INTEGER NOT NULL DEFAULT 0'
+        );
+        this.#ensureTimelineIndexColumn();
     }
 
     close() {
@@ -518,6 +642,91 @@ export class AcpBusStore {
             return;
         }
         db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    }
+
+    #ensureTimelineIndexColumn() {
+        const db = this.#requireDb();
+        const columns = db.prepare(`
+            PRAGMA table_info(acp_bus_timeline_items)
+        `).all();
+        const hasItemIndex = columns.some((column) => (
+            column.name === 'item_index'
+        ));
+        const hasItemOrder = columns.some((column) => (
+            column.name === 'item_order'
+        ));
+        const itemIndexColumn = columns.find((column) => (
+            column.name === 'item_index'
+        ));
+        const hasIntegerIndex = /^INTEGER$/i.test(
+            String(itemIndexColumn?.type || '')
+        );
+        db.exec('DROP INDEX IF EXISTS idx_acp_bus_timeline_order');
+        if (hasItemIndex && hasIntegerIndex && !hasItemOrder) {
+            db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_acp_bus_timeline_index
+                    ON acp_bus_timeline_items(session_key, item_index, item_key)
+            `);
+            return;
+        }
+        const sourceIndexColumn = hasItemIndex ? 'item_index' : 'item_order';
+        db.exec('BEGIN');
+        try {
+            db.exec(`
+                ALTER TABLE acp_bus_timeline_items
+                RENAME TO acp_bus_timeline_items_legacy
+            `);
+            db.exec(`
+                CREATE TABLE acp_bus_timeline_items (
+                    session_key TEXT NOT NULL,
+                    item_key TEXT NOT NULL,
+                    item_type TEXT NOT NULL,
+                    item_id TEXT NOT NULL DEFAULT '',
+                    item_index INTEGER NOT NULL DEFAULT 0,
+                    role TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(session_key, item_key)
+                )
+            `);
+            db.exec(`
+                INSERT INTO acp_bus_timeline_items (
+                    session_key,
+                    item_key,
+                    item_type,
+                    item_id,
+                    item_index,
+                    role,
+                    kind,
+                    status,
+                    updated_at,
+                    payload_json
+                )
+                SELECT
+                    session_key,
+                    item_key,
+                    item_type,
+                    item_id,
+                    CAST(${sourceIndexColumn} AS INTEGER),
+                    role,
+                    kind,
+                    status,
+                    updated_at,
+                    payload_json
+                FROM acp_bus_timeline_items_legacy
+            `);
+            db.exec('DROP TABLE acp_bus_timeline_items_legacy');
+            db.exec('COMMIT');
+        } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+        }
+        db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_acp_bus_timeline_index
+                ON acp_bus_timeline_items(session_key, item_index, item_key)
+        `);
     }
 
     #getSessionRow(sessionKey) {
@@ -566,6 +775,7 @@ export class AcpBusStore {
                 message_count,
                 tool_call_count,
                 is_present,
+                snapshot_version,
                 snapshot_json
             ) VALUES (
                 @sessionKey,
@@ -589,6 +799,7 @@ export class AcpBusStore {
                 @messageCount,
                 @toolCallCount,
                 @isPresent,
+                @snapshotVersion,
                 @snapshotJson
             )
             ON CONFLICT(session_key) DO UPDATE SET
@@ -612,6 +823,7 @@ export class AcpBusStore {
                 message_count = excluded.message_count,
                 tool_call_count = excluded.tool_call_count,
                 is_present = excluded.is_present,
+                snapshot_version = excluded.snapshot_version,
                 snapshot_json = excluded.snapshot_json
         `).run({
             sessionKey: record.sessionKey,
@@ -635,6 +847,9 @@ export class AcpBusStore {
             messageCount: record.messageCount,
             toolCallCount: record.toolCallCount,
             isPresent: record.isPresent ? 1 : 0,
+            snapshotVersion: Number.isFinite(record.snapshotVersion)
+                ? record.snapshotVersion
+                : 0,
             snapshotJson: record.snapshotJson
         });
     }
@@ -650,7 +865,7 @@ export class AcpBusStore {
                 item_key,
                 item_type,
                 item_id,
-                item_order,
+                item_index,
                 role,
                 kind,
                 status,
@@ -661,7 +876,7 @@ export class AcpBusStore {
                 @itemKey,
                 @itemType,
                 @itemId,
-                @itemOrder,
+                @itemIndex,
                 @role,
                 @kind,
                 @status,
@@ -671,7 +886,7 @@ export class AcpBusStore {
             ON CONFLICT(session_key, item_key) DO UPDATE SET
                 item_type = excluded.item_type,
                 item_id = excluded.item_id,
-                item_order = excluded.item_order,
+                item_index = excluded.item_index,
                 role = excluded.role,
                 kind = excluded.kind,
                 status = excluded.status,
@@ -705,7 +920,7 @@ export class AcpBusStore {
                         item_key,
                         item_type,
                         item_id,
-                        item_order,
+                        item_index,
                         role,
                         kind,
                         status,
@@ -716,7 +931,7 @@ export class AcpBusStore {
                         @itemKey,
                         @itemType,
                         @itemId,
-                        @itemOrder,
+                        @itemIndex,
                         @role,
                         @kind,
                         @status,
@@ -750,6 +965,81 @@ export class AcpBusStore {
         `);
         for (const key of keys) {
             remove.run(sessionKey, key);
+        }
+    }
+
+    #getTimelineRows(sessionKey) {
+        const db = this.#requireDb();
+        return db.prepare(`
+            SELECT *
+            FROM acp_bus_timeline_items
+            WHERE session_key = ?
+            ORDER BY item_index ASC, item_key ASC
+        `).all(String(sessionKey || '').trim());
+    }
+
+    #ensureTimelineIndexes(sessionKey) {
+        const db = this.#requireDb();
+        const bounds = db.prepare(`
+            SELECT
+                COUNT(*) AS count,
+                COUNT(DISTINCT item_index) AS distinct_count,
+                MIN(item_index) AS min_index,
+                MAX(item_index) AS max_index,
+                SUM(item_index) AS sum_index
+            FROM acp_bus_timeline_items
+            WHERE session_key = ?
+        `).get(sessionKey) || {};
+        const count = Number(bounds.count || 0);
+        if (count === 0) {
+            return;
+        }
+        const distinctCount = Number(bounds.distinct_count || 0);
+        const minIndex = Number(bounds.min_index || 0);
+        const maxIndex = Number(bounds.max_index || 0);
+        const sumIndex = Number(bounds.sum_index || 0);
+        const expectedSum = (count * (count + 1)) / 2;
+        if (
+            minIndex === 1
+            && maxIndex === count
+            && distinctCount === count
+            && sumIndex === expectedSum
+        ) {
+            return;
+        }
+        const rows = db.prepare(`
+            SELECT item_key, item_index, payload_json
+            FROM acp_bus_timeline_items
+            WHERE session_key = ?
+            ORDER BY item_index ASC, item_key ASC
+        `).all(sessionKey);
+        const update = db.prepare(`
+            UPDATE acp_bus_timeline_items
+            SET item_index = ?, payload_json = ?
+            WHERE session_key = ? AND item_key = ?
+        `);
+        db.exec('BEGIN');
+        try {
+            for (const [index, row] of rows.entries()) {
+                const itemIndex = index + 1;
+                const value = parseJsonText(row.payload_json, {});
+                const payload = value && typeof value === 'object'
+                    ? { ...value, index: itemIndex }
+                    : value;
+                if (payload && typeof payload === 'object') {
+                    delete payload.order;
+                }
+                update.run(
+                    itemIndex,
+                    JSON.stringify(payload),
+                    sessionKey,
+                    row.item_key
+                );
+            }
+            db.exec('COMMIT');
+        } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
         }
     }
 
@@ -800,6 +1090,7 @@ export class AcpBusStore {
             messageCount: previous?.messageCount || 0,
             toolCallCount: previous?.toolCallCount || 0,
             isPresent: true,
+            snapshotVersion: previous?.snapshotVersion || 0,
             snapshotJson: previous?.snapshot
                 ? JSON.stringify(previous.snapshot)
                 : ''
@@ -822,7 +1113,8 @@ export class AcpBusStore {
             throw new Error('Observed snapshot must include agentId and sessionId');
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
-        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+        const previousRow = this.#getSessionRow(sessionKey);
+        const previous = rowToSession(previousRow, true);
         const mergedSnapshot = mergeObservedSnapshot(
             previous?.snapshot || null,
             rawSnapshot,
@@ -851,10 +1143,26 @@ export class AcpBusStore {
             safeSnapshot,
             observedAt
         );
+        if (previous) {
+            this.#ensureTimelineIndexes(sessionKey);
+        }
+        const previousTimelineRows = previous ? this.#getTimelineRows(sessionKey) : [];
+        const timelineDelta = buildTimelineDelta(
+            previousTimelineRows,
+            timelineRows,
+            {
+                authoritativeSnapshot: options.authoritativeSnapshot === true
+            }
+        );
         const receivedAt = typeof options.receivedAt === 'string'
             && options.receivedAt.trim()
             ? options.receivedAt.trim()
             : (timelineRows.length > 0 ? observedAt : '');
+        const snapshotJson = JSON.stringify(safeSnapshot);
+        const previousSnapshotJson = String(previousRow?.snapshot_json || '');
+        const snapshotChanged = !previous || previousSnapshotJson !== snapshotJson;
+        const snapshotVersion = Number(previous?.snapshotVersion || 0)
+            + (snapshotChanged || timelineDelta.changed ? 1 : 0);
         const next = {
             sessionKey,
             agentId,
@@ -900,7 +1208,8 @@ export class AcpBusStore {
             isPresent: options.isPresent === false
                 ? false
                 : (previous?.isPresent ?? true),
-            snapshotJson: JSON.stringify(safeSnapshot)
+            snapshotVersion,
+            snapshotJson
         };
         this.#writeSession(next);
         if (options.authoritativeSnapshot === true) {
@@ -916,7 +1225,11 @@ export class AcpBusStore {
             created: !previous,
             previous,
             changed: sessionChanged(previous, record),
-            record
+            record,
+            timelineDelta: {
+                ...timelineDelta,
+                snapshotVersion: record.snapshotVersion
+            }
         };
     }
 
@@ -952,6 +1265,7 @@ export class AcpBusStore {
             messageCount: previous?.messageCount || 0,
             toolCallCount: previous?.toolCallCount || 0,
             isPresent: previous?.isPresent ?? true,
+            snapshotVersion: previous?.snapshotVersion || 0,
             snapshotJson: previous?.snapshot
                 ? JSON.stringify(previous.snapshot)
                 : ''
@@ -1210,12 +1524,15 @@ export class AcpBusStore {
                 total: 0,
                 hasOlder: false,
                 hasNewer: false,
-                minOrder: 0,
-                maxOrder: 0,
+                minIndex: 0,
+                maxIndex: 0,
+                firstIndex: 0,
+                lastIndex: 0,
                 prevCursor: '',
                 nextCursor: ''
             };
         }
+        this.#ensureTimelineIndexes(normalizedSessionKey);
         const safeLimit = Number.isFinite(options.limit)
             ? Math.min(200, Math.max(1, Math.floor(options.limit)))
             : 30;
@@ -1228,15 +1545,15 @@ export class AcpBusStore {
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
                     AND (
-                        item_order < ?
-                        OR (item_order = ? AND item_key < ?)
+                        item_index < ?
+                        OR (item_index = ? AND item_key < ?)
                     )
-                ORDER BY item_order DESC, item_key DESC
+                ORDER BY item_index DESC, item_key DESC
                 LIMIT ?
             `).all(
                 normalizedSessionKey,
-                before.order,
-                before.order,
+                before.index,
+                before.index,
                 before.key,
                 safeLimit
             ).reverse();
@@ -1246,15 +1563,15 @@ export class AcpBusStore {
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
                     AND (
-                        item_order > ?
-                        OR (item_order = ? AND item_key > ?)
+                        item_index > ?
+                        OR (item_index = ? AND item_key > ?)
                     )
-                ORDER BY item_order ASC, item_key ASC
+                ORDER BY item_index ASC, item_key ASC
                 LIMIT ?
             `).all(
                 normalizedSessionKey,
-                after.order,
-                after.order,
+                after.index,
+                after.index,
                 after.key,
                 safeLimit
             );
@@ -1263,7 +1580,7 @@ export class AcpBusStore {
                 SELECT *
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
-                ORDER BY item_order DESC, item_key DESC
+                ORDER BY item_index DESC, item_key DESC
                 LIMIT ?
             `).all(normalizedSessionKey, safeLimit).reverse();
         }
@@ -1274,13 +1591,13 @@ export class AcpBusStore {
         `).get(normalizedSessionKey)?.count || 0);
         const bounds = db.prepare(`
             SELECT
-                MIN(item_order) AS min_order,
-                MAX(item_order) AS max_order
+                MIN(item_index) AS min_index,
+                MAX(item_index) AS max_index
             FROM acp_bus_timeline_items
             WHERE session_key = ?
         `).get(normalizedSessionKey) || {};
-        const minOrder = Number(bounds.min_order || 0);
-        const maxOrder = Number(bounds.max_order || 0);
+        const minIndex = Number(bounds.min_index || 0);
+        const maxIndex = Number(bounds.max_index || 0);
         const first = rows[0] || null;
         const last = rows.at(-1) || null;
         const hasOlder = first ? Number(db.prepare(`
@@ -1288,13 +1605,13 @@ export class AcpBusStore {
             FROM acp_bus_timeline_items
             WHERE session_key = ?
                 AND (
-                    item_order < ?
-                    OR (item_order = ? AND item_key < ?)
+                    item_index < ?
+                    OR (item_index = ? AND item_key < ?)
                 )
         `).get(
             normalizedSessionKey,
-            first.item_order,
-            first.item_order,
+            first.item_index,
+            first.item_index,
             first.item_key
         )?.count || 0) > 0 : false;
         const hasNewer = last ? Number(db.prepare(`
@@ -1302,31 +1619,24 @@ export class AcpBusStore {
             FROM acp_bus_timeline_items
             WHERE session_key = ?
                 AND (
-                    item_order > ?
-                    OR (item_order = ? AND item_key > ?)
+                    item_index > ?
+                    OR (item_index = ? AND item_key > ?)
                 )
         `).get(
             normalizedSessionKey,
-            last.item_order,
-            last.item_order,
+            last.item_index,
+            last.item_index,
             last.item_key
         )?.count || 0) > 0 : false;
         return {
-            items: rows.map((row) => ({
-                itemKey: String(row.item_key || ''),
-                cursor: encodeTimelineCursor(row),
-                type: String(row.item_type || ''),
-                order: Number(row.item_order || 0),
-                updatedAt: String(row.updated_at || ''),
-                value: parseJsonText(row.payload_json, {})
-            })),
+            items: rows.map((row) => timelineRowToItem(row)),
             total,
             hasOlder,
             hasNewer,
-            minOrder,
-            maxOrder,
-            firstOrder: Number(first?.item_order || 0),
-            lastOrder: Number(last?.item_order || 0),
+            minIndex,
+            maxIndex,
+            firstIndex: Number(first?.item_index || 0),
+            lastIndex: Number(last?.item_index || 0),
             prevCursor: encodeTimelineCursor(first),
             nextCursor: encodeTimelineCursor(last)
         };

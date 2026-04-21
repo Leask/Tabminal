@@ -310,11 +310,17 @@ describe('AcpBusManager', () => {
                 ).sort(),
                 ['c-1', 'g-1']
             );
-            assert.ok(
-                streamedEvents.some((event) =>
-                    event.type === 'session_hot_attached'
-                )
+            const attachEvent = streamedEvents.find((event) =>
+                event.type === 'session_hot_attached'
             );
+            assert.ok(attachEvent);
+            assert.equal(
+                attachEvent.payload.session.snapshotVersion,
+                attachEvent.payload.snapshotVersion
+            );
+            assert.equal(attachEvent.payload.requiresFullSync, false);
+            assert.equal(Array.isArray(attachEvent.payload.changedItems), true);
+            assert.equal(attachEvent.payload.changedItems.length > 0, true);
         });
     });
 

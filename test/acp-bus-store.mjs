@@ -20,7 +20,7 @@ async function withStore(prefix, callback) {
     const store = new AcpBusStore({ dbPath });
     await store.init();
     try {
-        await callback(store);
+        await callback(store, { dir, dbPath });
     } finally {
         store.close();
         await fs.rm(dir, { recursive: true, force: true });
@@ -62,6 +62,80 @@ describe('AcpBusStore', () => {
             const summary = store.getSummary();
             assert.equal(summary.sessionCount, 0);
             assert.equal(summary.timelineItemCount, 0);
+        } finally {
+            store.close();
+            await fs.rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('migrates legacy timeline order storage to item indexes', async () => {
+        const { dir, dbPath } = await createTempDbPath('acp-bus-store-');
+        const db = new DatabaseSync(dbPath);
+        db.exec(`
+            CREATE TABLE acp_bus_timeline_items (
+                session_key TEXT NOT NULL,
+                item_key TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                item_id TEXT NOT NULL DEFAULT '',
+                item_order REAL NOT NULL DEFAULT 0,
+                role TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY(session_key, item_key)
+            );
+            CREATE INDEX idx_acp_bus_timeline_order
+                ON acp_bus_timeline_items(session_key, item_order, item_key);
+            INSERT INTO acp_bus_timeline_items (
+                session_key,
+                item_key,
+                item_type,
+                item_id,
+                item_order,
+                role,
+                kind,
+                status,
+                updated_at,
+                payload_json
+            ) VALUES (
+                'codex::legacy',
+                'message:m-1',
+                'message',
+                'm-1',
+                1000,
+                'assistant',
+                'message',
+                '',
+                '2026-04-14T10:00:00.000Z',
+                '{"id":"m-1","role":"assistant","text":"legacy","order":1000}'
+            );
+        `);
+        db.close();
+
+        const store = new AcpBusStore({ dbPath });
+        try {
+            await store.init();
+            const page = store.listTimelineItems('codex::legacy', {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.index), [1]);
+            assert.equal('order' in page.items[0], false);
+            assert.equal('order' in page.items[0].value, false);
+            const migrated = store.db.prepare(`
+                PRAGMA table_info(acp_bus_timeline_items)
+            `).all();
+            assert.equal(
+                migrated.some((column) => column.name === 'item_order'),
+                false
+            );
+            assert.equal(
+                migrated.some((column) => (
+                    column.name === 'item_index'
+                    && /^INTEGER$/i.test(String(column.type || ''))
+                )),
+                true
+            );
         } finally {
             store.close();
             await fs.rm(dir, { recursive: true, force: true });
@@ -131,6 +205,64 @@ describe('AcpBusStore', () => {
             });
             assert.equal(loaded.snapshot.title, 'Observed session');
             assert.equal(loaded.snapshot.messages.length, 2);
+            assert.equal(saved.record.snapshotVersion, 1);
+            assert.equal(saved.timelineDelta.requiresFullSync, false);
+            assert.deepEqual(
+                saved.timelineDelta.changedItems.map((item) => item.itemKey),
+                ['message:m-1', 'message:m-2', 'tool:t-1']
+            );
+        });
+    });
+
+    it('returns structured incremental timeline deltas', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            const first = store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-delta',
+                cwd: '/tmp/project',
+                title: 'Delta session',
+                messages: [{
+                    id: 'm-1',
+                    role: 'user',
+                    text: 'one',
+                    order: 1
+                }],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:00:00.000Z'
+            });
+            assert.equal(first.record.snapshotVersion, 1);
+
+            const second = store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-delta',
+                cwd: '/tmp/project',
+                title: 'Delta session',
+                messages: [{
+                    id: 'm-2',
+                    role: 'assistant',
+                    text: 'two',
+                    order: 2
+                }],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:01:00.000Z',
+                preserveSnapshotContent: true
+            });
+
+            assert.equal(second.record.snapshotVersion, 2);
+            assert.equal(second.timelineDelta.requiresFullSync, false);
+            assert.deepEqual(
+                second.timelineDelta.changedItems.map((item) => item.itemKey),
+                ['message:m-2']
+            );
+            assert.deepEqual(second.timelineDelta.timelineIndex, {
+                total: 2,
+                minIndex: 1,
+                maxIndex: 2
+            });
+            assert.equal(second.timelineDelta.changedItems[0].index, 2);
+            assert.equal(second.timelineDelta.changedItems[0].value.index, 2);
         });
     });
 
@@ -231,6 +363,7 @@ describe('AcpBusStore', () => {
                 'message:m-3',
                 'tool:t-1'
             ]);
+            assert.deepEqual(latest.items.map((item) => item.index), [3, 4]);
             assert.equal(latest.hasOlder, true);
             assert.equal(latest.hasNewer, false);
 
@@ -256,6 +389,97 @@ describe('AcpBusStore', () => {
         });
     });
 
+    it('normalizes upstream timeline order into contiguous indexes', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-index',
+                cwd: '/tmp/project',
+                messages: [{
+                    id: 'm-1',
+                    role: 'assistant',
+                    text: 'message',
+                    order: 10
+                }],
+                toolCalls: [{
+                    toolCallId: 't-1',
+                    title: 'tool',
+                    status: 'completed',
+                    order: 5
+                }],
+                permissions: [],
+                planHistory: [{
+                    id: 'p-1',
+                    active: false,
+                    status: 'completed',
+                    order: 1000,
+                    entries: []
+                }],
+                plan: []
+            }, {
+                observedAt: '2026-04-14T10:10:00.000Z'
+            });
+
+            const page = store.listTimelineItems('codex::s-index', {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.itemKey), [
+                'tool:t-1',
+                'message:m-1',
+                'plan:p-1'
+            ]);
+            assert.deepEqual(page.items.map((item) => item.index), [1, 2, 3]);
+            assert.deepEqual(
+                page.items.map((item) => item.value.index),
+                [1, 2, 3]
+            );
+            assert.equal(page.minIndex, 1);
+            assert.equal(page.maxIndex, 3);
+            assert.equal('order' in page.items[0], false);
+            assert.equal('order' in page.items[0].value, false);
+            assert.equal('minOrder' in page, false);
+        });
+    });
+
+    it('repairs non-contiguous stored timeline indexes on read', async () => {
+        await withStore('acp-bus-store-', async (store, { dbPath }) => {
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-repair',
+                cwd: '/tmp/project',
+                messages: [
+                    { id: 'm-1', role: 'user', text: 'one', order: 1 },
+                    { id: 'm-2', role: 'assistant', text: 'two', order: 2 }
+                ],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:10:00.000Z'
+            });
+
+            const db = new DatabaseSync(dbPath);
+            try {
+                db.prepare(`
+                    UPDATE acp_bus_timeline_items
+                    SET item_index = 99
+                    WHERE session_key = ? AND item_key = ?
+                `).run('codex::s-repair', 'message:m-2');
+            } finally {
+                db.close();
+            }
+
+            const page = store.listTimelineItems('codex::s-repair', {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.index), [1, 2]);
+            assert.deepEqual(
+                page.items.map((item) => item.value.index),
+                [1, 2]
+            );
+            assert.equal(page.minIndex, 1);
+            assert.equal(page.maxIndex, 2);
+        });
+    });
+
     it('rebuilds timeline rows for authoritative snapshots', async () => {
         await withStore('acp-bus-store-', async (store) => {
             store.saveObservedSession({
@@ -271,7 +495,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:00:00.000Z'
             });
 
-            store.saveObservedSession({
+            const rebuilt = store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-rebuild',
                 cwd: '/tmp/project',
@@ -285,6 +509,11 @@ describe('AcpBusStore', () => {
                 authoritativeSnapshot: true
             });
 
+            assert.equal(rebuilt.timelineDelta.requiresFullSync, true);
+            assert.deepEqual(rebuilt.timelineDelta.changedItems, []);
+            assert.deepEqual(rebuilt.timelineDelta.removedItemKeys, [
+                'message:m-stale'
+            ]);
             const page = store.listTimelineItems('codex::s-rebuild', {
                 limit: 10
             });
@@ -292,8 +521,8 @@ describe('AcpBusStore', () => {
                 'message:m-1',
                 'message:m-2'
             ]);
-            assert.equal(page.minOrder, 1);
-            assert.equal(page.maxOrder, 2);
+            assert.equal(page.minIndex, 1);
+            assert.equal(page.maxIndex, 2);
         });
     });
 

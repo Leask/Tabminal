@@ -4,112 +4,33 @@
 
 Branch: `acp_bus`
 
-Last reviewed: 2026-04-16
+Last reviewed: 2026-04-17
 
-The ACP bus is no longer only a backend experiment. The current branch has a
-working backend bus, SQLite storage, server APIs, bus websocket fan-out, and
-open ACP agent tabs now hydrate transcript state through the bus path.
+The ACP bus is now the primary backend path for ACP agent tabs. Existing web
+agent tabs keep the current per-tab workspace UX, but their transcript hydration
+and runtime control now go through the backend bus rather than directly through
+legacy controller tabs.
 
-The product UX is still the existing per-agent-tab workspace. We have not yet
-introduced a unified multi-session chat UI, global notifications, or external
-adapters. The current goal is to make the existing ACP tab UX use the bus as the
-main transcript and control source while preserving the existing user-facing tab
-model.
+This document intentionally tracks current architecture and future work only. It
+omits completed implementation checklists and deferred ideas that are not in the
+current plan.
 
-## Current Implementation Summary
+## Current Architecture
 
-### Completed
+### Product Scope
 
-- [x] Backend ACP bus manager and store exist.
-- [x] SQLite-backed ACP session and event persistence exists.
-- [x] Global ACP session discovery runs on a polling loop.
-- [x] Default discovery poll interval is `10000ms`.
-- [x] Global hot session limit defaults to `10`.
-- [x] Global cached session retention defaults to `1000`.
-- [x] Bus startup syncs ACP metadata first, then attaches sessions selected by
-  ACP metadata `updatedAt`.
-- [x] Bus-owned runtime handles attach to hot or explicitly pinned sessions.
-- [x] Bus owns open UI agent tab metadata and persists it in terminal
-  `workspaceState.openAgentTabs` as lightweight session identity.
-- [x] Server `/api/agents` and heartbeat inventory now list bus-owned open
-  tabs.
-- [x] Server create/resume/prompt/cancel/mode/config/permission routes now go
-  through bus-owned runtime handles instead of `AcpManager` controller tabs.
-- [x] Discovery results carry `scope`; only `scope = all` can remove missing
-  sessions from the index.
-- [x] Timeline persistence distinguishes authoritative full replays from live
-  incremental updates.
-- [x] Timeline pages expose order bounds so clients know when older/newer
-  requests are exhausted.
-- [x] Frontend host clients maintain `/ws/acp-bus` connections.
-- [x] Open frontend agent tabs attach to the bus with
-  `POST /api/acp-bus/tabs/:tabId/attach`.
-- [x] Open frontend agent tabs fetch lightweight metadata from
-  `GET /api/acp-bus/tabs/:tabId`.
-- [x] Open frontend agent tabs fetch transcript windows from
-  `GET /api/acp-bus/tabs/:tabId/timeline`.
-- [x] `/resume` now returns an attach acknowledgement and lightweight tab
-  metadata; transcript hydration happens through the bus sync path.
-- [x] Frontend transcript rendering is windowed to 30 blocks with 10-block
-  up/down loading steps.
-- [x] Frontend transcript render work is debounced and keyed so unchanged
-  historical nodes are not rebuilt on every update.
-- [x] Browser smoke can exercise Test Agent timeline paging with a long
-  transcript and verify latest -> older -> newer window transitions.
+The current branch preserves the existing ACP tab UX:
 
-### Still Open
+- one workspace tab per agent session
+- no unified multi-session chat UI yet
+- no global notification UI yet
+- no external adapters yet
 
-- [ ] The resume session picker still uses the legacy
-  `GET /api/agents/sessions` upstream listing path.
-- [ ] The bus session index is not yet the primary source for the resume
-  picker or global session browser.
-- [ ] There is no global notification UI for sessions that update while not
-  open.
-- [ ] There is no unified multi-session chat UI.
-- [ ] There are no Telegram or native-app adapters yet.
-- [ ] Bus websocket events are still invalidation events, not structured deltas.
-- [ ] Process-restart gaps are still best-effort; strong cross-process
-  continuity is not implemented.
+The bus goal for this branch is infrastructure convergence: backend-owned ACP
+runtime handles, structured local storage, and stable HTTP/websocket contracts
+that future web, native, and adapter clients can share.
 
-## Goals
-
-1. Track globally discoverable ACP sessions across all supported agents.
-2. Keep recently updated or user-pinned sessions attached in the backend.
-3. Persist recent session state locally so downstream clients attach to
-   Tabminal instead of directly to upstream ACP providers.
-4. Keep the bus ACP-centric and provider-agnostic.
-5. Preserve the existing ACP tab UX until a later UI migration is designed.
-6. Avoid unbounded local storage growth.
-
-## Non-Goals For The Current Branch
-
-1. No unified chat UI yet.
-2. No global notification center yet.
-3. No Telegram adapter yet.
-4. No native-app-specific protocol split yet.
-5. No provider-specific filesystem/database watchers.
-6. No guarantee that a Tabminal process restart cannot miss an upstream update
-   that happens exactly during downtime.
-
-## Key ACP Constraints
-
-Current ACP provider capabilities we rely on:
-
-- `session/list`: discover sessions and metadata such as `updatedAt`.
-- `session/load`: authoritative restore with full replay of history.
-- `session/update`: live incremental updates while attached.
-- `unstable_resumeSession`: low-cost context resume without full replay.
-
-Important consequences:
-
-- `loadSession` is expensive and should not sit on UI critical paths unless an
-  authoritative baseline is explicitly required.
-- `unstable_resumeSession` cannot repair a history gap by itself.
-- Continuous correctness comes from keeping the backend observer attached.
-- If a session was detached, evicted, or missed during process downtime, the
-  bus should treat it as `resync_required` until a future authoritative load.
-
-## Core Identity Model
+### Identity
 
 A global ACP session is identified by:
 
@@ -125,42 +46,17 @@ The current string key is:
 agentId + '::' + sessionId
 ```
 
-## Session Continuity States
+### Continuity States
 
-### `cold`
+- `cold`: discovered from metadata only; local transcript may be absent.
+- `cached`: local transcript exists, but no active observer is attached.
+- `live`: a bus-owned ACP runtime handle is attached and receiving updates.
+- `resync_required`: local history may be incomplete; an authoritative
+  `loadSession` is needed before claiming full continuity.
 
-The bus knows about the session from discovery metadata only. It may not have a
-local materialized transcript.
+### Backend Store
 
-### `cached`
-
-The bus has a stored snapshot, but no active observer is attached.
-
-### `live`
-
-The session is currently observed by a bus-owned ACP runtime handle.
-
-### `resync_required`
-
-The bus has a snapshot, but continuity cannot be trusted. A future
-`loadSession` is required before claiming complete history.
-
-## Backend Components
-
-### `src/acp-bus-store.mjs`
-
-Responsibilities:
-
-- Owns `~/.tabminal/acp-bus.sqlite` by default.
-- Persists session metadata.
-- Persists structured timeline rows for messages, tools, permissions, and plan
-  entries.
-- Keeps serialized snapshots as a compatibility/cache layer while the frontend
-  migrates to ranged timeline reads.
-- Persists a bounded ACP bus event log.
-- Maintains hot ranks and bounded cache pruning.
-- Preserves cached transcript content when a new live attach initially reports
-  an empty restoring snapshot.
+`src/acp-bus-store.mjs` owns `~/.tabminal/acp-bus.sqlite` by default.
 
 Important tables:
 
@@ -168,480 +64,250 @@ Important tables:
 - `acp_bus_timeline_items`
 - `acp_bus_events`
 
-Important persisted session fields:
+The timeline table uses a single contiguous `item_index` integer. Timeline HTTP
+responses expose this as `index`; no `order` alias is part of the bus timeline
+API contract.
 
-- `session_key`
-- `agent_id`
-- `session_id`
-- `cwd`
-- `title`
-- `upstream_updated_at`
-- `last_activity_at`
-- `last_seen_at`
-- `last_attached_at`
-- `last_loaded_at`
-- `last_live_at`
-- `last_received_at`
-- `last_detached_at`
-- `continuity_state`
-- `hot_rank`
-- `status`
-- `busy`
-- `error_message`
-- `message_count`
-- `tool_call_count`
-- `snapshot_json`
+Timeline rules:
 
-### `src/acp-bus-manager.mjs`
+- rows are stored per `agentId::sessionId`
+- rows are ordered by contiguous `index`, starting at `1`
+- cursors are opaque and encode enough server state for before/after queries
+- if stored indexes are no longer contiguous, the store rebuilds indexes from
+  current display order
+- authoritative full replays may replace timeline rows for a session
+- live updates merge by stable item identity
+- observed snapshot writes advance `snapshot_version` when transcript or
+  snapshot content changes
+- bus events include safe `changedItems` deltas, or `requiresFullSync` when the
+  client must refetch
 
-Responsibilities:
+### Backend Manager
 
-- Poll ACP providers for global session discovery.
-- Maintain the global hot set.
-- Attach/detach bus-owned runtimes for hot or pinned sessions.
-- Own lightweight open agent tab metadata.
-- Emit and persist downstream-friendly bus events.
-- Serve session state from the store.
+`src/acp-bus-manager.mjs` owns the ACP bus lifecycle:
 
-Current behavior details:
+- polls ACP providers for global session metadata
+- keeps the hot set attached based on ACP metadata `updatedAt`
+- treats provider discovery as deletion-authoritative only when `scope = all`
+- attaches hot or UI-pinned sessions through bus-owned runtime handles
+- owns lightweight open agent tab metadata
+- persists bus events for downstream clients
+- routes prompt, cancel, permission, mode, config, terminal release, create,
+  resume, and close operations through bus-owned runtime handles
 
-- Hot selection is driven by ACP session metadata `updatedAt` from
-  `session/list`, with local seen/activity fields only as fallback sorting data.
-- `session/list` results are treated as authoritative for deletion only when the
-  provider reports `scope = all`. CWD-scoped results only upsert seen sessions.
-- `markSessionInterest()` ensures a session index row exists and schedules hot
-  rebalance, but it no longer changes hot ordering.
-- `pinSession()` records a UI pin, ensures that specific session is observed,
-  then schedules hot rebalance in the background.
-- `unpinSession()` removes a UI pin and schedules hot rebalance in the
-  background.
-- Hot rebalance is intentionally no longer blocking the UI attach/resume
-  critical path.
-- `createTabForUi()` creates an ACP session through a bus-owned runtime handle
-  and stores only the open tab/session identity in the owning terminal workspace snapshot.
-- `resumeTabForUi()` binds the existing workspace tab to the requested ACP
-  session and ensures the bus-owned runtime handle is attached.
-- Prompt, cancel, permission, mode, config, managed terminal release, and tab
-  close operations are resolved by bus-owned runtime handles.
-
-### `src/acp-manager.mjs`
-
-Responsibilities in the bus architecture:
-
-- Provides ACP definitions, agent config persistence, availability checks, and
-  the reusable `AcpRuntime` implementation.
-- No longer restores or owns open workspace agent tabs on the server main path.
-- Any remaining legacy controller-tab helpers are isolated compatibility code;
-  server routes no longer use them for open agent tabs or realtime transport.
-
-### `src/server.mjs`
-
-Responsibilities in the bus architecture:
-
-- Wires the bus store and manager at process startup.
-- Starts bus restore and polling during server restore.
-- Exposes bus REST APIs and `/ws/acp-bus`.
-- Returns bus-owned open tab metadata separately from transcript timeline pages.
-- Routes explicit user actions, such as create, resume, prompt, cancel, mode,
-  config, and permission resolution, through the bus manager.
-
-## Backend API Surface
-
-### Bus Inspection And Sync
-
-- `GET /api/acp-bus/state`
-- `GET /api/acp-bus/sessions`
-- `GET /api/acp-bus/sessions/:agentId/:sessionId`
-- `GET /api/acp-bus/events`
-- `POST /api/acp-bus/sync`
-- `GET /api/acp-bus/tabs/:tabId/timeline?limit=&before=&after=`
-
-### Bus-Backed Agent Tab State
-
-- `GET /api/acp-bus/tabs/:tabId`
-  - Returns bus-owned open tab metadata merged with the current bus snapshot.
-
-- `POST /api/acp-bus/tabs/:tabId/attach`
-  - Pins the open tab's ACP session into the bus.
-  - Ensures that specific session is observed.
-  - Returns bus-owned tab state.
-
-- `DELETE /api/acp-bus/tabs/:tabId/attach`
-  - Removes the UI pin for that tab.
-
-### Resume Flow
-
-- `POST /api/agents/tabs/resume`
-  - Calls the ACP bus resume path.
-  - Ensures the resumed session is pinned and attached by the bus.
-  - Returns an acknowledgement with lightweight tab metadata.
-  - Does not wait for complete transcript replay.
-  - The frontend then reconciles through the bus snapshot path.
-
-Current response shape accepts both legacy and new frontend handling:
-
-```json
-{
-  "ok": true,
-  "attach": {
-    "ok": true,
-    "source": "hot | cache | cold",
-    "continuityState": "live | cached | cold | resync_required"
-  },
-  "tab": {
-    "id": "...",
-    "agentId": "codex",
-    "acpSessionId": "...",
-    "status": "restoring",
-    "busy": true,
-    "busConnectionKind": "shared"
-  }
-}
-```
-
-## Frontend Components
-
-### `ServerClient` Bus Lifecycle
-
-The frontend host client owns the per-host bus websocket:
-
-- Opens `/ws/acp-bus` after host auth succeeds.
-- Reconnects the bus websocket separately from terminal and agent tab control
-  websockets.
-- Routes bus events to matching open agent tabs.
-- On reconnect, open tabs call `connect()` to reattach their bus pins.
-
-### `AgentTab` Bus Behavior
-
-Current `AgentTab` defaults to bus mode:
-
-```js
-this.connectionKind = 'bus';
-```
-
-Important methods:
-
-- `connect()`
-  - Ensures host bus websocket is connected.
-  - Calls `syncFromBus({ attach: true })` unless already attached to the same
-    `agentId::sessionId`.
-
-- `syncFromBus({ attach })`
-  - `attach=true`: POST attach endpoint, then update lightweight local
-    metadata.
-  - `attach=false`: GET bus-owned tab metadata, then update lightweight local
-    state.
-  - If the visible window is at the latest page, fetches the latest timeline
-    page from `/api/acp-bus/tabs/:tabId/timeline`.
-
-- `handleBusEvent(event)`
-  - Marks `session_ui_attached` pins locally.
-  - Debounces metadata/timeline sync from the server.
-
-- `notifyUi()`
-  - Schedules panel render only if the owning terminal session and workspace tab
-    are visible.
-
-### Control Path Goes Through The Bus
-
-These operations are exposed through legacy agent-tab HTTP endpoints, but the
-server route now resolves them through `AcpBusManager` and bus-owned runtime
-handles:
-
-- send prompt
-- cancel prompt
-- switch mode
-- resolve permission
-- update config
-- close tab
-- managed terminal interactions
-
-## Resume UI Flow
-
-Current `/resume` path:
-
-1. User selects a history item from the slash menu.
-2. Composer text and command menu are cleared immediately.
-3. Frontend calls `POST /api/agents/tabs/resume` with the target tab id.
-4. Backend returns attach acknowledgement and lightweight tab metadata.
-5. Frontend updates the current tab with a restoring placeholder when needed.
-6. Frontend activates the tab.
-7. Frontend calls `syncFromBus()` to reconcile metadata and then fetch the
-   latest bus timeline page.
-8. Later bus events trigger debounced `syncFromBus()` calls as replay/live
-   updates arrive.
-
-This means resume UX should no longer be blocked by full transcript replay.
-
-## Frontend Timeline Windowing
-
-The frontend now pages transcript data from backend bus storage. The local
-window remains small and the backend provides cursor-based older/newer pages.
-
-Current constants:
-
-```js
-AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS = 30
-AGENT_TRANSCRIPT_WINDOW_STEP = 10
-AGENT_TRANSCRIPT_FOLLOW_LATEST_TOLERANCE = 5
-AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS = 300
-AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS = 300
-```
-
-Behavior:
-
-- Initial render pins to the latest 30 timeline blocks.
-- Scrolling up fetches 10 older blocks and drops the farthest newer blocks from
-  the local window.
-- Scrolling down fetches 10 newer blocks and drops the farthest older blocks
-  from the local window.
-- Backend pages include `minOrder` and `maxOrder`; the client uses those bounds
-  to avoid requesting before the first known item or after the latest known
-  item.
-- If the user is near the latest window, new updates follow the latest content.
-- If the user has scrolled away from the latest window, updates should not yank
-  the viewport to the bottom.
-- DOM nodes are keyed by timeline identity and render signature so unchanged
-  historical nodes are reused.
-
-Important limitation:
-
-- Bus websocket events still trigger a follow-up fetch. They do not yet carry
-  fine-grained item deltas.
-
-## Snapshot And Event Flow
-
-### Discovery Flow
+Hot set defaults:
 
 ```text
-ACP provider listSessions
-  -> AcpBusManager.syncNow()
-  -> result scope controls whether missing sessions can be reconciled
-  -> AcpBusStore.upsertIndexedSession()
-  -> hot rebalance
-  -> optional bus runtime attach
-  -> snapshot persistence
-  -> bus event
-  -> frontend /ws/acp-bus
+poll interval: 10000ms
+hot session limit: 10
+cached session retention: 1000
 ```
 
-### Open Agent Tab Flow
+### Server API Surface
+
+Bus inspection and session cache:
 
 ```text
-Frontend AgentTab.connect()
-  -> POST /api/acp-bus/tabs/:tabId/attach
-  -> AcpBusManager.pinSession()
-  -> bus runtime attach
-  -> AcpBusStore.saveObservedSession()
-  -> frontend updates from merged snapshot
+GET  /api/acp-bus/state
+GET  /api/acp-bus/sessions
+GET  /api/acp-bus/sessions/:agentId/:sessionId
+GET  /api/acp-bus/events
+POST /api/acp-bus/sync
 ```
 
-### Prompt Flow
+Open agent tab state:
 
 ```text
-Frontend sendPrompt()
-  -> POST /api/agents/tabs/:tabId/prompt
-  -> AcpBusManager.sendPromptForTab()
-  -> active bus-owned runtime handle
-  -> ACP runtime updates
-  -> AcpBusStore.saveObservedSession()
-  -> /ws/acp-bus event
-  -> frontend debounced syncFromBus()
+GET    /api/acp-bus/tabs/:tabId
+POST   /api/acp-bus/tabs/:tabId/attach
+DELETE /api/acp-bus/tabs/:tabId/attach
 ```
 
-### Resume Flow
-
-```text
-Frontend /resume selection
-  -> POST /api/agents/tabs/resume
-  -> AcpBusManager.resumeTabForUi()
-  -> ACP session/resume returns initial lightweight bus tab state
-  -> AcpBusManager.pinSession() ensures attached
-  -> response returns attach ack + lightweight tab metadata
-  -> frontend shows restoring placeholder or cached snapshot
-  -> bus timeline supplies cached/live transcript pages
-  -> bus event triggers frontend sync
-```
-
-## Storage Relationships
-
-### Terminal `workspaceState.openAgentTabs`
-
-Stores lightweight open UI agent tab records inside the owning terminal
-session workspace snapshot. This answers:
-
-- which agent tabs should reopen with the workspace
-- which terminal session they are linked to
-- which ACP provider/session each workspace tab represents
-
-There is no standalone `agent-tabs.json` source of truth. Transcript state
-belongs to `acp-bus.sqlite`.
-
-### `acp-bus.sqlite`
-
-Stores global ACP session cache and events. This database answers:
-
-- which ACP sessions exist globally
-- which sessions were recently active
-- which sessions are hot, cached, or require resync
-- what snapshot is available for downstream clients
-- what events happened recently
-
-### Current Relationship
-
-These stores overlap but are not the same thing:
-
-- terminal `workspaceState.openAgentTabs` is lightweight UI open-tab persistence.
-- `acp-bus.sqlite` is global session/cache/event persistence.
-- Open agent tabs hydrate transcript state from the bus and send control
-  operations through bus-owned runtime handles.
-
-## Event Types
-
-Current or planned event types include:
-
-- `session_index_created`
-- `session_index_updated`
-- `session_index_removed`
-- `session_hot_attached`
-- `session_hot_detached`
-- `session_ui_attached`
-- `session_ui_detached`
-- `session_snapshot_updated`
-- `session_resync_required`
-- `session_runtime_exit`
-
-The event stream is intended for future clients such as native apps,
-notification UIs, or adapters.
-
-## Current Testing Coverage
-
-Implemented tests cover:
-
-- store persistence round-trip
-- snapshot counts
-- preserving cached transcript content during restoring attach
-- cache pruning rules
-- event pruning
-- global indexing and hot selection
-- pinned session behavior
-- persisted open tabs becoming bus-owned session pins
-- create/resume/prompt control through bus-owned runtime handles
-- runtime snapshot flush debounce
-- runtime exit handling
-- manager resume returning restoring immediately
-- manager session lookup avoiding full serialization of unrelated tabs
-- markdown fence streaming preservation
-- duplicate synthetic replay handling
-
-## Known Weak Points
-
-1. Delta event payloads
-   - Bus tab endpoints now split metadata and timeline pages.
-   - Websocket events still indicate that a session changed rather than sending
-     the changed timeline items directly.
-
-2. Resume picker still upstream-based
-   - `/resume` suggestions still call `GET /api/agents/sessions`.
-   - This can be slow because it depends on upstream provider listing.
-   - The bus index is the natural future source for this menu.
-   - This migration is intentionally deferred because not every provider
-     supports global session listing with the same completeness guarantees.
-
-3. Bus sync is pull-after-event
-   - The websocket currently notifies that something changed.
-   - Frontend then fetches metadata and, if it is following latest, the latest
-     timeline page.
-   - There is no delta payload path yet.
-
-4. `loadSession` replay granularity
-   - Restore replay persists authoritative structured timeline rows.
-   - Authoritative replay replaces existing timeline rows for that session.
-   - Live incremental updates merge by item identity.
-   - It is exposed to frontend as cursor pages, not as a full snapshot.
-
-6. Restart gap
-   - If Tabminal is down while an upstream ACP session updates, the bus may need
-     `loadSession` to repair continuity.
-   - This is accepted for now.
-
-## Next Phase Candidates
-
-### Phase 2A: Resume Picker Bus-First (Deferred)
-
-- Use `GET /api/acp-bus/sessions` for the initial `/resume` menu.
-- Fall back to upstream `GET /api/agents/sessions` only when bus data is empty
-  or explicitly refreshed.
-- Mark source in UI/debug state: `hot`, `cache`, `cold`, or `upstream`.
-- Current decision: do not proceed in this branch. Provider `session/list(all)`
-  coverage is not uniform enough to make the bus index the primary picker
-  source without adding product complexity.
-
-### Phase 2B: Harden Ranged Timeline APIs
-
-The first timeline endpoint exists:
+Timeline paging:
 
 ```text
 GET /api/acp-bus/tabs/:tabId/timeline?limit=&before=&after=
 ```
 
-Remaining work:
+Timeline page shape is index-first:
 
-- Add native-app-facing API examples.
-- Decide whether native clients should use cursors only or also rely on
-  `minOrder`/`maxOrder` bounds for pagination controls.
+```json
+{
+  "items": [
+    {
+      "itemKey": "message:m-1",
+      "cursor": "opaque-cursor",
+      "type": "message",
+      "index": 42,
+      "updatedAt": "2026-04-17T12:00:00.000Z",
+      "value": { "id": "m-1", "index": 42 }
+    }
+  ],
+  "total": 52,
+  "hasOlder": true,
+  "hasNewer": false,
+  "minIndex": 1,
+  "maxIndex": 52,
+  "firstIndex": 23,
+  "lastIndex": 52,
+  "prevCursor": "cursor-for-first-item",
+  "nextCursor": "cursor-for-last-item"
+}
+```
 
-Done:
+### Frontend Bus Flow
 
-- Added `TABMINAL_EXPECT_TIMELINE_PAGING=1` browser smoke coverage that uses
-  the Test Agent `/timeline` fixture, verifies the latest 30-block window,
-  loads 10 older blocks while dropping the newest 10, then loads 10 newer
-  blocks and verifies the latest window is restored.
+The frontend host client owns one `/ws/acp-bus` connection per host.
 
-### Phase 2C: Add Event Delta Payloads
+Open agent tabs:
 
-Instead of websocket event -> full snapshot fetch, support event payloads that
-carry enough structured delta information for open tabs to update locally.
+- call `POST /api/acp-bus/tabs/:tabId/attach` when attached or restored
+- call `GET /api/acp-bus/tabs/:tabId` for lightweight metadata sync
+- call `GET /api/acp-bus/tabs/:tabId/timeline` for transcript windows
+- apply safe websocket `changedItems` deltas by `itemKey`
+- fall back to metadata/timeline fetches when `requiresFullSync` is true
+- debounce follow-up metadata/timeline fetches
 
-Possible model:
+Timeline windowing:
 
-- `snapshot_version`
-- `timeline_order`
-- `changed_items`
-- `requires_full_sync`
+```text
+initial visible blocks: 30
+older/newer step: 10
+render debounce: 300ms
+authoritative sync debounce: 300ms
+```
 
-### Phase 2D: Bus Command Router
+Window behavior:
 
-Introduce bus-level commands for:
+- initial load fetches the latest 30 blocks
+- upward scroll fetches 10 older blocks and drops farthest newer blocks
+- downward scroll fetches 10 newer blocks and drops farthest older blocks
+- if the user is at latest, incoming updates follow latest
+- if the user scrolled away, incoming updates do not yank the viewport
 
-- prompt
-- cancel
-- permission resolution
-- mode switch
-- attach/release
+### Resume Flow
 
-This is complete for the current web tab surface. Native apps, Telegram, or a
-global chat UI can build on the same bus command path.
+The current resume flow is intentionally lightweight:
+
+1. User selects a history item from the slash menu.
+2. Frontend clears composer text and the command menu immediately.
+3. Frontend calls `POST /api/agents/tabs/resume` with the target tab id.
+4. Backend binds the current tab to the requested ACP session.
+5. Backend ensures the bus pin/attach path is active.
+6. Backend returns lightweight tab metadata and attach acknowledgement.
+7. Frontend reconciles through bus metadata and timeline APIs.
+8. Later bus events continue to invalidate and refresh visible state.
+
+Resume should not wait for a full transcript replay on the UI critical path.
+
+## Active Limitations
+
+### Delta Safety Boundaries
+
+Bus websocket events now carry structured timeline deltas when the store can
+classify the write safely. Clients still must treat `requiresFullSync = true`,
+removed rows, authoritative replacements, oversized deltas, and unknown local
+window state as signals to fetch authoritative metadata and timeline pages.
+
+### Resume Picker Source
+
+The `/resume` picker still uses the upstream session listing path behind
+`GET /api/agents/sessions`. The bus index is not currently the picker source
+because provider support for complete all-session listing is inconsistent.
+
+### Restart Gaps
+
+If Tabminal is down while an upstream ACP session updates, the bus may miss the
+live update. The session should be treated as requiring an authoritative reload
+when the gap matters.
+
+### No Global Notification Surface
+
+The bus records events, but the product does not yet expose global notifications
+for sessions that update while not open.
+
+### No External Adapters
+
+Native apps, Telegram, and other adapters are future consumers of the shared bus
+API, but they are not implemented in this branch.
+
+## Next Plan
+
+### Phase 2D: Public Bus Command Contract
+
+Goal: make the already-existing bus-owned control path explicit enough for
+future clients.
+
+Current web tab controls already route through the bus manager. The remaining
+work is API/product hardening:
+
+1. Document command semantics for prompt, cancel, permission, mode, config,
+   attach, and release.
+2. Define idempotency expectations for attach/resume/prompt submission.
+3. Define error envelopes for runtime unavailable, session missing,
+   permission stale, and continuity-required cases.
+4. Decide whether native clients should keep using legacy `/api/agents/*`
+   routes or move to explicit `/api/acp-bus/*/command` routes.
 
 ### Phase 2E: Global Notifications
 
-Use the bus event stream to surface:
+Goal: surface useful bus activity outside currently open tabs.
+
+Notification candidates:
 
 - session updated
-- agent requires permission
+- permission required
 - agent completed
 - agent errored
+- continuity requires reload
 
-If a session is already open, route to that tab. If not open, clicking the
-notification should resume/attach the session.
+Behavior model:
 
-## Current Review Questions
+- if the session is already open, route attention to that tab
+- if not open, clicking notification resumes/attaches that session
+- notification eligibility should respect hot set and pinned/open sessions first
 
-1. Should Phase 2A stay deferred until provider session-list scope semantics
-   are better normalized?
-2. Should bus timeline pages expose absolute indexes, or are opaque cursors
-   enough for native clients?
-3. Should `resync_required` sessions auto-load when opened, or wait for an
-   explicit user action to avoid surprise expensive `loadSession` calls?
-4. Should hot-set policy become configurable in UI before global notifications
+Prerequisite: Phase 2C deltas or stronger event payloads, otherwise the UI must
+fetch too much state to classify events cheaply.
+
+### Phase 2F: Continuity Repair Policy
+
+Goal: make `resync_required` behavior explicit.
+
+Open decision:
+
+- auto-load on open for maximum correctness
+- ask/notify before expensive load for predictable cost
+- lazy-load only when the user scrolls into unknown history
+
+Preferred default for now:
+
+- do not put expensive `loadSession` on the initial resume/open critical path
+- mark continuity clearly
+- repair in the background only when the gap is likely small or the user asks
+
+### Phase 2G: External Consumers
+
+Goal: prepare bus APIs for native apps and adapters after the web path is stable.
+
+Candidate consumers:
+
+- native app
+- Telegram adapter
+- global multi-session chat UI
+
+Prerequisites:
+
+- stable timeline paging contract
+- structured delta events
+- documented command contract
+- clear auth/token behavior for non-browser clients
+
+## Current Decision Points
+
+1. Should `resync_required` auto-load, prompt the user, or repair lazily?
+2. Should command APIs stay under legacy `/api/agents/*` paths for web
+   compatibility, or should bus-native command routes be introduced before
+   native/adapters?
+3. Should hot-set policy become user-configurable before global notifications
    ship?
