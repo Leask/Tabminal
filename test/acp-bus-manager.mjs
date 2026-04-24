@@ -751,6 +751,141 @@ describe('AcpBusManager', () => {
         });
     });
 
+    it('keeps terminal summaries in lightweight open tab metadata', async () => {
+        await withBusManager('acp-bus-manager-', {
+            snapshotFlushDelayMs: 20,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: []
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const created = await manager.createTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex'
+            });
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+            );
+            const runtimeTab = observeRuntime.tabs.get(created.id);
+            runtimeTab.messages.push({
+                id: 'terminal-context',
+                kind: 'message',
+                role: 'assistant',
+                text: 'terminal context'
+            });
+            runtimeTab.terminals.push({
+                terminalId: 'terminal-1',
+                command: 'printf alpha beta',
+                output: 'alpha\nbeta\n',
+                running: false,
+                released: true
+            });
+            observeRuntime.emit('tab_dirty', { tabId: created.id });
+
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            const lightweight = manager.getOpenTab(created.id);
+            assert.equal(lightweight.messages.length, 0);
+            assert.equal(lightweight.toolCalls.length, 0);
+            assert.equal(lightweight.terminals.length, 1);
+            assert.equal(lightweight.terminals[0].output, 'alpha\nbeta\n');
+
+            const full = manager.getOpenTab(created.id, {
+                includeTranscript: true
+            });
+            assert.equal(full.messages.length, 1);
+            assert.equal(full.terminals.length, 1);
+        });
+    });
+
+    it('keeps active live state in lightweight open tab metadata', async () => {
+        await withBusManager('acp-bus-manager-', {
+            snapshotFlushDelayMs: 20,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: []
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const created = await manager.createTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex'
+            });
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+            );
+            const runtimeTab = observeRuntime.tabs.get(created.id);
+            runtimeTab.busy = true;
+            runtimeTab.messages.push({
+                id: 'live-context',
+                kind: 'message',
+                role: 'assistant',
+                text: 'live context'
+            });
+            runtimeTab.toolCalls.push({
+                toolCallId: 'tool-active',
+                title: 'Active tool',
+                status: 'running'
+            }, {
+                toolCallId: 'tool-done',
+                title: 'Completed tool',
+                status: 'completed'
+            });
+            runtimeTab.permissions.push({
+                id: 'permission-active',
+                status: 'pending',
+                toolCall: {
+                    toolCallId: 'tool-active',
+                    title: 'Active tool'
+                },
+                options: [{ optionId: 'allow', name: 'Allow' }]
+            }, {
+                id: 'permission-done',
+                status: 'selected',
+                selectedOptionId: 'allow'
+            });
+            runtimeTab.plan.push({
+                content: 'Completed step',
+                status: 'completed'
+            }, {
+                content: 'Active step',
+                status: 'in_progress'
+            }, {
+                content: 'Pending step',
+                status: 'pending'
+            });
+            observeRuntime.emit('tab_dirty', { tabId: created.id });
+
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            const lightweight = manager.getOpenTab(created.id);
+            assert.equal(lightweight.messages.length, 0);
+            assert.deepEqual(
+                lightweight.toolCalls.map((entry) => entry.toolCallId),
+                ['tool-active']
+            );
+            assert.deepEqual(
+                lightweight.permissions.map((entry) => entry.id),
+                ['permission-active']
+            );
+            assert.deepEqual(
+                lightweight.plan.map((entry) => entry.content),
+                ['Active step', 'Pending step']
+            );
+
+            const full = manager.getOpenTab(created.id, {
+                includeTranscript: true
+            });
+            assert.equal(full.messages.length, 1);
+            assert.equal(full.toolCalls.length, 2);
+            assert.equal(full.permissions.length, 2);
+            assert.equal(full.plan.length, 3);
+        });
+    });
+
     it('debounces runtime snapshot flushes and marks runtime exits', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,

@@ -7544,6 +7544,9 @@ class EditorManager {
         const terminalId = String(
             terminal.terminalId || section?.terminalId || ''
         );
+        if (terminalId && !terminal.output) {
+            agentTab?.requestTerminalSummarySync?.(terminalId);
+        }
 
         const header = document.createElement('div');
         header.className = 'agent-tool-call-terminal-header';
@@ -10312,6 +10315,8 @@ class AgentTab {
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
         this.connectPromise = null;
+        this.busSyncNeedsInventory = false;
+        this.terminalSummarySyncRequests = new Map();
         this.update(data);
         this.connect();
     }
@@ -10596,6 +10601,7 @@ class AgentTab {
             return false;
         }
         if (this.busSyncPromise) {
+            this.busSyncNeedsInventory = true;
             if (timeline) {
                 this.busSyncNeedsTimeline = true;
             }
@@ -10603,6 +10609,7 @@ class AgentTab {
         }
         const requestedTimeline = !!timeline || this.busSyncNeedsTimeline;
         this.busSyncNeedsTimeline = false;
+        this.busSyncNeedsInventory = false;
 
         this.busSyncPromise = (async () => {
             const data = attach
@@ -10649,11 +10656,13 @@ class AgentTab {
             return true;
         })().finally(() => {
             this.busSyncPromise = null;
-            if (this.busSyncNeedsTimeline) {
+            if (this.busSyncNeedsTimeline || this.busSyncNeedsInventory) {
+                const needsTimeline = this.busSyncNeedsTimeline;
                 this.busSyncNeedsTimeline = false;
-                this.scheduleBusSnapshotSync('pending_timeline_sync', {
+                this.busSyncNeedsInventory = false;
+                this.scheduleBusSnapshotSync('pending_bus_sync', {
                     delayMs: 0,
-                    timeline: true
+                    timeline: needsTimeline
                 });
             }
         });
@@ -10934,6 +10943,25 @@ class AgentTab {
                 );
             });
         }, delayMs);
+    }
+
+    requestTerminalSummarySync(terminalId = '') {
+        const normalizedId = String(terminalId || '').trim();
+        if (!normalizedId || !this.usesSharedBus()) {
+            return;
+        }
+        const now = Date.now();
+        const lastRequestedAt = Number(
+            this.terminalSummarySyncRequests.get(normalizedId) || 0
+        );
+        if ((now - lastRequestedAt) < 1000) {
+            return;
+        }
+        this.terminalSummarySyncRequests.set(normalizedId, now);
+        this.scheduleBusSnapshotSync('missing_terminal_summary', {
+            delayMs: 0,
+            timeline: false
+        });
     }
 
     handleBusEvent(event) {
@@ -11426,6 +11454,57 @@ class AgentTab {
         };
     }
 
+    #buildInventoryStateSnapshot() {
+        const activeToolCalls = getAgentOrderedMapValues(this.toolCalls)
+            .filter((toolCall) => {
+                const status = normalizeStatusClass(toolCall?.status);
+                return status === 'pending' || status === 'running';
+            })
+            .map((toolCall) => [
+                String(toolCall?.toolCallId || ''),
+                String(toolCall?.status || ''),
+                hashUiText(JSON.stringify(toolCall || null))
+            ]);
+        const pendingPermissions = getAgentOrderedMapValues(this.permissions)
+            .filter((permission) => (
+                normalizeStatusClass(permission?.status) === 'pending'
+            ))
+            .map((permission) => [
+                String(permission?.id || ''),
+                String(permission?.status || ''),
+                String(permission?.selectedOptionId || '')
+            ]);
+        const activePlan = (Array.isArray(this.plan) ? this.plan : [])
+            .filter((entry) => {
+                const status = normalizeStatusClass(entry?.status);
+                return status === 'pending' || status === 'running';
+            })
+            .map((entry) => [
+                String(entry?.content || ''),
+                String(entry?.priority || ''),
+                String(entry?.status || '')
+            ]);
+        const terminals = Array.from(this.terminals.values())
+            .map((terminal) => [
+                String(terminal?.terminalId || ''),
+                String(terminal?.terminalSessionId || ''),
+                String(terminal?.command || ''),
+                String(terminal?.output || ''),
+                String(terminal?.updatedAt || ''),
+                Boolean(terminal?.running),
+                Boolean(terminal?.released)
+            ])
+            .sort((left, right) => String(left[0]).localeCompare(
+                String(right[0])
+            ));
+        return JSON.stringify({
+            activeToolCalls,
+            pendingPermissions,
+            activePlan,
+            terminals
+        });
+    }
+
     #nextTimelineOrder() {
         this.timelineCounter = Math.max(this.timelineCounter || 0, 0) + 1;
         return this.timelineCounter;
@@ -11657,6 +11736,7 @@ class AgentTab {
     applyInventory(data) {
         const previousSession = this.getLinkedSession();
         const previousObservedSessionKey = this.getObservedSessionKey();
+        const previousInventorySnapshot = this.#buildInventoryStateSnapshot();
         const previousSnapshot = JSON.stringify({
             runtimeId: this.runtimeId || '',
             runtimeKey: this.runtimeKey || '',
@@ -11712,6 +11792,49 @@ class AgentTab {
         if (data.usage) {
             this.usage = this.#normalizeUsageState(data.usage);
         }
+        if (Array.isArray(data.toolCalls)) {
+            for (const toolCall of data.toolCalls) {
+                const toolCallId = String(toolCall?.toolCallId || '').trim();
+                if (!toolCallId) continue;
+                const previous = this.toolCalls.get(toolCallId);
+                this.toolCalls.set(toolCallId, {
+                    ...previous,
+                    ...this.#normalizeTimelineEntry(
+                        toolCall,
+                        previous?.index ?? previous?.order
+                    )
+                });
+            }
+        }
+        if (Array.isArray(data.permissions)) {
+            for (const permission of data.permissions) {
+                const permissionId = String(permission?.id || '').trim();
+                if (!permissionId) continue;
+                const previous = this.permissions.get(permissionId);
+                this.permissions.set(permissionId, {
+                    ...previous,
+                    ...this.#normalizeTimelineEntry(
+                        permission,
+                        previous?.index ?? previous?.order
+                    )
+                });
+            }
+        }
+        if (Array.isArray(data.plan)) {
+            this.#applyPlanState(
+                data.plan.map((entry) => this.#normalizePlanEntry(entry))
+            );
+        }
+        if (Array.isArray(data.terminals)) {
+            for (const terminal of data.terminals) {
+                const terminalId = String(terminal?.terminalId || '').trim();
+                if (!terminalId) continue;
+                this.terminals.set(
+                    terminalId,
+                    this.#normalizeTerminalSummary(terminal)
+                );
+            }
+        }
         if (previousObservedSessionKey !== this.getObservedSessionKey()) {
             this.busAttachedSessionKey = '';
         }
@@ -11734,6 +11857,7 @@ class AgentTab {
             sessionCapabilities: this.sessionCapabilities || null
         });
         const changed = previousSnapshot !== nextSnapshot
+            || previousInventorySnapshot !== this.#buildInventoryStateSnapshot()
             || previousSession?.key !== nextSession?.key;
         if (!changed) {
             return false;

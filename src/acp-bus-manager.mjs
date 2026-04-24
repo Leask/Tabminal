@@ -1297,6 +1297,33 @@ export class AcpBusManager extends EventEmitter {
         const definition = this.acpManager.definitions.find(
             (entry) => entry.id === meta.agentId
         );
+        const getSnapshotArray = (key) => {
+            if (Array.isArray(snapshot?.[key])) return snapshot[key];
+            if (Array.isArray(source?.[key])) return source[key];
+            return [];
+        };
+        const isActiveStatus = (value = '') => {
+            const status = String(value || '').toLowerCase();
+            return status === 'pending'
+                || status === 'running'
+                || status === 'in_progress';
+        };
+        const activeToolCalls = getSnapshotArray('toolCalls').filter(
+            (entry) => isActiveStatus(entry?.status)
+        );
+        const pendingPermissions = getSnapshotArray('permissions').filter(
+            (entry) => String(entry?.status || 'pending').toLowerCase()
+                === 'pending'
+        );
+        const activePlan = getSnapshotArray('plan').filter(
+            (entry) => isActiveStatus(entry?.status)
+        );
+        const terminalSummaries = (
+            Array.isArray(source.terminals)
+            && source.terminals.length > 0
+        )
+            ? source.terminals
+            : (Array.isArray(snapshot?.terminals) ? snapshot.terminals : []);
         const transcriptArrays = includeTranscript
             ? {
                 messages: Array.isArray(snapshot?.messages)
@@ -1311,16 +1338,14 @@ export class AcpBusManager extends EventEmitter {
                 plan: Array.isArray(snapshot?.plan)
                     ? snapshot.plan
                     : (source.plan || []),
-                terminals: Array.isArray(snapshot?.terminals)
-                    ? snapshot.terminals
-                    : (source.terminals || [])
+                terminals: terminalSummaries
             }
             : {
                 messages: [],
-                toolCalls: [],
-                permissions: [],
-                plan: [],
-                terminals: []
+                toolCalls: activeToolCalls,
+                permissions: pendingPermissions,
+                plan: activePlan,
+                terminals: terminalSummaries
             };
         return {
             ...cloneSerializable(source, {}),
