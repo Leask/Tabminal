@@ -289,6 +289,7 @@ export class AcpBusManager extends EventEmitter {
     async listState() {
         await this.acpManager.ensureConfigsLoaded();
         return {
+            bus: this.getState(),
             restoring: this.restoring,
             definitions: await this.acpManager.listDefinitions(),
             configs: await this.acpManager.listAgentConfigs(),
@@ -1783,6 +1784,7 @@ export class AcpBusManager extends EventEmitter {
                 ? delta.snapshotVersion
                 : (persisted?.record?.snapshotVersion || 0),
             timelineIndex: delta.timelineIndex || null,
+            resources: this.#buildSnapshotResources(persisted?.record?.snapshot),
             changedItems: Array.isArray(delta.changedItems)
                 ? delta.changedItems
                 : [],
@@ -1790,6 +1792,42 @@ export class AcpBusManager extends EventEmitter {
                 ? delta.removedItemKeys
                 : [],
             requiresFullSync: !!delta.requiresFullSync
+        };
+    }
+
+    #buildSnapshotResources(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') {
+            return {
+                toolCalls: [],
+                permissions: [],
+                plan: [],
+                terminals: []
+            };
+        }
+        const isActiveStatus = (value = '') => {
+            const status = String(value || '').toLowerCase();
+            return status === 'pending'
+                || status === 'running'
+                || status === 'in_progress';
+        };
+        const arrayValue = (key) => Array.isArray(snapshot[key])
+            ? cloneSerializable(snapshot[key], [])
+            : [];
+        return {
+            toolCalls: arrayValue('toolCalls').filter((entry) =>
+                isActiveStatus(entry?.status)
+            ),
+            permissions: arrayValue('permissions').filter((entry) =>
+                String(entry?.status || 'pending').toLowerCase() === 'pending'
+            ),
+            plan: arrayValue('plan').filter((entry) =>
+                isActiveStatus(entry?.status)
+            ),
+            terminals: arrayValue('terminals'),
+            usage: snapshot.usage || null,
+            availableModes: arrayValue('availableModes'),
+            availableCommands: arrayValue('availableCommands'),
+            configOptions: arrayValue('configOptions')
         };
     }
 

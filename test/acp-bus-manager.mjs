@@ -184,6 +184,14 @@ class FakeAcpManager {
 
     async ensureConfigsLoaded() {}
 
+    async listDefinitions() {
+        return structuredClone(this.definitions);
+    }
+
+    async listAgentConfigs() {
+        return Object.fromEntries(this.configs.entries());
+    }
+
     getDefinitionAvailability() {
         return { available: true };
     }
@@ -656,6 +664,10 @@ describe('AcpBusManager', () => {
             assert.equal(created.agentId, 'codex');
             assert.equal(created.terminalSessionId, 'term-1');
             assert.equal(manager.listOpenTabs().length, 1);
+            const state = await manager.listState();
+            assert.equal(state.bus.openTabCount, 1);
+            assert.equal(state.definitions.length, 1);
+            assert.equal(state.tabs.length, 1);
 
             await manager.sendPromptForTab(created.id, 'hello bus');
             const observeRuntime = runtimeInstances.find((runtime) =>
@@ -760,6 +772,10 @@ describe('AcpBusManager', () => {
                 busSessions: []
             }]
         }, async ({ manager, runtimeInstances }) => {
+            const streamedEvents = [];
+            manager.on('event', (event) => {
+                streamedEvents.push(event);
+            });
             await manager.start();
             const created = await manager.createTabForUi({
                 agentId: 'codex',
@@ -792,6 +808,18 @@ describe('AcpBusManager', () => {
             assert.equal(lightweight.terminals.length, 1);
             assert.equal(lightweight.terminals[0].output, 'alpha\nbeta\n');
 
+            const event = streamedEvents.findLast?.((entry) => (
+                entry.type === 'session_snapshot_updated'
+                && Array.isArray(entry.payload?.resources?.terminals)
+                && entry.payload.resources.terminals.length > 0
+            )) || streamedEvents.reverse().find((entry) => (
+                entry.type === 'session_snapshot_updated'
+                && Array.isArray(entry.payload?.resources?.terminals)
+                && entry.payload.resources.terminals.length > 0
+            ));
+            assert.ok(event);
+            assert.equal(event.payload.resources.terminals[0].output, 'alpha\nbeta\n');
+
             const full = manager.getOpenTab(created.id, {
                 includeTranscript: true
             });
@@ -809,6 +837,10 @@ describe('AcpBusManager', () => {
                 busSessions: []
             }]
         }, async ({ manager, runtimeInstances }) => {
+            const streamedEvents = [];
+            manager.on('event', (event) => {
+                streamedEvents.push(event);
+            });
             await manager.start();
             const created = await manager.createTabForUi({
                 agentId: 'codex',
@@ -873,6 +905,29 @@ describe('AcpBusManager', () => {
             );
             assert.deepEqual(
                 lightweight.plan.map((entry) => entry.content),
+                ['Active step', 'Pending step']
+            );
+
+            const event = streamedEvents.findLast?.((entry) => (
+                entry.type === 'session_snapshot_updated'
+                && Array.isArray(entry.payload?.resources?.toolCalls)
+                && entry.payload.resources.toolCalls.length > 0
+            )) || streamedEvents.reverse().find((entry) => (
+                entry.type === 'session_snapshot_updated'
+                && Array.isArray(entry.payload?.resources?.toolCalls)
+                && entry.payload.resources.toolCalls.length > 0
+            ));
+            assert.ok(event);
+            assert.deepEqual(
+                event.payload.resources.toolCalls.map((entry) => entry.toolCallId),
+                ['tool-active']
+            );
+            assert.deepEqual(
+                event.payload.resources.permissions.map((entry) => entry.id),
+                ['permission-active']
+            );
+            assert.deepEqual(
+                event.payload.resources.plan.map((entry) => entry.content),
                 ['Active step', 'Pending step']
             );
 

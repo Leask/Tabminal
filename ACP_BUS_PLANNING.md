@@ -242,9 +242,10 @@ window state as signals to fetch authoritative metadata and timeline pages.
 
 ### Resume Picker Source
 
-The `/resume` picker still uses the upstream session listing path behind
-`GET /api/agents/sessions`. The bus index is not currently the picker source
-because provider support for complete all-session listing is inconsistent.
+The `/resume` picker still asks the selected upstream provider for resumable
+sessions through `GET /api/acp-bus/resume-sessions`. The bus index is not
+currently the picker source because provider support for complete all-session
+listing is inconsistent.
 
 ### Restart Gaps
 

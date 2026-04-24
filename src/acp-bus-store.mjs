@@ -79,11 +79,11 @@ function decodeTimelineCursor(cursor) {
     }
 }
 
-function normalizeTimelineOrder(entry, fallbackOrder) {
-    if (Number.isFinite(entry?.order)) {
-        return Number(entry.order);
+function normalizeTimelineIndex(entry, fallbackIndex) {
+    if (Number.isFinite(entry?.index)) {
+        return Number(entry.index);
     }
-    return Number.isFinite(fallbackOrder) ? fallbackOrder : 0;
+    return Number.isFinite(fallbackIndex) ? fallbackIndex : 0;
 }
 
 function getTimelineItemIdentity(type, value, fallbackIndex) {
@@ -121,15 +121,15 @@ function hashSerializable(value) {
 }
 
 function compareTimelinePayload(left, right) {
-    const leftOrder = Number(left?.order);
-    const rightOrder = Number(right?.order);
-    if (Number.isFinite(leftOrder) && Number.isFinite(rightOrder)) {
-        if (leftOrder !== rightOrder) {
-            return leftOrder - rightOrder;
+    const leftIndex = Number(left?.index);
+    const rightIndex = Number(right?.index);
+    if (Number.isFinite(leftIndex) && Number.isFinite(rightIndex)) {
+        if (leftIndex !== rightIndex) {
+            return leftIndex - rightIndex;
         }
-    } else if (Number.isFinite(leftOrder)) {
+    } else if (Number.isFinite(leftIndex)) {
         return -1;
-    } else if (Number.isFinite(rightOrder)) {
+    } else if (Number.isFinite(rightIndex)) {
         return 1;
     }
     return String(left?.id || left?.toolCallId || '').localeCompare(
@@ -281,8 +281,7 @@ function normalizePlanEntries(entries) {
                     : 'medium',
                 status: typeof entry.status === 'string'
                     ? entry.status
-                    : 'pending',
-                order: Number.isFinite(entry.order) ? Number(entry.order) : undefined
+                    : 'pending'
             }))
         : [];
 }
@@ -295,17 +294,7 @@ function isPlanComplete(entries = []) {
         );
 }
 
-function getPlanOrder(entries, fallbackOrder) {
-    const planSortIndexes = normalizePlanEntries(entries)
-        .map((entry) => Number(entry.order))
-        .filter(Number.isFinite);
-    if (planSortIndexes.length === 0) {
-        return Number.isFinite(fallbackOrder) ? fallbackOrder : 0;
-    }
-    return Math.max(...planSortIndexes) + 0.5;
-}
-
-function buildPlanHistoryEntry(entries, observedAt, fallbackOrder) {
+function buildPlanHistoryEntry(entries, observedAt, fallbackIndex) {
     const normalizedEntries = normalizePlanEntries(entries);
     const fingerprint = hashSerializable(normalizedEntries);
     return {
@@ -313,7 +302,7 @@ function buildPlanHistoryEntry(entries, observedAt, fallbackOrder) {
         active: false,
         status: 'completed',
         createdAt: observedAt,
-        order: getPlanOrder(normalizedEntries, fallbackOrder),
+        index: Number.isFinite(fallbackIndex) ? fallbackIndex : 0,
         summary: '',
         entries: normalizedEntries
     };
@@ -330,20 +319,23 @@ function mergePlanState(previousSnapshot, nextSnapshot, observedAt) {
     for (const item of [...previousHistory, ...nextHistory]) {
         if (!item || typeof item !== 'object') continue;
         const id = String(item.id || `plan-${hashSerializable(item.entries || [])}`);
+        const index = Number.isFinite(item.index) ? Number(item.index) : undefined;
         history.set(id, {
             ...item,
             id,
+            index,
             active: false,
             status: item.status || 'completed',
             entries: normalizePlanEntries(item.entries)
         });
+        delete history.get(id).order;
     }
     const plan = normalizePlanEntries(nextSnapshot?.plan);
     if (isPlanComplete(plan)) {
         const entry = buildPlanHistoryEntry(
             plan,
             observedAt,
-            (history.size + 1) * 1000
+            history.size + 1
         );
         history.set(entry.id, entry);
     }
@@ -352,6 +344,33 @@ function mergePlanState(previousSnapshot, nextSnapshot, observedAt) {
         plan,
         planHistory: Array.from(history.values()).sort(compareTimelinePayload)
     };
+}
+
+function stripLegacyTimelineOrder(snapshot) {
+    const next = cloneSerializable(snapshot, snapshot || {});
+    if (!next || typeof next !== 'object') {
+        return next;
+    }
+    for (const key of [
+        'messages',
+        'toolCalls',
+        'permissions',
+        'planHistory'
+    ]) {
+        if (!Array.isArray(next[key])) continue;
+        next[key] = next[key].map((entry) => {
+            if (!entry || typeof entry !== 'object') {
+                return entry;
+            }
+            const cleaned = { ...entry };
+            delete cleaned.order;
+            return cleaned;
+        });
+    }
+    if (Array.isArray(next.plan)) {
+        next.plan = normalizePlanEntries(next.plan);
+    }
+    return next;
 }
 
 function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
@@ -372,7 +391,7 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
                 itemKey,
                 itemType: type,
                 itemId: identity,
-                itemIndex: normalizeTimelineOrder(value, rows.length + 1),
+                itemIndex: normalizeTimelineIndex(value, rows.length + 1),
                 role: String(value.role || ''),
                 kind: String(value.kind || ''),
                 status: String(value.status || ''),
@@ -391,7 +410,7 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
             id: 'active-plan',
             active: true,
             status: 'active',
-            order: getPlanOrder(activePlan, rows.length + 1),
+            index: rows.length + 1,
             summary: '',
             entries: activePlan
         }]);
@@ -1133,11 +1152,11 @@ export class AcpBusStore {
         const liveAt = typeof options.liveAt === 'string'
             ? options.liveAt.trim()
             : observedAt;
-        const safeSnapshot = mergePlanState(
+        const safeSnapshot = stripLegacyTimelineOrder(mergePlanState(
             previous?.snapshot || null,
             mergedSnapshot,
             observedAt
-        );
+        ));
         const timelineRows = buildTimelineRowsFromSnapshot(
             sessionKey,
             safeSnapshot,

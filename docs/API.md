@@ -347,7 +347,8 @@ Clients must not merge runtime state across hosts.
 
 - `/api/heartbeat` is the authoritative source for terminal session inventory
   and lightweight agent inventory
-- `/api/agents` is the authoritative source for full ACP agent state
+- `/api/acp-bus/state` is the authoritative source for ACP definitions, config
+  summaries, and open agent tab inventory
 - `/api/cluster` is the authoritative source for the host registry
 - websocket streams are incremental, not the sole source of truth
 
@@ -805,29 +806,15 @@ Contract:
 ACP is managed server-side. The client never speaks ACP directly. It talks to
 Tabminal over HTTP and WebSocket.
 
-### 12.1 `GET /api/agents`
+### 12.1 ACP state source
 
-Returns full ACP state.
+ACP definitions, config summaries, and open agent tab inventory are exposed
+through `GET /api/acp-bus/state`.
 
-Response:
+The old top-level `GET /api/agents` inventory route is not part of the current
+public contract. Clients should use the bus-native endpoints below.
 
-```json
-{
-  "restoring": false,
-  "definitions": [],
-  "configs": {},
-  "tabs": []
-}
-```
-
-Fields:
-
-- `restoring`: backend is replaying persisted ACP tabs
-- `definitions`: available built-in agent definitions plus availability info
-- `configs`: persisted per-agent config summaries
-- `tabs`: full serialized open-tab state
-
-### 12.2 `GET /api/agents/sessions?agentId=...&cwd=...`
+### 12.2 `GET /api/acp-bus/resume-sessions?agentId=...&cwd=...`
 
 Returns resumable ACP sessions for one agent and working directory scope.
 
@@ -864,7 +851,7 @@ Errors:
 - `400` missing `agentId` or `cwd`
 - `501` runtime does not support session history
 
-### 12.3 `GET /api/agents/config`
+### 12.3 `GET /api/acp-bus/config`
 
 Response:
 
@@ -878,7 +865,7 @@ Response:
 }
 ```
 
-### 12.4 `PUT /api/agents/config/:agentId`
+### 12.4 `PUT /api/acp-bus/config/:agentId`
 
 Request:
 
@@ -902,7 +889,7 @@ Response:
 }
 ```
 
-### 12.5 `DELETE /api/agents/config/:agentId`
+### 12.5 `DELETE /api/acp-bus/config/:agentId`
 
 Clears persisted config for that agent.
 
@@ -952,18 +939,35 @@ events.
 
 ### 13.1 `GET /api/acp-bus/state`
 
-Returns process-level ACP bus status.
+Returns ACP bus process status plus the current public ACP inventory. This is
+the authoritative lightweight state endpoint for agent definitions, config
+summaries, and open agent tabs.
 
 Response:
 
 ```json
 {
-  "started": true,
+  "bus": {
+    "started": true,
+    "restoring": false,
+    "observedSessionCount": 2,
+    "openTabCount": 1
+  },
   "restoring": false,
-  "observedSessionCount": 2,
-  "openTabCount": 1
+  "definitions": [],
+  "configs": {},
+  "tabs": []
 }
 ```
+
+Fields:
+
+- `bus`: process-level bus diagnostics
+- `restoring`: backend is replaying persisted ACP tabs
+- `definitions`: available built-in agent definitions plus availability info
+- `configs`: persisted per-agent config summaries
+- `tabs`: lightweight open-tab state from the bus; transcript history is paged
+  through `/api/acp-bus/tabs/:tabId/timeline`
 
 ### 13.2 `GET /api/acp-bus/sessions`
 
@@ -1007,7 +1011,8 @@ Notes:
 - This endpoint is useful for diagnostics and future session browsers.
 - Continuity repair is backend-owned. Clients should treat `continuityState`
   as diagnostic metadata and continue reading timeline pages from the bus DB.
-- The current `/resume` picker still uses `/api/agents/sessions`; it is not
+- The current `/resume` picker still asks the upstream provider through
+  `/api/acp-bus/resume-sessions`; it is not
   bus-first yet because global upstream listing support differs by provider.
 
 ### 13.3 `GET /api/acp-bus/sessions/:agentId/:sessionId`
@@ -1042,12 +1047,17 @@ Response:
   "availableCommands": [],
   "availableModes": [],
   "currentModeId": "default",
-  "configOptions": []
+  "configOptions": [],
+  "toolCalls": [],
+  "permissions": [],
+  "plan": [],
+  "terminals": []
 }
 ```
 
 Use this endpoint after bus websocket invalidation events when the client needs
-fresh tab-level metadata but does not need transcript rows.
+fresh tab-level metadata or active live resources but does not need transcript
+rows. Full transcript rows remain paged through the timeline endpoint.
 
 ### 13.5 `GET /api/acp-bus/tabs/:tabId/timeline`
 
@@ -1464,6 +1474,12 @@ Response:
           "minIndex": 1,
           "maxIndex": 52
         },
+        "resources": {
+          "toolCalls": [],
+          "permissions": [],
+          "plan": [],
+          "terminals": []
+        },
         "changedItems": [],
         "removedItemKeys": [],
         "requiresFullSync": true
@@ -1667,23 +1683,30 @@ websockets.
 
 ### 15.1 Initial message
 
-After the bus is ready, the server sends a process-level snapshot:
+After the bus is ready, the server sends a bus-native inventory snapshot:
 
 ```json
 {
   "type": "snapshot",
   "state": {
-    "started": true,
+    "bus": {
+      "started": true,
+      "restoring": false,
+      "observedSessionCount": 2,
+      "openTabCount": 1
+    },
     "restoring": false,
-    "observedSessionCount": 2,
-    "openTabCount": 1
+    "definitions": [],
+    "configs": {},
+    "tabs": []
   },
   "sessions": []
 }
 ```
 
 `sessions` is a bounded cache summary from the ACP bus store. Clients should
-use it as a hint, not as the only source of visible tab state.
+use it as a hint, not as the only source of visible tab state. `state.tabs` is
+the same lightweight open-tab inventory returned by `/api/acp-bus/state`.
 
 ### 15.2 Event messages
 
@@ -1714,6 +1737,12 @@ Every later message is an event envelope:
         "total": 52,
         "minIndex": 1,
         "maxIndex": 52
+      },
+      "resources": {
+        "toolCalls": [],
+        "permissions": [],
+        "plan": [],
+        "terminals": []
       },
       "changedItems": [
         {
@@ -1757,6 +1786,9 @@ by `(agentId, sessionId)` otherwise. `session_snapshot_updated` and
 
 - `snapshotVersion`: monotonic per-session version for observed snapshot writes.
 - `timelineIndex`: page-independent timeline bounds after the write.
+- `resources`: current non-history live resources for the tab/session, including
+  active tool calls, pending permissions, active plan rows, and managed terminal
+  summaries. Clients can apply these directly without fetching `/api/acp-bus/state`.
 - `changedItems`: timeline rows that were inserted or updated and are safe to
   merge by `itemKey`.
 - `removedItemKeys`: row keys removed by the write; non-empty removals currently
@@ -1806,7 +1838,7 @@ stored in the ACP bus database and fetched through bus-backed APIs.
 The bus websocket gives low-latency invalidation and event delivery. It does
 not replace:
 
-- `/api/agents` for definitions, config, and open-tab inventory
+- `/api/acp-bus/state` for definitions, config summaries, and open-tab inventory
 - `/api/acp-bus/tabs/:tabId` for authoritative open-tab metadata
 - `/api/acp-bus/tabs/:tabId/timeline` for paged transcript history
 - `/api/acp-bus/command` for ACP tab mutations and runtime control
@@ -1982,17 +2014,17 @@ collapsed into one websocket namespace.
 
 ### ACP agents
 
-- `GET /api/agents`
-- `GET /api/agents/sessions`
-- `GET /api/agents/config`
-- `PUT /api/agents/config/:agentId`
-- `DELETE /api/agents/config/:agentId`
+- ACP runtime state and control are exposed through the ACP bus endpoints below.
 
 ### ACP bus
 
 - `GET /api/acp-bus/state`
 - `GET /api/acp-bus/sessions`
 - `GET /api/acp-bus/sessions/:agentId/:sessionId`
+- `GET /api/acp-bus/resume-sessions`
+- `GET /api/acp-bus/config`
+- `PUT /api/acp-bus/config/:agentId`
+- `DELETE /api/acp-bus/config/:agentId`
 - `GET /api/acp-bus/tabs/:tabId`
 - `GET /api/acp-bus/tabs/:tabId/timeline`
 - `POST /api/acp-bus/command`

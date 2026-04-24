@@ -64,10 +64,11 @@ The following items are effectively shipped and usable.
 - ACP dependency integrated
 - Backend ACP supervisor live
 - REST endpoints live:
-  - `GET /api/agents`
-  - `GET /api/agents/config`
-  - `PUT /api/agents/config/:agentId`
-  - `DELETE /api/agents/config/:agentId`
+  - `GET /api/acp-bus/state`
+  - `GET /api/acp-bus/config`
+  - `PUT /api/acp-bus/config/:agentId`
+  - `DELETE /api/acp-bus/config/:agentId`
+  - `GET /api/acp-bus/resume-sessions`
   - `POST /api/acp-bus/command`
   - `GET /api/acp-bus/tabs/:tabId`
   - `GET /api/acp-bus/tabs/:tabId/timeline`

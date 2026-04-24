@@ -158,6 +158,17 @@ function buildAgentTabAttachAck(
             configOptions: Array.isArray(agentTab.configOptions)
                 ? agentTab.configOptions
                 : [],
+            toolCalls: Array.isArray(agentTab.toolCalls)
+                ? agentTab.toolCalls
+                : [],
+            permissions: Array.isArray(agentTab.permissions)
+                ? agentTab.permissions
+                : [],
+            plan: Array.isArray(agentTab.plan) ? agentTab.plan : [],
+            terminals: Array.isArray(agentTab.terminals)
+                ? agentTab.terminals
+                : [],
+            usage: agentTab.usage || null,
             busConnectionKind: 'shared',
             busContinuityState: continuityState,
             busHotRank: busSession?.hotRank ?? null
@@ -798,14 +809,9 @@ router.put('/api/cluster', async (ctx) => {
     }
 });
 
-router.get('/api/agents', async (ctx) => {
-    await acpBusReadyPromise;
-    ctx.body = await acpBusManager.listState();
-});
-
 router.get('/api/acp-bus/state', async (ctx) => {
     await acpBusReadyPromise;
-    ctx.body = acpBusManager.getState();
+    ctx.body = await acpBusManager.listState();
 });
 
 router.get('/api/acp-bus/sessions', async (ctx) => {
@@ -842,6 +848,80 @@ router.get('/api/acp-bus/sessions/:agentId/:sessionId', async (ctx) => {
         return;
     }
     ctx.body = session;
+});
+
+router.get('/api/acp-bus/resume-sessions', async (ctx) => {
+    const { agentId = '', cwd = '' } = ctx.query || {};
+    if (!agentId || typeof agentId !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'agentId is required' };
+        return;
+    }
+    if (!cwd || typeof cwd !== 'string') {
+        ctx.status = 400;
+        ctx.body = { error: 'cwd is required' };
+        return;
+    }
+
+    try {
+        const result = await acpManager.listResumeSessions({
+            agentId,
+            cwd
+        });
+        ctx.body = {
+            sessions: Array.isArray(result?.sessions) ? result.sessions : [],
+            nextCursor: '',
+            scope: typeof result?.scope === 'string' ? result.scope : 'cwd'
+        };
+    } catch (error) {
+        const message = error?.message || 'Failed to list agent sessions';
+        ctx.status = /does not support session history/i.test(message)
+            ? 501
+            : 500;
+        ctx.body = { error: message };
+    }
+});
+
+router.get('/api/acp-bus/config', async (ctx) => {
+    ctx.body = {
+        configs: await acpManager.listAgentConfigs()
+    };
+});
+
+router.put('/api/acp-bus/config/:agentId', async (ctx) => {
+    const { agentId } = ctx.params;
+    const { env, clearEnvKeys } = ctx.request.body || {};
+    try {
+        const configState = await acpManager.updateAgentConfig(agentId, {
+            env: typeof env === 'object' && env ? env : {},
+            clearEnvKeys: Array.isArray(clearEnvKeys) ? clearEnvKeys : []
+        });
+        ctx.body = {
+            config: configState,
+            definitions: await acpManager.listDefinitions()
+        };
+    } catch (error) {
+        ctx.status = 400;
+        ctx.body = {
+            error: error?.message || 'Failed to save agent config'
+        };
+    }
+});
+
+router.delete('/api/acp-bus/config/:agentId', async (ctx) => {
+    const { agentId } = ctx.params;
+    try {
+        const configState = await acpManager.clearAgentConfig(agentId);
+        ctx.body = {
+            config: configState,
+            definitions: await acpManager.listDefinitions()
+        };
+    } catch (error) {
+        ctx.status = 400;
+        ctx.body = {
+            error: error?.message || 'Failed to clear agent config'
+        };
+    }
 });
 
 router.get('/api/acp-bus/tabs/:tabId', async (ctx) => {
@@ -1196,80 +1276,6 @@ router.post('/api/acp-bus/command', async (ctx) => {
     }
 });
 
-router.get('/api/agents/sessions', async (ctx) => {
-    const { agentId = '', cwd = '' } = ctx.query || {};
-    if (!agentId || typeof agentId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'agentId is required' };
-        return;
-    }
-    if (!cwd || typeof cwd !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'cwd is required' };
-        return;
-    }
-
-    try {
-        const result = await acpManager.listResumeSessions({
-            agentId,
-            cwd
-        });
-        ctx.body = {
-            sessions: Array.isArray(result?.sessions) ? result.sessions : [],
-            nextCursor: '',
-            scope: typeof result?.scope === 'string' ? result.scope : 'cwd'
-        };
-    } catch (error) {
-        const message = error?.message || 'Failed to list agent sessions';
-        ctx.status = /does not support session history/i.test(message)
-            ? 501
-            : 500;
-        ctx.body = { error: message };
-    }
-});
-
-router.get('/api/agents/config', async (ctx) => {
-    ctx.body = {
-        configs: await acpManager.listAgentConfigs()
-    };
-});
-
-router.put('/api/agents/config/:agentId', async (ctx) => {
-    const { agentId } = ctx.params;
-    const { env, clearEnvKeys } = ctx.request.body || {};
-    try {
-        const configState = await acpManager.updateAgentConfig(agentId, {
-            env: typeof env === 'object' && env ? env : {},
-            clearEnvKeys: Array.isArray(clearEnvKeys) ? clearEnvKeys : []
-        });
-        ctx.body = {
-            config: configState,
-            definitions: await acpManager.listDefinitions()
-        };
-    } catch (error) {
-        ctx.status = 400;
-        ctx.body = {
-            error: error?.message || 'Failed to save agent config'
-        };
-    }
-});
-
-router.delete('/api/agents/config/:agentId', async (ctx) => {
-    const { agentId } = ctx.params;
-    try {
-        const configState = await acpManager.clearAgentConfig(agentId);
-        ctx.body = {
-            config: configState,
-            definitions: await acpManager.listDefinitions()
-        };
-    } catch (error) {
-        ctx.status = 400;
-        ctx.body = {
-            error: error?.message || 'Failed to clear agent config'
-        };
-    }
-});
-
 // Middleware
 app.use(router.routes());
 app.use(router.allowedMethods());
@@ -1364,10 +1370,10 @@ wss.on('connection', (socket, target) => {
             acpBusSockets.delete(socket);
         });
         void acpBusReadyPromise
-            .then(() => {
+            .then(async () => {
                 sendWebSocketJson(socket, {
                     type: 'snapshot',
-                    state: acpBusManager.getState(),
+                    state: await acpBusManager.listState(),
                     sessions: acpBusManager.listSessions({
                         limit: config.acpBusCacheSessionLimit
                     })

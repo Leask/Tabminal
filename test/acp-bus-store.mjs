@@ -225,7 +225,7 @@ describe('AcpBusStore', () => {
                     id: 'm-1',
                     role: 'user',
                     text: 'one',
-                    order: 1
+                    index: 1
                 }],
                 toolCalls: []
             }, {
@@ -242,7 +242,7 @@ describe('AcpBusStore', () => {
                     id: 'm-2',
                     role: 'assistant',
                     text: 'two',
-                    order: 2
+                    index: 2
                 }],
                 toolCalls: []
             }, {
@@ -336,15 +336,15 @@ describe('AcpBusStore', () => {
                 busy: false,
                 errorMessage: '',
                 messages: [
-                    { id: 'm-1', role: 'user', kind: 'message', text: 'one', order: 1 },
-                    { id: 'm-2', role: 'assistant', kind: 'message', text: 'two', order: 2 },
-                    { id: 'm-3', role: 'user', kind: 'message', text: 'three', order: 3 }
+                    { id: 'm-1', role: 'user', kind: 'message', text: 'one', index: 1 },
+                    { id: 'm-2', role: 'assistant', kind: 'message', text: 'two', index: 2 },
+                    { id: 'm-3', role: 'user', kind: 'message', text: 'three', index: 3 }
                 ],
                 toolCalls: [{
                     toolCallId: 't-1',
                     title: 'tool',
                     status: 'completed',
-                    order: 4
+                    index: 4
                 }],
                 permissions: [],
                 plan: [],
@@ -389,7 +389,7 @@ describe('AcpBusStore', () => {
         });
     });
 
-    it('normalizes upstream timeline order into contiguous indexes', async () => {
+    it('normalizes upstream timeline indexes into contiguous indexes', async () => {
         await withStore('acp-bus-store-', async (store) => {
             store.saveObservedSession({
                 agentId: 'codex',
@@ -399,20 +399,20 @@ describe('AcpBusStore', () => {
                     id: 'm-1',
                     role: 'assistant',
                     text: 'message',
-                    order: 10
+                    index: 10
                 }],
                 toolCalls: [{
                     toolCallId: 't-1',
                     title: 'tool',
                     status: 'completed',
-                    order: 5
+                    index: 5
                 }],
                 permissions: [],
                 planHistory: [{
                     id: 'p-1',
                     active: false,
                     status: 'completed',
-                    order: 1000,
+                    index: 1000,
                     entries: []
                 }],
                 plan: []
@@ -448,8 +448,8 @@ describe('AcpBusStore', () => {
                 acpSessionId: 's-repair',
                 cwd: '/tmp/project',
                 messages: [
-                    { id: 'm-1', role: 'user', text: 'one', order: 1 },
-                    { id: 'm-2', role: 'assistant', text: 'two', order: 2 }
+                    { id: 'm-1', role: 'user', text: 'one', index: 1 },
+                    { id: 'm-2', role: 'assistant', text: 'two', index: 2 }
                 ],
                 toolCalls: []
             }, {
@@ -487,8 +487,8 @@ describe('AcpBusStore', () => {
                 acpSessionId: 's-rebuild',
                 cwd: '/tmp/project',
                 messages: [
-                    { id: 'm-1', role: 'user', text: 'one', order: 1 },
-                    { id: 'm-stale', role: 'assistant', text: 'old', order: 2 }
+                    { id: 'm-1', role: 'user', text: 'one', index: 1 },
+                    { id: 'm-stale', role: 'assistant', text: 'old', index: 2 }
                 ],
                 toolCalls: []
             }, {
@@ -500,8 +500,8 @@ describe('AcpBusStore', () => {
                 acpSessionId: 's-rebuild',
                 cwd: '/tmp/project',
                 messages: [
-                    { id: 'm-1', role: 'user', text: 'one', order: 1 },
-                    { id: 'm-2', role: 'assistant', text: 'two', order: 2 }
+                    { id: 'm-1', role: 'user', text: 'one', index: 1 },
+                    { id: 'm-2', role: 'assistant', text: 'two', index: 2 }
                 ],
                 toolCalls: []
             }, {
@@ -538,7 +538,7 @@ describe('AcpBusStore', () => {
                     content: 'Run benchmark',
                     status: 'in_progress',
                     priority: 'medium',
-                    order: 1
+                    index: 1
                 }]
             }, {
                 observedAt: '2026-04-14T10:00:00.000Z'
@@ -559,7 +559,7 @@ describe('AcpBusStore', () => {
                     content: 'Run benchmark',
                     status: 'completed',
                     priority: 'medium',
-                    order: 1
+                    index: 1
                 }]
             }, {
                 observedAt: '2026-04-14T10:01:00.000Z',

@@ -783,6 +783,7 @@ async function main() {
             label = 'permission-final-or-setup',
             timeoutMs = 45000
         ) {
+            let backendReadySince = 0;
             return await waitFor(label, async () => {
                 if (await hasPermissionRequest()) {
                     return 'permission';
@@ -796,7 +797,7 @@ async function main() {
                 try {
                     const token = await getApiToken();
                     const data = await getJsonWithAuth(
-                        new URL('/api/agents', tabminalUrl),
+                        new URL('/api/acp-bus/state', tabminalUrl),
                         token
                     );
                     const matchingTabs = Array.isArray(data?.tabs)
@@ -825,8 +826,15 @@ async function main() {
                             || (latest.toolCalls || []).length > 0
                         )
                     ) {
-                        return 'backend-ready';
+                        if (!backendReadySince) {
+                            backendReadySince = Date.now();
+                        }
+                        if ((Date.now() - backendReadySince) >= 3000) {
+                            return 'backend-ready';
+                        }
+                        return '';
                     }
+                    backendReadySince = 0;
                 } catch {
                     // Ignore transient backend polling issues.
                 }
@@ -2915,7 +2923,7 @@ async function main() {
                 tools: Array.from(document.querySelectorAll('.agent-tool-call'))
                     .map((el) => el.textContent.trim()),
                 permissionsPending: document.querySelectorAll(
-                    '.agent-permission-card'
+                    '.agent-permission-card.state-pending'
                 ).length,
                 wsLog: window.__wsLog || [],
                 alerts: window.__alertLog || [],

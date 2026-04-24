@@ -1587,6 +1587,7 @@ class ServerClient {
         }
         if (payload.type === 'snapshot') {
             this.acpBusState = payload.state || null;
+            applyAcpBusStateForServer(this, payload.state || {});
             return;
         }
         if (payload.type === 'event') {
@@ -6384,7 +6385,6 @@ class EditorManager {
         }
         renderState.inFlight = true;
         const pendingFull = renderState.full;
-        const pendingAuthoritativeSync = renderState.authoritativeSync;
         renderState.full = false;
         renderState.authoritativeSync = false;
         renderState.rerenderRequested = false;
@@ -6403,14 +6403,6 @@ class EditorManager {
                     this.renderAgentTranscript(agentTab, {
                         reason: 'queued-transcript'
                     });
-                }
-            }
-            if (pendingAuthoritativeSync && agentTab.server?.isAuthenticated) {
-                try {
-                    await syncAgentsForServer(agentTab.server, { force: true });
-                } catch {
-                    // Ignore transient authority sync failures. The next
-                    // heartbeat or state refresh will reconcile.
                 }
             }
         } finally {
@@ -7207,21 +7199,13 @@ class EditorManager {
                     if (bodyHost.dataset.mounted === 'true') {
                         return;
                     }
-                    bodyHost.dataset.mounted = 'true';
                     bodyHost.appendChild(
                         this.buildAgentSectionBody(details, section)
                     );
+                    bodyHost.dataset.mounted = 'true';
                 };
                 details.appendChild(bodyHost);
-                if (details.open) {
-                    queueMicrotask(mountBody);
-                } else {
-                    details.addEventListener('toggle', () => {
-                        if (details.open) {
-                            mountBody();
-                        }
-                    }, { once: true });
-                }
+                this.mountAgentSectionBodyWhenOpened(details, mountBody);
                 sectionContainer.appendChild(details);
             }
             node.appendChild(sectionContainer);
@@ -7317,21 +7301,13 @@ class EditorManager {
                     if (bodyHost.dataset.mounted === 'true') {
                         return;
                     }
-                    bodyHost.dataset.mounted = 'true';
                     bodyHost.appendChild(
                         this.buildAgentSectionBody(details, section)
                     );
+                    bodyHost.dataset.mounted = 'true';
                 };
                 details.appendChild(bodyHost);
-                if (details.open) {
-                    queueMicrotask(mountBody);
-                } else {
-                    details.addEventListener('toggle', () => {
-                        if (details.open) {
-                            mountBody();
-                        }
-                    }, { once: true });
-                }
+                this.mountAgentSectionBodyWhenOpened(details, mountBody);
                 sectionContainer.appendChild(details);
             }
             card.appendChild(sectionContainer);
@@ -7390,6 +7366,37 @@ class EditorManager {
         }
 
         return card;
+    }
+
+    mountAgentSectionBodyWhenOpened(details, mountBody) {
+        if (details.open) {
+            queueMicrotask(mountBody);
+            return;
+        }
+
+        let observer = null;
+        const handleOpen = () => {
+            if (!details.open) {
+                return;
+            }
+            cleanup();
+            mountBody();
+        };
+        const cleanup = () => {
+            details.removeEventListener('toggle', handleOpen);
+            observer?.disconnect();
+            observer = null;
+        };
+
+        details.addEventListener('toggle', handleOpen);
+        if (typeof MutationObserver === 'function') {
+            observer = new MutationObserver(handleOpen);
+            observer.observe(details, {
+                attributes: true,
+                attributeFilter: ['open']
+            });
+        }
+        this.trackAgentTimelineDisposable(details, { dispose: cleanup });
     }
 
     disposeAgentEmbeddedEditors() {
@@ -7540,13 +7547,8 @@ class EditorManager {
         host.className = 'agent-tool-call-terminal-host';
 
         const terminal = section?.terminal || {};
+        const terminalId = String(terminal?.terminalId || '').trim();
         const agentTab = getActiveAgentTab();
-        const terminalId = String(
-            terminal.terminalId || section?.terminalId || ''
-        );
-        if (terminalId && !terminal.output) {
-            agentTab?.requestTerminalSummarySync?.(terminalId);
-        }
 
         const header = document.createElement('div');
         header.className = 'agent-tool-call-terminal-header';
@@ -9014,7 +9016,7 @@ async function saveAgentSetupConfig() {
         }
     }
 
-    const response = await server.fetch(`/api/agents/config/${agentId}`, {
+    const response = await server.fetch(`/api/acp-bus/config/${agentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ env, clearEnvKeys })
@@ -9084,7 +9086,7 @@ async function resetAgentSetupConfig() {
     if (!server || !agentId) {
         throw new Error('Agent setup context is unavailable');
     }
-    const response = await server.fetch(`/api/agents/config/${agentId}`, {
+    const response = await server.fetch(`/api/acp-bus/config/${agentId}`, {
         method: 'DELETE'
     });
     if (!response.ok) {
@@ -10315,8 +10317,6 @@ class AgentTab {
         this.resumeSessionsLoadedAt = 0;
         this.resumeSessionsPromise = null;
         this.connectPromise = null;
-        this.busSyncNeedsInventory = false;
-        this.terminalSummarySyncRequests = new Map();
         this.update(data);
         this.connect();
     }
@@ -10531,7 +10531,7 @@ class AgentTab {
                 cwd
             });
             const response = await this.server.fetch(
-                `/api/agents/sessions?${params.toString()}`
+                `/api/acp-bus/resume-sessions?${params.toString()}`
             );
             if (!response.ok) {
                 await throwResponseError(
@@ -10601,7 +10601,6 @@ class AgentTab {
             return false;
         }
         if (this.busSyncPromise) {
-            this.busSyncNeedsInventory = true;
             if (timeline) {
                 this.busSyncNeedsTimeline = true;
             }
@@ -10609,7 +10608,6 @@ class AgentTab {
         }
         const requestedTimeline = !!timeline || this.busSyncNeedsTimeline;
         this.busSyncNeedsTimeline = false;
-        this.busSyncNeedsInventory = false;
 
         this.busSyncPromise = (async () => {
             const data = attach
@@ -10640,7 +10638,10 @@ class AgentTab {
                     || !this.timelinePage?.hasNewer
                 )
             );
-            this.update(tabData);
+            this.applyInventory({
+                ...tabData,
+                replaceLiveResources: true
+            });
             this.busAttachedSessionKey = this.getObservedSessionKey();
             if (shouldLoadLatestTimeline) {
                 await this.loadTimelinePage({
@@ -10650,16 +10651,14 @@ class AgentTab {
                 this.scrollToBottomOnNextRender = true;
             }
             this.notifyUi({
-                full: true,
-                authoritativeSync: true
+                full: true
             });
             return true;
         })().finally(() => {
             this.busSyncPromise = null;
-            if (this.busSyncNeedsTimeline || this.busSyncNeedsInventory) {
+            if (this.busSyncNeedsTimeline) {
                 const needsTimeline = this.busSyncNeedsTimeline;
                 this.busSyncNeedsTimeline = false;
-                this.busSyncNeedsInventory = false;
                 this.scheduleBusSnapshotSync('pending_bus_sync', {
                     delayMs: 0,
                     timeline: needsTimeline
@@ -10945,29 +10944,52 @@ class AgentTab {
         }, delayMs);
     }
 
-    requestTerminalSummarySync(terminalId = '') {
-        const normalizedId = String(terminalId || '').trim();
-        if (!normalizedId || !this.usesSharedBus()) {
-            return;
+    #applyBusEventState(payload = {}) {
+        const session = payload?.session && typeof payload.session === 'object'
+            ? payload.session
+            : {};
+        const resources = payload?.resources && typeof payload.resources === 'object'
+            ? payload.resources
+            : {};
+        const data = {
+            title: typeof session.title === 'string' ? session.title : undefined,
+            status: typeof session.status === 'string' ? session.status : undefined,
+            busy: typeof session.busy === 'boolean' ? session.busy : undefined,
+            errorMessage: typeof session.errorMessage === 'string'
+                ? session.errorMessage
+                : undefined,
+            busContinuityState: typeof session.continuityState === 'string'
+                ? session.continuityState
+                : undefined,
+            busHotRank: Number.isFinite(session.hotRank)
+                ? session.hotRank
+                : undefined
+        };
+        for (const key of [
+            'toolCalls',
+            'permissions',
+            'plan',
+            'terminals',
+            'availableModes',
+            'availableCommands',
+            'configOptions'
+        ]) {
+            if (Array.isArray(resources[key])) {
+                data[key] = resources[key];
+            }
         }
-        const now = Date.now();
-        const lastRequestedAt = Number(
-            this.terminalSummarySyncRequests.get(normalizedId) || 0
-        );
-        if ((now - lastRequestedAt) < 1000) {
-            return;
+        if (resources.usage) {
+            data.usage = resources.usage;
         }
-        this.terminalSummarySyncRequests.set(normalizedId, now);
-        this.scheduleBusSnapshotSync('missing_terminal_summary', {
-            delayMs: 0,
-            timeline: false
-        });
+        data.replaceLiveResources = true;
+        return this.applyInventory(data);
     }
 
     handleBusEvent(event) {
         if (!event?.payload?.session) {
             return;
         }
+        const stateChanged = this.#applyBusEventState(event.payload);
         if (event.type === 'session_ui_attached') {
             const session = event.payload.session;
             this.busAttachedSessionKey = `${session.agentId}::${session.sessionId}`;
@@ -10987,19 +11009,33 @@ class AgentTab {
             }
             if (changedItems.length > 0) {
                 const applied = this.applyBusTimelineDelta(event.payload);
-                this.scheduleBusSnapshotSync(event.type || 'event', {
-                    timeline: !applied
-                });
+                if (!applied) {
+                    this.scheduleBusSnapshotSync(event.type || 'event', {
+                        timeline: true
+                    });
+                } else if (stateChanged) {
+                    this.notifyUi({
+                        full: false,
+                        delayMs: AGENT_TRANSCRIPT_RENDER_DEBOUNCE_MS,
+                        updateTabs: true
+                    });
+                }
                 return;
             }
-            this.scheduleBusSnapshotSync(event.type || 'event', {
-                timeline: false
-            });
+            if (stateChanged) {
+                this.notifyUi({
+                    full: true,
+                    updateTabs: true
+                });
+            }
             return;
         }
-        this.scheduleBusSnapshotSync(event.type || 'event', {
-            timeline: false
-        });
+        if (stateChanged) {
+            this.notifyUi({
+                full: true,
+                updateTabs: true
+            });
+        }
     }
 
     handleBusDisconnected() {
@@ -11084,7 +11120,7 @@ class AgentTab {
                         ...previous,
                         ...this.#normalizeTimelineEntry(
                             message.permission,
-                            previous?.order
+                            previous?.index
                         )
                     });
                 }
@@ -11265,7 +11301,7 @@ class AgentTab {
                 return;
             }
             try {
-                await syncAgentsForServer(this.server, { force: true });
+                await this.syncFromBus({ timeline: false });
             } catch {
                 // Ignore transient refresh failures; the next event or sync
                 // will reconcile the state.
@@ -11277,25 +11313,25 @@ class AgentTab {
         }, 2000);
     }
 
-    #normalizeTimelineEntry(entry, fallbackOrder = null) {
+    #normalizeTimelineEntry(entry, fallbackIndex = null) {
         const nextEntry = { ...entry };
         nextEntry.createdAt = typeof nextEntry.createdAt === 'string'
             ? nextEntry.createdAt
             : '';
         const entryIndex = Number.isFinite(nextEntry.index)
             ? nextEntry.index
-            : nextEntry.order;
+            : null;
         if (Number.isFinite(entryIndex)) {
             nextEntry.index = entryIndex;
-            nextEntry.order = entryIndex;
             this.timelineCounter = Math.max(this.timelineCounter, entryIndex);
+            delete nextEntry.order;
             return nextEntry;
         }
-        const nextOrder = Number.isFinite(fallbackOrder)
-            ? fallbackOrder
-            : this.#nextTimelineOrder();
-        nextEntry.index = nextOrder;
-        nextEntry.order = nextOrder;
+        const nextIndex = Number.isFinite(fallbackIndex)
+            ? fallbackIndex
+            : this.#nextTimelineIndex();
+        nextEntry.index = nextIndex;
+        delete nextEntry.order;
         return nextEntry;
     }
 
@@ -11321,8 +11357,8 @@ class AgentTab {
         return normalized;
     }
 
-    #normalizeMessage(message, fallbackOrder = null) {
-        const nextMessage = this.#normalizeTimelineEntry(message, fallbackOrder);
+    #normalizeMessage(message, fallbackIndex = null) {
+        const nextMessage = this.#normalizeTimelineEntry(message, fallbackIndex);
         nextMessage.text = typeof nextMessage.text === 'string'
             ? nextMessage.text
             : '';
@@ -11364,14 +11400,14 @@ class AgentTab {
         if (normalizedEntries.length === 0) {
             return;
         }
-        const order = Number.isFinite(this.timelineCounter)
+        const index = Number.isFinite(this.timelineCounter)
             ? this.timelineCounter + 0.5
             : 0.5;
-        this.timelineCounter = Math.max(this.timelineCounter || 0, order);
+        this.timelineCounter = Math.max(this.timelineCounter || 0, index);
         this.planHistory.push({
             id: `plan-${crypto.randomUUID()}`,
             createdAt: new Date().toISOString(),
-            order,
+            index,
             summary: buildAgentPlanSummary(normalizedEntries),
             entries: normalizedEntries
         });
@@ -11505,7 +11541,7 @@ class AgentTab {
         });
     }
 
-    #nextTimelineOrder() {
+    #nextTimelineIndex() {
         this.timelineCounter = Math.max(this.timelineCounter || 0, 0) + 1;
         return this.timelineCounter;
     }
@@ -11569,7 +11605,7 @@ class AgentTab {
         }
 
         const previous = this.messages[index];
-        const nextMessage = this.#normalizeMessage(message, previous.order);
+        const nextMessage = this.#normalizeMessage(message, previous.index);
         const mergedText = (
             !previous.id
             && nextMessage.id
@@ -11599,8 +11635,8 @@ class AgentTab {
                 existing.text = nextText;
                 clearAgentMessageMarkdownCache(existing);
             }
-            if (Number.isFinite(message?.order)) {
-                existing.order = message.order;
+            if (Number.isFinite(message?.index)) {
+                existing.index = message.index;
             }
             return;
         }
@@ -11614,7 +11650,7 @@ class AgentTab {
             kind: message.kind || 'message',
             text: message.text || '',
             createdAt: new Date().toISOString(),
-            order: message.order
+            index: message.index
         });
         clearAgentMessageMarkdownCache(nextMessage);
         this.messages.push(nextMessage);
@@ -11627,7 +11663,7 @@ class AgentTab {
                     const previous = this.toolCalls.get(update.toolCallId);
                     this.toolCalls.set(
                         update.toolCallId,
-                        this.#normalizeTimelineEntry(update, previous?.order)
+                        this.#normalizeTimelineEntry(update, previous?.index)
                     );
                 }
                 return {
@@ -11640,7 +11676,7 @@ class AgentTab {
                 const previous = this.toolCalls.get(update.toolCallId) || {};
                 this.toolCalls.set(update.toolCallId, {
                     ...previous,
-                    ...this.#normalizeTimelineEntry(update, previous.order)
+                    ...this.#normalizeTimelineEntry(update, previous.index)
                 });
                 return {
                     full: false,
@@ -11690,11 +11726,14 @@ class AgentTab {
     }
 
     async sendPrompt(text, attachments = []) {
-        const baseline = {
-            messageCount: this.messages.length,
-            toolCount: this.toolCalls.size,
-            permissionCount: this.permissions.size
-        };
+        this.errorMessage = '';
+        this.status = 'running';
+        this.busy = true;
+        this.needsAttention = false;
+        this.notifyUi({
+            full: true,
+            updateTabs: true
+        });
         await sendAcpBusCommand(
             this.server,
             {
@@ -11705,32 +11744,10 @@ class AgentTab {
             },
             { attachments }
         );
-        await syncAgentsForServer(this.server, { force: true });
-        void this.#reconcilePromptStart(baseline);
-    }
-
-    async #reconcilePromptStart(baseline, timeoutMs = 4000) {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            await new Promise((resolve) => {
-                setTimeout(resolve, 200);
-            });
-            await syncAgentsForServer(this.server, { force: true });
-            const current = state.agentTabs.get(this.key);
-            if (!current) {
-                return;
-            }
-            if (current.errorMessage || !current.busy) {
-                return;
-            }
-            if (
-                current.messages.length > baseline.messageCount
-                || current.toolCalls.size > baseline.toolCount
-                || current.permissions.size > baseline.permissionCount
-            ) {
-                return;
-            }
-        }
+        this.scheduleBusSnapshotSync('prompt_accepted', {
+            delayMs: AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS,
+            timeline: false
+        });
     }
 
     applyInventory(data) {
@@ -11764,9 +11781,13 @@ class AgentTab {
         this.terminalSessionId = data.terminalSessionId || this.terminalSessionId;
         this.cwd = data.cwd || this.cwd || '';
         this.createdAt = data.createdAt || this.createdAt || new Date().toISOString();
-        this.status = data.status || this.status || 'ready';
+        this.status = typeof data.status === 'string'
+            ? data.status
+            : (this.status || 'ready');
         this.busy = typeof data.busy === 'boolean' ? data.busy : this.busy;
-        this.errorMessage = data.errorMessage || this.errorMessage || '';
+        this.errorMessage = typeof data.errorMessage === 'string'
+            ? data.errorMessage
+            : (this.errorMessage || '');
         this.busConnectionKind = typeof data.busConnectionKind === 'string'
             ? data.busConnectionKind
             : this.busConnectionKind || 'shared';
@@ -11792,7 +11813,11 @@ class AgentTab {
         if (data.usage) {
             this.usage = this.#normalizeUsageState(data.usage);
         }
+        const replaceLiveResources = data.replaceLiveResources === true;
         if (Array.isArray(data.toolCalls)) {
+            if (replaceLiveResources) {
+                this.toolCalls = new Map();
+            }
             for (const toolCall of data.toolCalls) {
                 const toolCallId = String(toolCall?.toolCallId || '').trim();
                 if (!toolCallId) continue;
@@ -11801,12 +11826,15 @@ class AgentTab {
                     ...previous,
                     ...this.#normalizeTimelineEntry(
                         toolCall,
-                        previous?.index ?? previous?.order
+                        previous?.index
                     )
                 });
             }
         }
         if (Array.isArray(data.permissions)) {
+            if (replaceLiveResources) {
+                this.permissions = new Map();
+            }
             for (const permission of data.permissions) {
                 const permissionId = String(permission?.id || '').trim();
                 if (!permissionId) continue;
@@ -11815,7 +11843,7 @@ class AgentTab {
                     ...previous,
                     ...this.#normalizeTimelineEntry(
                         permission,
-                        previous?.index ?? previous?.order
+                        previous?.index
                     )
                 });
             }
@@ -11826,6 +11854,9 @@ class AgentTab {
             );
         }
         if (Array.isArray(data.terminals)) {
+            if (replaceLiveResources) {
+                this.terminals = new Map();
+            }
             for (const terminal of data.terminals) {
                 const terminalId = String(terminal?.terminalId || '').trim();
                 if (!terminalId) continue;
@@ -11875,7 +11906,7 @@ class AgentTab {
     async #waitForSettled(timeoutMs = 5000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
-            await syncAgentsForServer(this.server, { force: true });
+            await this.syncFromBus({ timeline: false });
             const current = state.agentTabs.get(this.key);
             if (!current || !current.busy) {
                 return;
@@ -11901,7 +11932,7 @@ class AgentTab {
             permissionId,
             optionId
         });
-        await syncAgentsForServer(this.server, { force: true });
+        await this.syncFromBus({ timeline: false });
     }
 
     async setConfigOption(configId, valueId) {
@@ -13251,7 +13282,7 @@ function getAgentTimelineItems(agentTab) {
     for (const message of agentTab.messages || []) {
         items.push({
             type: 'message',
-            order: Number.isFinite(message?.order) ? message.order : 0,
+            index: Number.isFinite(message?.index) ? message.index : 0,
             value: message
         });
     }
@@ -13259,7 +13290,7 @@ function getAgentTimelineItems(agentTab) {
     for (const toolCall of agentTab.toolCalls?.values?.() || []) {
         items.push({
             type: 'tool',
-            order: Number.isFinite(toolCall?.order) ? toolCall.order : 0,
+            index: Number.isFinite(toolCall?.index) ? toolCall.index : 0,
             value: toolCall
         });
     }
@@ -13267,7 +13298,7 @@ function getAgentTimelineItems(agentTab) {
     for (const permission of agentTab.permissions?.values?.() || []) {
         items.push({
             type: 'permission',
-            order: Number.isFinite(permission?.order) ? permission.order : 0,
+            index: Number.isFinite(permission?.index) ? permission.index : 0,
             value: permission
         });
     }
@@ -13275,14 +13306,14 @@ function getAgentTimelineItems(agentTab) {
     for (const planEntry of agentTab.planHistory || []) {
         items.push({
             type: 'plan',
-            order: Number.isFinite(planEntry?.order) ? planEntry.order : 0,
+            index: Number.isFinite(planEntry?.index) ? planEntry.index : 0,
             value: planEntry
         });
     }
 
     items.sort((left, right) => {
-        if (left.order !== right.order) {
-            return left.order - right.order;
+        if (left.index !== right.index) {
+            return left.index - right.index;
         }
         const typeOrder = {
             message: 0,
@@ -13312,8 +13343,8 @@ function getAgentTimelineItemKey(entry, absoluteIndex = 0) {
     if (identity) {
         return `${entry.type}:${identity}`;
     }
-    const order = Number.isFinite(entry.order) ? entry.order : -1;
-    return `${entry.type}:${order}:${absoluteIndex}`;
+    const index = Number.isFinite(entry.index) ? entry.index : -1;
+    return `${entry.type}:${index}:${absoluteIndex}`;
 }
 
 function clearAgentMessageMarkdownCache(message) {
@@ -14089,9 +14120,9 @@ function getAgentPermissionStatusLabel(permission) {
 
 function getAgentOrderedMapValues(map) {
     return Array.from(map?.values?.() || []).sort((left, right) => {
-        const leftOrder = Number.isFinite(left?.order) ? left.order : 0;
-        const rightOrder = Number.isFinite(right?.order) ? right.order : 0;
-        return rightOrder - leftOrder;
+        const leftIndex = Number.isFinite(left?.index) ? left.index : 0;
+        const rightIndex = Number.isFinite(right?.index) ? right.index : 0;
+        return rightIndex - leftIndex;
     });
 }
 
@@ -15582,7 +15613,7 @@ function buildComparableAgentTimelineTail(source, limit = 6) {
     for (const message of messages) {
         items.push([
             'message',
-            Number.isFinite(message?.order) ? message.order : 0,
+            Number.isFinite(message?.index) ? message.index : 0,
             String(message?.id || ''),
             String(message?.streamKey || ''),
             String(message?.role || ''),
@@ -15593,7 +15624,7 @@ function buildComparableAgentTimelineTail(source, limit = 6) {
     for (const toolCall of toolCalls) {
         items.push([
             'tool',
-            Number.isFinite(toolCall?.order) ? toolCall.order : 0,
+            Number.isFinite(toolCall?.index) ? toolCall.index : 0,
             String(toolCall?.toolCallId || ''),
             String(toolCall?.status || ''),
             hashUiText(JSON.stringify(toolCall || null))
@@ -15602,7 +15633,7 @@ function buildComparableAgentTimelineTail(source, limit = 6) {
     for (const permission of permissions) {
         items.push([
             'permission',
-            Number.isFinite(permission?.order) ? permission.order : 0,
+            Number.isFinite(permission?.index) ? permission.index : 0,
             String(permission?.id || ''),
             String(permission?.status || ''),
             String(permission?.selectedOptionId || '')
@@ -15782,15 +15813,10 @@ function removeAgentTabsForTerminalSession(session) {
     }
 }
 
-async function syncAgentsForServer(server, { force = false } = {}) {
-    if (!server || !server.isAuthenticated) return;
-    if (!force && server.agentStateLoaded) return;
-
-    const response = await server.fetch('/api/agents');
-    if (!response.ok) {
-        throw new Error(`Failed to load agents: HTTP ${response.status}`);
+function applyAcpBusStateForServer(server, data = {}) {
+    if (!server || !server.isAuthenticated || !data || typeof data !== 'object') {
+        return false;
     }
-    const data = await response.json();
     state.agentDefinitions.set(
         server.id,
         Array.isArray(data?.definitions) ? data.definitions : []
@@ -15813,7 +15839,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
 
     server.agentStateLoaded = !restoring;
     if (restoring) {
-        return;
+        return true;
     }
 
     const activeSession = getActiveSession();
@@ -15840,7 +15866,7 @@ async function syncAgentsForServer(server, { force = false } = {}) {
                 editorManager.updateEditorPaneVisibility();
             }
         }
-        return;
+        return true;
     }
 
     const preferredSession = sessions.find((session) => {
@@ -15866,6 +15892,18 @@ async function syncAgentsForServer(server, { force = false } = {}) {
             switchToSession(preferredSession.key);
         }
     }
+    return true;
+}
+
+async function syncAgentsForServer(server, { force = false } = {}) {
+    if (!server || !server.isAuthenticated) return;
+    if (!force && server.agentStateLoaded) return;
+
+    const response = await server.fetch('/api/acp-bus/state');
+    if (!response.ok) {
+        throw new Error(`Failed to load agents: HTTP ${response.status}`);
+    }
+    applyAcpBusStateForServer(server, await response.json());
 }
 
 async function createAgentTab(session, agentId, options = {}) {
