@@ -6312,7 +6312,6 @@ class EditorManager {
                 inFlight: false,
                 rerenderRequested: false,
                 full: false,
-                authoritativeSync: false,
                 delayMs: 0,
                 dirtyKeys: new Set()
             };
@@ -6355,9 +6354,6 @@ class EditorManager {
         if (options.full) {
             renderState.full = true;
         }
-        if (options.authoritativeSync) {
-            renderState.authoritativeSync = true;
-        }
         if (options.dirtyKey) {
             renderState.dirtyKeys.add(String(options.dirtyKey));
         }
@@ -6386,7 +6382,6 @@ class EditorManager {
         renderState.inFlight = true;
         const pendingFull = renderState.full;
         renderState.full = false;
-        renderState.authoritativeSync = false;
         renderState.rerenderRequested = false;
         renderState.dirtyKeys.clear();
         try {
@@ -6409,7 +6404,6 @@ class EditorManager {
             renderState.inFlight = false;
             if (
                 renderState.full
-                || renderState.authoritativeSync
                 || renderState.dirtyKeys.size > 0
                 || renderState.rerenderRequested
             ) {
@@ -10288,7 +10282,6 @@ class AgentTab {
         this.queueCounter = 0;
         this.isDrainingQueuedPrompt = false;
         this.scrollToBottomOnNextRender = true;
-        this.busySyncTimer = null;
         this.planHistory = [];
         this.timelineItems = [];
         this.timelinePage = {
@@ -10351,8 +10344,7 @@ class AgentTab {
         editorManager.scheduleAgentPanelRender(this, {
             full: options.full !== false,
             delayMs: options.delayMs,
-            dirtyKey: options.dirtyKey || '',
-            authoritativeSync: !!options.authoritativeSync
+            dirtyKey: options.dirtyKey || ''
         });
     }
 
@@ -10506,7 +10498,6 @@ class AgentTab {
         if (hasTranscriptPayload || observedSessionChanged) {
             this.#applyPlanState(nextPlan);
         }
-        this.#syncBusyWatchdog();
     }
 
     async listResumeSessions({ force = false } = {}) {
@@ -11184,7 +11175,6 @@ class AgentTab {
                             message.terminal.terminalId
                         )
                     ) {
-                        this.#syncBusyWatchdog();
                         return;
                     }
                 }
@@ -11243,12 +11233,10 @@ class AgentTab {
         } else if (isAgentTabVisible(this)) {
             this.needsAttention = false;
         }
-        this.#syncBusyWatchdog();
         if (wasBusy && !this.busy) {
             notifyOptions = {
                 ...notifyOptions,
                 full: true,
-                authoritativeSync: true,
                 delayMs: AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS
             };
         }
@@ -11257,60 +11245,6 @@ class AgentTab {
             this.lastCompletedRunCounter = this.runCounter;
             void drainQueuedAgentPrompt(this);
         }
-    }
-
-    #hasPendingPermission() {
-        return getAgentOrderedMapValues(this.permissions).some(
-            (permission) => permission.status === 'pending'
-        );
-    }
-
-    #hasActiveTool() {
-        return getAgentOrderedMapValues(this.toolCalls).some((toolCall) => {
-            const statusClass = getEffectiveAgentToolStatus(toolCall, this);
-            return statusClass === 'pending' || statusClass === 'running';
-        });
-    }
-
-    #needsBusyStateRefresh() {
-        return !!(
-            this.busy
-            && !this.isDrainingQueuedPrompt
-            && !this.errorMessage
-            && this.status !== 'restoring'
-            && !this.#hasPendingPermission()
-            && !this.#hasActiveTool()
-        );
-    }
-
-    #clearBusyWatchdog() {
-        if (this.busySyncTimer) {
-            clearTimeout(this.busySyncTimer);
-            this.busySyncTimer = null;
-        }
-    }
-
-    #syncBusyWatchdog() {
-        this.#clearBusyWatchdog();
-        if (!this.#needsBusyStateRefresh()) {
-            return;
-        }
-        this.busySyncTimer = setTimeout(async () => {
-            this.busySyncTimer = null;
-            if (!this.#needsBusyStateRefresh()) {
-                return;
-            }
-            try {
-                await this.syncFromBus({ timeline: false });
-            } catch {
-                // Ignore transient refresh failures; the next event or sync
-                // will reconcile the state.
-            } finally {
-                if (this.#needsBusyStateRefresh()) {
-                    this.#syncBusyWatchdog();
-                }
-            }
-        }, 2000);
     }
 
     #normalizeTimelineEntry(entry, fallbackIndex = null) {
@@ -11726,6 +11660,12 @@ class AgentTab {
     }
 
     async sendPrompt(text, attachments = []) {
+        const previousState = {
+            status: this.status,
+            busy: this.busy,
+            errorMessage: this.errorMessage,
+            needsAttention: this.needsAttention
+        };
         this.errorMessage = '';
         this.status = 'running';
         this.busy = true;
@@ -11734,20 +11674,28 @@ class AgentTab {
             full: true,
             updateTabs: true
         });
-        await sendAcpBusCommand(
-            this.server,
-            {
-                type: 'tab.prompt',
-                tabId: this.id,
-                text,
-                requestId: crypto.randomUUID()
-            },
-            { attachments }
-        );
-        this.scheduleBusSnapshotSync('prompt_accepted', {
-            delayMs: AGENT_TRANSCRIPT_AUTH_SYNC_DEBOUNCE_MS,
-            timeline: false
-        });
+        try {
+            await sendAcpBusCommand(
+                this.server,
+                {
+                    type: 'tab.prompt',
+                    tabId: this.id,
+                    text,
+                    requestId: crypto.randomUUID()
+                },
+                { attachments }
+            );
+        } catch (error) {
+            this.status = previousState.status;
+            this.busy = previousState.busy;
+            this.errorMessage = previousState.errorMessage;
+            this.needsAttention = previousState.needsAttention;
+            this.notifyUi({
+                full: true,
+                updateTabs: true
+            });
+            throw error;
+        }
     }
 
     applyInventory(data) {
@@ -11903,26 +11851,11 @@ class AgentTab {
         return true;
     }
 
-    async #waitForSettled(timeoutMs = 5000) {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            await this.syncFromBus({ timeline: false });
-            const current = state.agentTabs.get(this.key);
-            if (!current || !current.busy) {
-                return;
-            }
-            await new Promise((resolve) => {
-                setTimeout(resolve, 150);
-            });
-        }
-    }
-
     async cancel() {
         await sendAcpBusCommand(this.server, {
             type: 'tab.cancel',
             tabId: this.id
         });
-        await this.#waitForSettled();
     }
 
     async resolvePermission(permissionId, optionId = '') {
@@ -11932,7 +11865,6 @@ class AgentTab {
             permissionId,
             optionId
         });
-        await this.syncFromBus({ timeline: false });
     }
 
     async setConfigOption(configId, valueId) {
@@ -11964,7 +11896,6 @@ class AgentTab {
     }
 
     dispose() {
-        this.#clearBusyWatchdog();
         if (this.busSyncTimer) {
             clearTimeout(this.busSyncTimer);
             this.busSyncTimer = null;
@@ -15999,8 +15930,7 @@ async function resumeAgentTabFromHistory(session, agentTab, historySession) {
             nextAgentTab.busAttachedSessionKey = nextAgentTab.getObservedSessionKey();
             nextAgentTab.scrollToBottomOnNextRender = true;
             nextAgentTab.notifyUi({
-                full: true,
-                authoritativeSync: true
+                full: true
             });
         } else {
             nextAgentTab = upsertAgentTab(
