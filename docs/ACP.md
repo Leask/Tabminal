@@ -68,13 +68,10 @@ The following items are effectively shipped and usable.
   - `GET /api/agents/config`
   - `PUT /api/agents/config/:agentId`
   - `DELETE /api/agents/config/:agentId`
-  - `POST /api/agents/tabs`
-  - `POST /api/agents/tabs/:tabId/prompt`
-  - `POST /api/agents/tabs/:tabId/cancel`
-  - `POST /api/agents/tabs/:tabId/mode`
-  - `POST /api/agents/tabs/:tabId/config`
-  - `POST /api/agents/tabs/:tabId/permissions/:permissionId`
-  - `DELETE /api/agents/tabs/:tabId`
+  - `POST /api/acp-bus/command`
+  - `GET /api/acp-bus/tabs/:tabId`
+  - `GET /api/acp-bus/tabs/:tabId/timeline`
+  - `GET /api/acp-bus/events`
 - ACP bus websocket endpoint live
 
 ### 3.2 Agent tab UX

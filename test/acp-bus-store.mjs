@@ -607,6 +607,46 @@ describe('AcpBusStore', () => {
         });
     });
 
+    it('selects stale cold sessions for opportunistic repair', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            const sessions = [
+                ['never', '2026-04-14T10:05:00.000Z'],
+                ['stale', '2026-04-14T10:20:00.000Z'],
+                ['fresh', '2026-04-14T10:20:00.000Z'],
+                ['hot', '2026-04-14T10:30:00.000Z']
+            ];
+            for (const [sessionId, updatedAt] of sessions) {
+                store.upsertIndexedSession({
+                    agentId: 'codex',
+                    sessionId,
+                    cwd: '/tmp/project',
+                    title: sessionId,
+                    updatedAt,
+                    seenAt: '2026-04-14T10:30:00.000Z'
+                });
+            }
+            store.updateContinuityState('codex::stale', 'cached', {
+                loadedAt: '2026-04-14T10:00:00.000Z',
+                receivedAt: '2026-04-14T10:00:00.000Z'
+            });
+            store.updateContinuityState('codex::fresh', 'cached', {
+                loadedAt: '2026-04-14T10:25:00.000Z',
+                receivedAt: '2026-04-14T10:25:00.000Z'
+            });
+            store.setHotSessionKeys(['codex::hot']);
+
+            const candidates = store.listColdRepairCandidates(10, {
+                now: '2026-04-14T10:30:00.000Z',
+                minAgeMs: 10 * 60 * 1000
+            });
+
+            assert.deepEqual(candidates.map((row) => row.sessionId), [
+                'never',
+                'stale'
+            ]);
+        });
+    });
+
     it('returns inserted event envelopes while pruning old events', async () => {
         await withStore('acp-bus-store-', async (store) => {
             store.eventLimit = 1;

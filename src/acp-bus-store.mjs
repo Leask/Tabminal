@@ -1460,6 +1460,63 @@ export class AcpBusStore {
         );
     }
 
+    listColdRepairCandidates(limit, options = {}) {
+        const db = this.#requireDb();
+        const safeLimit = Number.isFinite(limit)
+            ? Math.max(1, Math.floor(limit))
+            : 1;
+        const nowMs = Date.parse(
+            typeof options.now === 'string' && options.now.trim()
+                ? options.now.trim()
+                : this.now()
+        );
+        const minAgeMs = Number.isFinite(options.minAgeMs)
+            ? Math.max(0, Math.floor(options.minAgeMs))
+            : 10 * 60 * 1000;
+        const rows = db.prepare(`
+            SELECT *
+            FROM acp_bus_sessions
+            WHERE is_present = 1
+                AND hot_rank IS NULL
+            ORDER BY
+                CASE
+                    WHEN last_loaded_at = '' AND last_received_at = '' THEN 0
+                    ELSE 1
+                END ASC,
+                last_loaded_at ASC,
+                last_received_at ASC,
+                upstream_updated_at ASC,
+                title COLLATE NOCASE ASC
+        `).all();
+        const candidates = [];
+        for (const row of rows) {
+            const session = rowToSession(
+                row,
+                options.includeSnapshot === true
+            );
+            const lastSyncAt = maxIso(
+                session.lastLoadedAt,
+                session.lastReceivedAt
+            );
+            const lastSyncMs = Date.parse(lastSyncAt || '');
+            const upstreamMs = Date.parse(session.upstreamUpdatedAt || '');
+            const neverSynced = !Number.isFinite(lastSyncMs);
+            if (!neverSynced) {
+                if (Number.isFinite(nowMs) && (nowMs - lastSyncMs) < minAgeMs) {
+                    continue;
+                }
+                if (Number.isFinite(upstreamMs) && upstreamMs <= lastSyncMs) {
+                    continue;
+                }
+            }
+            candidates.push(session);
+            if (candidates.length >= safeLimit) {
+                break;
+            }
+        }
+        return candidates;
+    }
+
     listHotSessions(limit, options = {}) {
         const db = this.#requireDb();
         const limitClause = Number.isFinite(limit) && limit > 0

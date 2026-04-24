@@ -215,6 +215,8 @@ async function withBusManager(prefix, options, callback) {
         hotSessionLimit: options.hotSessionLimit || 1,
         cacheSessionLimit: options.cacheSessionLimit || 10,
         snapshotFlushDelayMs: options.snapshotFlushDelayMs || 25,
+        coldRepairLoadThreshold: options.coldRepairLoadThreshold,
+        getCpuLoadRatio: options.getCpuLoadRatio,
         discoveryCwd: '/tmp/discovery',
         loadOpenTabs: options.loadOpenTabs,
         saveOpenTabs: options.saveOpenTabs,
@@ -367,6 +369,107 @@ describe('AcpBusManager', () => {
                 ['codex::c-1']
             );
             assert.equal(manager.getState().observedSessionCount, 1);
+        });
+    });
+
+    it('repairs one stale cold session per low-load sync', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: [
+                    {
+                        sessionId: 'hot',
+                        cwd: '/tmp/codex',
+                        title: 'Hot',
+                        updatedAt: '2026-04-14T10:30:00.000Z'
+                    },
+                    {
+                        sessionId: 'older-cold',
+                        cwd: '/tmp/codex',
+                        title: 'Older cold',
+                        updatedAt: '2026-04-14T10:10:00.000Z'
+                    },
+                    {
+                        sessionId: 'newer-cold',
+                        cwd: '/tmp/codex',
+                        title: 'Newer cold',
+                        updatedAt: '2026-04-14T10:20:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances, setNow }) => {
+            setNow('2026-04-14T10:30:00.000Z');
+            await manager.start();
+
+            assert.equal(
+                manager.getSession('codex', 'older-cold').messageCount,
+                0
+            );
+            assert.equal(
+                manager.getSession('codex', 'newer-cold').messageCount,
+                0
+            );
+
+            await manager.syncNow('poll');
+
+            assert.equal(
+                manager.getSession('codex', 'older-cold').messageCount,
+                1
+            );
+            assert.equal(
+                manager.getSession('codex', 'newer-cold').messageCount,
+                0
+            );
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+            );
+            assert.ok(observeRuntime);
+            assert.deepEqual(
+                observeRuntime.resumeCalls.map((call) => call.acpSessionId),
+                ['hot', 'older-cold']
+            );
+        });
+    });
+
+    it('skips cold repair while system load is high', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.95,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: [
+                    {
+                        sessionId: 'hot',
+                        cwd: '/tmp/codex',
+                        title: 'Hot',
+                        updatedAt: '2026-04-14T10:30:00.000Z'
+                    },
+                    {
+                        sessionId: 'cold',
+                        cwd: '/tmp/codex',
+                        title: 'Cold',
+                        updatedAt: '2026-04-14T10:10:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances, setNow }) => {
+            setNow('2026-04-14T10:30:00.000Z');
+            await manager.start();
+            await manager.syncNow('poll');
+
+            assert.equal(manager.getSession('codex', 'cold').messageCount, 0);
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+            );
+            assert.ok(observeRuntime);
+            assert.deepEqual(
+                observeRuntime.resumeCalls.map((call) => call.acpSessionId),
+                ['hot']
+            );
         });
     });
 
@@ -574,6 +677,77 @@ describe('AcpBusManager', () => {
             assert.equal(resumed.serialized.acpSessionId, 'c-1');
             assert.equal(manager.listOpenTabs().length, 1);
             assert.ok(savedTabs.length >= 2);
+        });
+    });
+
+    it('deduplicates prompt commands by requestId', async () => {
+        await withBusManager('acp-bus-manager-', {
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: []
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const created = await manager.createTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex'
+            });
+
+            const first = await manager.sendPromptForTab(
+                created.id,
+                'hello bus',
+                [],
+                { requestId: 'req-1' }
+            );
+            const second = await manager.sendPromptForTab(
+                created.id,
+                'hello bus',
+                [],
+                { requestId: 'req-1' }
+            );
+
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe'
+            );
+            assert.ok(observeRuntime);
+            assert.equal(observeRuntime.promptCalls.length, 1);
+            assert.equal(first.deduped, false);
+            assert.equal(second.deduped, true);
+            assert.equal(second.requestId, 'req-1');
+        });
+    });
+
+    it('rejects reused prompt requestId with a different payload', async () => {
+        await withBusManager('acp-bus-manager-', {
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: []
+            }]
+        }, async ({ manager }) => {
+            await manager.start();
+            const created = await manager.createTabForUi({
+                agentId: 'codex',
+                cwd: '/tmp/codex'
+            });
+
+            await manager.sendPromptForTab(
+                created.id,
+                'hello bus',
+                [],
+                { requestId: 'req-1' }
+            );
+
+            await assert.rejects(
+                () => manager.sendPromptForTab(
+                    created.id,
+                    'different payload',
+                    [],
+                    { requestId: 'req-1' }
+                ),
+                (error) => error?.code === 'idempotency_conflict'
+            );
         });
     });
 

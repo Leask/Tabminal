@@ -427,6 +427,186 @@ async function buildBusTimelinePage(tabId, query = {}) {
     return acpBusManager.getTimelinePageForTab(tabId, query);
 }
 
+function buildBusCommandMeta(
+    type,
+    {
+        requestId = '',
+        deduped = false,
+        idempotency = 'none'
+    } = {}
+) {
+    return {
+        type,
+        requestId: String(requestId || '').trim(),
+        deduped: deduped === true,
+        idempotency
+    };
+}
+
+function buildBusCommandError(
+    code,
+    message,
+    {
+        retryable = false,
+        details = null
+    } = {}
+) {
+    const error = {
+        code,
+        message,
+        retryable: retryable === true
+    };
+    if (details && typeof details === 'object') {
+        error.details = details;
+    }
+    return {
+        ok: false,
+        error
+    };
+}
+
+function classifyBusCommandFailure(error, fallbackMessage) {
+    const message = String(
+        error?.message
+        || fallbackMessage
+        || 'ACP bus command failed'
+    );
+    const details = error?.details && typeof error.details === 'object'
+        ? error.details
+        : null;
+    if (error?.code === 'idempotency_conflict') {
+        return {
+            status: 409,
+            body: buildBusCommandError(
+                'idempotency_conflict',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/permission request not found/i.test(message)) {
+        return {
+            status: 409,
+            body: buildBusCommandError(
+                'permission_stale',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/continuity required|authoritative reload/i.test(message)) {
+        return {
+            status: 409,
+            body: buildBusCommandError(
+                'continuity_required',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/session .*not found|acp bus session not found/i.test(message)) {
+        return {
+            status: 404,
+            body: buildBusCommandError(
+                'session_missing',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/agent tab not found/i.test(message)) {
+        return {
+            status: 404,
+            body: buildBusCommandError(
+                'tab_missing',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/session is already open|already open/i.test(message)) {
+        return {
+            status: 409,
+            body: buildBusCommandError(
+                'session_already_open',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/unknown agent/i.test(message)) {
+        return {
+            status: 404,
+            body: buildBusCommandError(
+                'unknown_agent',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/agent unavailable|not ready on the current host/i.test(message)) {
+        return {
+            status: 503,
+            body: buildBusCommandError(
+                'runtime_unavailable',
+                message,
+                {
+                    retryable: true,
+                    details
+                }
+            )
+        };
+    }
+    if (/does not support/i.test(message)) {
+        return {
+            status: 501,
+            body: buildBusCommandError(
+                'not_supported',
+                message,
+                { details }
+            )
+        };
+    }
+    if (/is required|invalid|missing/i.test(message)) {
+        return {
+            status: 400,
+            body: buildBusCommandError(
+                'invalid_request',
+                message,
+                { details }
+            )
+        };
+    }
+    return {
+        status: 500,
+        body: buildBusCommandError(
+            'internal_error',
+            message,
+            { details }
+        )
+    };
+}
+
+async function parseAcpBusCommand(ctx) {
+    if (ctx.is('multipart')) {
+        const { fields, files } = await parseMultipartForm(ctx.req);
+        return {
+            type: firstFormFieldValue(fields?.type),
+            tabId: firstFormFieldValue(fields?.tabId),
+            text: firstFormFieldValue(fields?.text),
+            requestId: firstFormFieldValue(fields?.requestId),
+            attachments: normalizePromptAttachments(
+                files?.[AGENT_ATTACHMENT_FIELD]
+            )
+        };
+    }
+    const body = ctx.request.body || {};
+    return {
+        ...body,
+        type: typeof body.type === 'string' ? body.type : ''
+    };
+}
+
 // Restore sessions
 const acpBusReadyPromise = (async () => {
     const restoredSessions = await persistence.loadSessions();
@@ -686,27 +866,6 @@ router.get('/api/acp-bus/tabs/:tabId/timeline', async (ctx) => {
     ctx.body = page;
 });
 
-router.post('/api/acp-bus/tabs/:tabId/attach', async (ctx) => {
-    const tab = await buildBusBackedAgentTab(ctx.params.tabId, {
-        attach: true
-    });
-    if (!tab) {
-        ctx.status = 404;
-        ctx.body = { error: 'Agent tab not found' };
-        return;
-    }
-    ctx.body = tab;
-});
-
-router.delete('/api/acp-bus/tabs/:tabId/attach', async (ctx) => {
-    await acpBusReadyPromise;
-    await acpBusManager.unpinSession(
-        `agent-tab:${ctx.params.tabId}`,
-        'agent_tab_detach'
-    );
-    ctx.status = 204;
-});
-
 router.get('/api/acp-bus/events', async (ctx) => {
     await acpBusReadyPromise;
     const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
@@ -720,6 +879,321 @@ router.get('/api/acp-bus/events', async (ctx) => {
 router.post('/api/acp-bus/sync', async (ctx) => {
     await acpBusReadyPromise;
     ctx.body = await acpBusManager.syncNow('api');
+});
+
+router.post('/api/acp-bus/command', async (ctx) => {
+    let command = null;
+    try {
+        command = await parseAcpBusCommand(ctx);
+    } catch (error) {
+        ctx.status = 400;
+        ctx.body = classifyBusCommandFailure(
+            error,
+            'Failed to parse ACP bus command'
+        ).body;
+        return;
+    }
+
+    const type = String(command?.type || '').trim();
+    const requestId = String(command?.requestId || '').trim();
+    await acpBusReadyPromise;
+
+    try {
+        switch (type) {
+            case 'tab.create': {
+                const { agentId, cwd, terminalSessionId, modeId } = command;
+                if (!agentId || typeof agentId !== 'string') {
+                    throw new Error('agentId is required');
+                }
+                if (!cwd || typeof cwd !== 'string') {
+                    throw new Error('cwd is required');
+                }
+                const tab = await acpBusManager.createTabForUi({
+                    agentId,
+                    cwd,
+                    terminalSessionId: typeof terminalSessionId === 'string'
+                        ? terminalSessionId
+                        : '',
+                    modeId: typeof modeId === 'string' ? modeId : ''
+                });
+                ctx.status = 201;
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'none'
+                    }),
+                    tab
+                };
+                return;
+            }
+            case 'tab.resume': {
+                const {
+                    agentId,
+                    cwd,
+                    terminalSessionId,
+                    sessionId,
+                    targetTabId,
+                    title
+                } = command;
+                if (!agentId || typeof agentId !== 'string') {
+                    throw new Error('agentId is required');
+                }
+                if (!cwd || typeof cwd !== 'string') {
+                    throw new Error('cwd is required');
+                }
+                if (!sessionId || typeof sessionId !== 'string') {
+                    throw new Error('sessionId is required');
+                }
+                const {
+                    serialized,
+                    busSession,
+                    attachSource
+                } = await acpBusManager.resumeTabForUi({
+                    agentId,
+                    cwd,
+                    sessionId,
+                    targetTabId: typeof targetTabId === 'string'
+                        ? targetTabId
+                        : '',
+                    title: typeof title === 'string' ? title : '',
+                    terminalSessionId: typeof terminalSessionId === 'string'
+                        ? terminalSessionId
+                        : ''
+                });
+                ctx.body = {
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    }),
+                    ...(buildAgentTabAttachAck(serialized, busSession, {
+                        attachSource
+                    }) || {
+                        ok: true,
+                        attach: {
+                            ok: true,
+                            source: attachSource,
+                            continuityState: 'cold'
+                        },
+                        tab: serialized
+                    })
+                };
+                return;
+            }
+            case 'tab.attach': {
+                const tabId = String(command?.tabId || '').trim();
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                const result = await acpBusManager.attachOpenTab(tabId);
+                if (!result?.tab) {
+                    throw new Error('Agent tab not found');
+                }
+                ctx.body = {
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    }),
+                    ...(buildAgentTabAttachAck(result.tab, result.session) || {
+                        ok: true,
+                        attach: {
+                            ok: true,
+                            source: 'cold',
+                            continuityState: 'cold'
+                        },
+                        tab: result.tab
+                    })
+                };
+                return;
+            }
+            case 'tab.detach': {
+                const tabId = String(command?.tabId || '').trim();
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                await acpBusManager.unpinSession(
+                    `agent-tab:${tabId}`,
+                    'agent_tab_detach'
+                );
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    })
+                };
+                return;
+            }
+            case 'tab.prompt': {
+                const tabId = String(command?.tabId || '').trim();
+                const text = typeof command?.text === 'string'
+                    ? command.text
+                    : '';
+                const attachments = Array.isArray(command?.attachments)
+                    ? command.attachments
+                    : [];
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                if (!text.trim() && attachments.length === 0) {
+                    throw new Error('text or attachments are required');
+                }
+                const result = await acpBusManager.sendPromptForTab(
+                    tabId,
+                    text,
+                    attachments,
+                    { requestId }
+                );
+                ctx.status = 202;
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        requestId: result.requestId,
+                        deduped: result.deduped,
+                        idempotency: 'request'
+                    })
+                };
+                return;
+            }
+            case 'tab.cancel': {
+                const tabId = String(command?.tabId || '').trim();
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                await acpBusManager.cancelForTab(tabId);
+                ctx.status = 202;
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    })
+                };
+                return;
+            }
+            case 'tab.resolve_permission': {
+                const tabId = String(command?.tabId || '').trim();
+                const permissionId = String(command?.permissionId || '').trim();
+                const optionId = typeof command?.optionId === 'string'
+                    ? command.optionId
+                    : '';
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                if (!permissionId) {
+                    throw new Error('permissionId is required');
+                }
+                await acpBusManager.resolvePermissionForTab(
+                    tabId,
+                    permissionId,
+                    optionId
+                );
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'none'
+                    })
+                };
+                return;
+            }
+            case 'tab.set_mode': {
+                const tabId = String(command?.tabId || '').trim();
+                const modeId = typeof command?.modeId === 'string'
+                    ? command.modeId
+                    : '';
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                if (!modeId) {
+                    throw new Error('modeId is required');
+                }
+                const tab = await acpBusManager.setModeForTab(tabId, modeId);
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'none'
+                    }),
+                    tab
+                };
+                return;
+            }
+            case 'tab.set_config': {
+                const tabId = String(command?.tabId || '').trim();
+                const configId = typeof command?.configId === 'string'
+                    ? command.configId
+                    : '';
+                const valueId = typeof command?.valueId === 'string'
+                    ? command.valueId
+                    : '';
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                if (!configId) {
+                    throw new Error('configId is required');
+                }
+                if (!valueId) {
+                    throw new Error('valueId is required');
+                }
+                const tab = await acpBusManager.setConfigOptionForTab(
+                    tabId,
+                    configId,
+                    valueId
+                );
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'none'
+                    }),
+                    tab
+                };
+                return;
+            }
+            case 'tab.close': {
+                const tabId = String(command?.tabId || '').trim();
+                if (!tabId) {
+                    throw new Error('tabId is required');
+                }
+                await acpBusManager.closeTabForUi(tabId);
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    })
+                };
+                return;
+            }
+            case 'terminal.release': {
+                const terminalSessionId = String(
+                    command?.terminalSessionId || ''
+                ).trim();
+                if (!terminalSessionId) {
+                    throw new Error('terminalSessionId is required');
+                }
+                const released = await acpBusManager.releaseManagedTerminalSession(
+                    terminalSessionId,
+                    {
+                        destroy: command?.destroy === true
+                    }
+                );
+                ctx.body = {
+                    ok: true,
+                    command: buildBusCommandMeta(type, {
+                        idempotency: 'natural'
+                    }),
+                    released
+                };
+                return;
+            }
+            default:
+                throw new Error(
+                    type
+                        ? `Unknown ACP bus command type: ${type}`
+                        : 'type is required'
+                );
+        }
+    } catch (error) {
+        const classified = classifyBusCommandFailure(
+            error,
+            `Failed to execute ACP bus command ${type || '(unknown)'}`
+        );
+        ctx.status = classified.status;
+        ctx.body = classified.body;
+    }
 });
 
 router.get('/api/agents/sessions', async (ctx) => {
@@ -794,251 +1268,6 @@ router.delete('/api/agents/config/:agentId', async (ctx) => {
             error: error?.message || 'Failed to clear agent config'
         };
     }
-});
-
-router.post('/api/agents/tabs', async (ctx) => {
-    const { agentId, cwd, terminalSessionId, modeId } = ctx.request.body || {};
-    if (!agentId || typeof agentId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'agentId is required' };
-        return;
-    }
-    if (!cwd || typeof cwd !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'cwd is required' };
-        return;
-    }
-
-    try {
-        ctx.status = 201;
-        await acpBusReadyPromise;
-        const serialized = await acpBusManager.createTabForUi({
-            agentId,
-            cwd,
-            terminalSessionId: typeof terminalSessionId === 'string'
-                ? terminalSessionId
-                : '',
-            modeId: typeof modeId === 'string' ? modeId : ''
-        });
-        ctx.body = serialized;
-    } catch (error) {
-        ctx.status = 500;
-        ctx.body = { error: error?.message || 'Failed to create agent tab' };
-    }
-});
-
-router.post('/api/agents/tabs/resume', async (ctx) => {
-    const { agentId, cwd, terminalSessionId, sessionId, targetTabId, title } =
-        ctx.request.body || {};
-    if (!agentId || typeof agentId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'agentId is required' };
-        return;
-    }
-    if (!cwd || typeof cwd !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'cwd is required' };
-        return;
-    }
-    if (!sessionId || typeof sessionId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'sessionId is required' };
-        return;
-    }
-
-    try {
-        ctx.status = 201;
-        await acpBusReadyPromise;
-        const {
-            serialized,
-            busSession,
-            attachSource
-        } = await acpBusManager.resumeTabForUi({
-            agentId,
-            cwd,
-            sessionId,
-            targetTabId: typeof targetTabId === 'string' ? targetTabId : '',
-            title: typeof title === 'string' ? title : '',
-            terminalSessionId: typeof terminalSessionId === 'string'
-                ? terminalSessionId
-                : ''
-        });
-        ctx.body = buildAgentTabAttachAck(serialized, busSession, {
-            attachSource
-        }) || {
-            ok: true,
-            attach: {
-                ok: true,
-                source: attachSource,
-                continuityState: 'cold'
-            },
-            tab: {
-                id: serialized.id,
-                runtimeId: serialized.runtimeId,
-                runtimeKey: serialized.runtimeKey,
-                acpSessionId: serialized.acpSessionId,
-                agentId: serialized.agentId,
-                agentLabel: serialized.agentLabel,
-                commandLabel: serialized.commandLabel,
-                title: serialized.title || '',
-                terminalSessionId: serialized.terminalSessionId || '',
-                cwd: serialized.cwd || '',
-                createdAt: serialized.createdAt || '',
-                status: serialized.status || 'restoring',
-                busy: !!serialized.busy,
-                errorMessage: serialized.errorMessage || '',
-                currentModeId: serialized.currentModeId || '',
-                availableModes: Array.isArray(serialized.availableModes)
-                    ? serialized.availableModes
-                    : [],
-                availableCommands: Array.isArray(serialized.availableCommands)
-                    ? serialized.availableCommands
-                    : [],
-                sessionCapabilities: serialized.sessionCapabilities || {},
-                configOptions: Array.isArray(serialized.configOptions)
-                    ? serialized.configOptions
-                    : [],
-                busConnectionKind: 'shared',
-                busContinuityState: 'cold',
-                busHotRank: null
-            }
-        };
-    } catch (error) {
-        const message = error?.message || 'Failed to resume agent tab';
-        ctx.status = /already open/i.test(message)
-            ? 409
-            : /does not support session restore/i.test(message)
-                ? 501
-                : 500;
-        ctx.body = { error: message };
-    }
-});
-
-router.post('/api/agents/tabs/:tabId/prompt', async (ctx) => {
-    const { tabId } = ctx.params;
-    let text = '';
-    let attachments = [];
-
-    if (ctx.is('multipart')) {
-        try {
-            const { fields, files } = await parseMultipartForm(ctx.req);
-            text = firstFormFieldValue(fields?.text);
-            attachments = normalizePromptAttachments(
-                files?.[AGENT_ATTACHMENT_FIELD]
-            );
-        } catch (error) {
-            ctx.status = 400;
-            ctx.body = {
-                error: error?.message || 'Failed to parse prompt attachments'
-            };
-            return;
-        }
-    } else {
-        const body = ctx.request.body || {};
-        text = typeof body.text === 'string' ? body.text : '';
-    }
-
-    if (!text.trim() && attachments.length === 0) {
-        ctx.status = 400;
-        ctx.body = { error: 'text or attachments are required' };
-        return;
-    }
-
-    try {
-        await acpBusReadyPromise;
-        await acpBusManager.sendPromptForTab(tabId, text, attachments);
-        ctx.status = 202;
-        ctx.body = { ok: true };
-    } catch (error) {
-        ctx.status = 500;
-        ctx.body = { error: error?.message || 'Failed to send prompt' };
-    }
-});
-
-router.post('/api/agents/tabs/:tabId/cancel', async (ctx) => {
-    const { tabId } = ctx.params;
-    try {
-        await acpBusReadyPromise;
-        await acpBusManager.cancelForTab(tabId);
-        ctx.status = 202;
-        ctx.body = { ok: true };
-    } catch (error) {
-        ctx.status = 500;
-        ctx.body = { error: error?.message || 'Failed to cancel prompt' };
-    }
-});
-
-router.post(
-    '/api/agents/tabs/:tabId/permissions/:permissionId',
-    async (ctx) => {
-        const { tabId, permissionId } = ctx.params;
-        const { optionId } = ctx.request.body || {};
-        try {
-            await acpBusReadyPromise;
-            await acpBusManager.resolvePermissionForTab(
-                tabId,
-                permissionId,
-                typeof optionId === 'string' ? optionId : ''
-            );
-            ctx.status = 200;
-            ctx.body = { ok: true };
-        } catch (error) {
-            ctx.status = 500;
-            ctx.body = {
-                error: error?.message || 'Failed to resolve permission'
-            };
-        }
-    }
-);
-
-router.post('/api/agents/tabs/:tabId/mode', async (ctx) => {
-    const { tabId } = ctx.params;
-    const { modeId } = ctx.request.body || {};
-    if (!modeId || typeof modeId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'modeId is required' };
-        return;
-    }
-    try {
-        await acpBusReadyPromise;
-        ctx.body = await acpBusManager.setModeForTab(tabId, modeId);
-    } catch (error) {
-        ctx.status = 500;
-        ctx.body = { error: error?.message || 'Failed to switch mode' };
-    }
-});
-
-router.post('/api/agents/tabs/:tabId/config', async (ctx) => {
-    const { tabId } = ctx.params;
-    const { configId, valueId } = ctx.request.body || {};
-    if (!configId || typeof configId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'configId is required' };
-        return;
-    }
-    if (!valueId || typeof valueId !== 'string') {
-        ctx.status = 400;
-        ctx.body = { error: 'valueId is required' };
-        return;
-    }
-    try {
-        await acpBusReadyPromise;
-        ctx.body = await acpBusManager.setConfigOptionForTab(
-            tabId,
-            configId,
-            valueId
-        );
-    } catch (error) {
-        ctx.status = 500;
-        ctx.body = { error: error?.message || 'Failed to update agent setting' };
-    }
-});
-
-router.delete('/api/agents/tabs/:tabId', async (ctx) => {
-    const { tabId } = ctx.params;
-    await acpBusReadyPromise;
-    await acpBusManager.closeTabForUi(tabId);
-    ctx.status = 204;
 });
 
 // Middleware

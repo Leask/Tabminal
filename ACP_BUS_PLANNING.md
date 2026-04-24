@@ -119,8 +119,6 @@ Open agent tab state:
 
 ```text
 GET    /api/acp-bus/tabs/:tabId
-POST   /api/acp-bus/tabs/:tabId/attach
-DELETE /api/acp-bus/tabs/:tabId/attach
 ```
 
 Timeline paging:
@@ -128,6 +126,38 @@ Timeline paging:
 ```text
 GET /api/acp-bus/tabs/:tabId/timeline?limit=&before=&after=
 ```
+
+Bus-native commands:
+
+```text
+POST /api/acp-bus/command
+```
+
+Current command types:
+
+- `tab.create`
+- `tab.resume`
+- `tab.attach`
+- `tab.detach`
+- `tab.prompt`
+- `tab.cancel`
+- `tab.resolve_permission`
+- `tab.set_mode`
+- `tab.set_config`
+- `tab.close`
+- `terminal.release`
+
+Idempotency rules:
+
+- `tab.attach`, `tab.detach`, `tab.resume`, `tab.cancel`, and `tab.close`
+  are naturally idempotent
+- `tab.prompt` is not naturally idempotent
+- `tab.prompt` supports optional `requestId` for at-most-once handling on the
+  same open tab and same prompt payload
+- reusing a `requestId` with a different prompt payload is a conflict
+
+Command errors now use a structured envelope with stable `code`,
+human-readable `message`, `retryable`, and optional `details`.
 
 Timeline page shape is index-first:
 
@@ -161,7 +191,8 @@ The frontend host client owns one `/ws/acp-bus` connection per host.
 
 Open agent tabs:
 
-- call `POST /api/acp-bus/tabs/:tabId/attach` when attached or restored
+- call `POST /api/acp-bus/command` with `type = tab.attach` when attached or
+  restored
 - call `GET /api/acp-bus/tabs/:tabId` for lightweight metadata sync
 - call `GET /api/acp-bus/tabs/:tabId/timeline` for transcript windows
 - apply safe websocket `changedItems` deltas by `itemKey`
@@ -191,7 +222,7 @@ The current resume flow is intentionally lightweight:
 
 1. User selects a history item from the slash menu.
 2. Frontend clears composer text and the command menu immediately.
-3. Frontend calls `POST /api/agents/tabs/resume` with the target tab id.
+3. Frontend calls `POST /api/acp-bus/command` with `type = tab.resume`.
 4. Backend binds the current tab to the requested ACP session.
 5. Backend ensures the bus pin/attach path is active.
 6. Backend returns lightweight tab metadata and attach acknowledgement.
@@ -233,22 +264,6 @@ API, but they are not implemented in this branch.
 
 ## Next Plan
 
-### Phase 2D: Public Bus Command Contract
-
-Goal: make the already-existing bus-owned control path explicit enough for
-future clients.
-
-Current web tab controls already route through the bus manager. The remaining
-work is API/product hardening:
-
-1. Document command semantics for prompt, cancel, permission, mode, config,
-   attach, and release.
-2. Define idempotency expectations for attach/resume/prompt submission.
-3. Define error envelopes for runtime unavailable, session missing,
-   permission stale, and continuity-required cases.
-4. Decide whether native clients should keep using legacy `/api/agents/*`
-   routes or move to explicit `/api/acp-bus/*/command` routes.
-
 ### Phase 2E: Global Notifications
 
 Goal: surface useful bus activity outside currently open tabs.
@@ -272,19 +287,30 @@ fetch too much state to classify events cheaply.
 
 ### Phase 2F: Continuity Repair Policy
 
-Goal: make `resync_required` behavior explicit.
+Goal: keep continuity repair entirely inside the backend bus.
 
-Open decision:
+Policy:
 
-- auto-load on open for maximum correctness
-- ask/notify before expensive load for predictable cost
-- lazy-load only when the user scrolls into unknown history
+- UI and native clients only read local bus state and timeline pages
+- frontend scrolling never talks directly to upstream ACP providers
+- manual attach/resume and hot-set restore attach compare upstream
+  `updatedAt` with the last local receive/load time
+- if that attach gap is greater than `10min`, the bus performs an
+  authoritative replay and rewrites the local structured timeline
+- if that attach gap is within `10min`, the bus accepts the local cache and
+  continues from the live stream
+- cold sessions are repaired opportunistically after non-startup metadata syncs
+- cold repair runs only when normalized 1-minute CPU load is below the bus
+  threshold
+- each low-load sync repairs at most one cold session: the present non-hot
+  session whose local sync is oldest and stale by more than `10min`
 
-Preferred default for now:
+User-visible behavior:
 
-- do not put expensive `loadSession` on the initial resume/open critical path
-- mark continuity clearly
-- repair in the background only when the gap is likely small or the user asks
+- no explicit continuity warning UI
+- no user-triggered repair action in this phase
+- repair success publishes normal bus delta/full-sync events
+- repair failure is kept as internal bus event/state for diagnostics
 
 ### Phase 2G: External Consumers
 
@@ -305,9 +331,5 @@ Prerequisites:
 
 ## Current Decision Points
 
-1. Should `resync_required` auto-load, prompt the user, or repair lazily?
-2. Should command APIs stay under legacy `/api/agents/*` paths for web
-   compatibility, or should bus-native command routes be introduced before
-   native/adapters?
-3. Should hot-set policy become user-configurable before global notifications
+1. Should hot-set policy become user-configurable before global notifications
    ship?

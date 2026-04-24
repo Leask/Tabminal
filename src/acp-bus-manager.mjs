@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { EventEmitter } from 'node:events';
@@ -18,6 +19,9 @@ const DEFAULT_CACHE_SESSION_LIMIT = 1000;
 const DEFAULT_EVENT_LIMIT = 2000;
 const DEFAULT_SNAPSHOT_FLUSH_DELAY_MS = 250;
 const DEFAULT_REPLAY_GAP_MS = 10 * 60 * 1000;
+const DEFAULT_COMMAND_REQUEST_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_COMMAND_REQUEST_LIMIT = 500;
+const DEFAULT_COLD_REPAIR_LOAD_THRESHOLD = 0.7;
 
 function nowIso() {
     return new Date().toISOString();
@@ -31,6 +35,15 @@ function createRuntimeStoreKey(kind, agentId, cwd) {
     return `bus:${kind}:${String(agentId || '').trim()}:${path.resolve(cwd || '/')}`;
 }
 
+function getDefaultCpuLoadRatio() {
+    const load = os.loadavg()[0];
+    const cores = typeof os.availableParallelism === 'function'
+        ? os.availableParallelism()
+        : os.cpus().length;
+    const safeCores = Number.isFinite(cores) && cores > 0 ? cores : 1;
+    return load / safeCores;
+}
+
 function cloneSerializable(value, fallback) {
     if (value === undefined) {
         return fallback;
@@ -40,6 +53,25 @@ function cloneSerializable(value, fallback) {
     } catch {
         return fallback;
     }
+}
+
+function normalizeCommandRequestId(value) {
+    return String(value || '').trim();
+}
+
+function buildPromptRequestSignature(text, attachments = []) {
+    return JSON.stringify({
+        text: String(text || ''),
+        attachments: Array.isArray(attachments)
+            ? attachments.map((attachment) => ({
+                name: String(attachment?.name || '').trim(),
+                mimeType: String(attachment?.mimeType || '').trim(),
+                size: Number.isFinite(attachment?.size)
+                    ? attachment.size
+                    : 0
+            }))
+            : []
+    });
 }
 
 function normalizeOpenAgentTab(entry = {}) {
@@ -119,6 +151,20 @@ export class AcpBusManager extends EventEmitter {
         this.snapshotFlushDelayMs = Number.isFinite(options.snapshotFlushDelayMs)
             ? Math.max(50, Math.floor(options.snapshotFlushDelayMs))
             : DEFAULT_SNAPSHOT_FLUSH_DELAY_MS;
+        this.commandRequestTtlMs = Number.isFinite(options.commandRequestTtlMs)
+            ? Math.max(1000, Math.floor(options.commandRequestTtlMs))
+            : DEFAULT_COMMAND_REQUEST_TTL_MS;
+        this.commandRequestLimit = Number.isFinite(options.commandRequestLimit)
+            ? Math.max(1, Math.floor(options.commandRequestLimit))
+            : DEFAULT_COMMAND_REQUEST_LIMIT;
+        this.coldRepairLoadThreshold = Number.isFinite(
+            options.coldRepairLoadThreshold
+        )
+            ? Math.max(0, options.coldRepairLoadThreshold)
+            : DEFAULT_COLD_REPAIR_LOAD_THRESHOLD;
+        this.getCpuLoadRatio = typeof options.getCpuLoadRatio === 'function'
+            ? options.getCpuLoadRatio
+            : getDefaultCpuLoadRatio;
         this.discoveryCwd = path.resolve(
             options.discoveryCwd || process.cwd()
         );
@@ -136,6 +182,8 @@ export class AcpBusManager extends EventEmitter {
         this.openTabs = new Map();
         this.openTabsPersistenceChain = Promise.resolve();
         this.pendingResumeTabs = new Map();
+        this.commandRequests = new Map();
+        this.coldRepairPromise = null;
         this.snapshotFlushTimers = new Map();
         this.rebalancePromise = null;
         this.rebalancePendingReason = '';
@@ -187,6 +235,8 @@ export class AcpBusManager extends EventEmitter {
         this.pinnedSessions.clear();
         this.tabToSessionKey.clear();
         this.openTabs.clear();
+        this.commandRequests.clear();
+        this.coldRepairPromise = null;
 
         const discoveryEntries = Array.from(this.discoveryRuntimes.values());
         this.discoveryRuntimes.clear();
@@ -772,7 +822,35 @@ export class AcpBusManager extends EventEmitter {
         return serialized;
     }
 
-    async sendPromptForTab(tabId, text, attachments = []) {
+    async sendPromptForTab(tabId, text, attachments = [], options = {}) {
+        const requestId = normalizeCommandRequestId(options.requestId);
+        if (requestId) {
+            return await this.#runCommandRequest(
+                `tab_prompt:${String(tabId || '').trim()}:${requestId}`,
+                buildPromptRequestSignature(text, attachments),
+                async () => {
+                    await this.#sendPromptForTabInternal(
+                        tabId,
+                        text,
+                        attachments
+                    );
+                    return {
+                        accepted: true,
+                        requestId,
+                        deduped: false
+                    };
+                }
+            );
+        }
+        await this.#sendPromptForTabInternal(tabId, text, attachments);
+        return {
+            accepted: true,
+            requestId: '',
+            deduped: false
+        };
+    }
+
+    async #sendPromptForTabInternal(tabId, text, attachments = []) {
         const target = this.#getControlTarget(tabId);
         if (target.source === 'bus') {
             await target.handle.runtimeEntry.runtime.sendPrompt(
@@ -782,6 +860,71 @@ export class AcpBusManager extends EventEmitter {
             );
             this.#persistBusHandleSnapshot(target.handle, 'send_prompt');
             return;
+        }
+    }
+
+    #pruneCommandRequests() {
+        if (this.commandRequests.size === 0) {
+            return;
+        }
+        const nowMs = Date.now();
+        for (const [key, entry] of this.commandRequests.entries()) {
+            if ((nowMs - entry.updatedAtMs) > this.commandRequestTtlMs) {
+                this.commandRequests.delete(key);
+            }
+        }
+        while (this.commandRequests.size > this.commandRequestLimit) {
+            const oldestKey = this.commandRequests.keys().next().value;
+            if (!oldestKey) {
+                break;
+            }
+            this.commandRequests.delete(oldestKey);
+        }
+    }
+
+    async #runCommandRequest(key, signature, execute) {
+        this.#pruneCommandRequests();
+        const existing = this.commandRequests.get(key);
+        if (existing) {
+            if (existing.signature !== signature) {
+                const error = new Error(
+                    'requestId was already used for a different command payload'
+                );
+                error.code = 'idempotency_conflict';
+                throw error;
+            }
+            if (existing.promise) {
+                const result = await existing.promise;
+                return {
+                    ...result,
+                    deduped: true
+                };
+            }
+            if (existing.result) {
+                return {
+                    ...existing.result,
+                    deduped: true
+                };
+            }
+        }
+        const entry = {
+            signature,
+            updatedAtMs: Date.now(),
+            promise: null,
+            result: null
+        };
+        const promise = (async () => await execute())();
+        entry.promise = promise;
+        this.commandRequests.set(key, entry);
+        try {
+            const result = await promise;
+            entry.promise = null;
+            entry.result = result;
+            entry.updatedAtMs = Date.now();
+            return result;
+        } catch (error) {
+            this.commandRequests.delete(key);
+            throw error;
         }
     }
 
@@ -955,6 +1098,9 @@ export class AcpBusManager extends EventEmitter {
 
         if (complete) {
             await this.#rebalanceHotSessions(reason);
+            if (reason !== 'startup') {
+                await this.#maybeRepairOneColdSession(reason);
+            }
         }
 
         return {
@@ -986,6 +1132,105 @@ export class AcpBusManager extends EventEmitter {
             throw new Error(availability.reason || 'Agent unavailable');
         }
         return definition;
+    }
+
+    #isSystemBusyForColdRepair() {
+        let ratio = 0;
+        try {
+            ratio = this.getCpuLoadRatio();
+        } catch {
+            return true;
+        }
+        if (!Number.isFinite(ratio)) {
+            return true;
+        }
+        return ratio >= this.coldRepairLoadThreshold;
+    }
+
+    async #maybeRepairOneColdSession(reason) {
+        if (this.coldRepairPromise) {
+            return await this.coldRepairPromise;
+        }
+        if (this.#isSystemBusyForColdRepair()) {
+            return null;
+        }
+        const candidate = this.store.listColdRepairCandidates(1, {
+            minAgeMs: this.replayGapMs,
+            now: this.now(),
+            includeSnapshot: true
+        }).find((row) => !this.observedSessions.has(row.sessionKey));
+        if (!candidate) {
+            return null;
+        }
+        this.coldRepairPromise = this.#repairColdSession(candidate, reason)
+            .catch((error) => {
+                const updated = this.store.updateContinuityState(
+                    candidate.sessionKey,
+                    'resync_required',
+                    {
+                        status: 'ready',
+                        busy: false,
+                        errorMessage: error?.message || 'Cold repair failed'
+                    }
+                );
+                this.#emitEvent('session_resync_required', updated || candidate, {
+                    reason: 'cold_repair_failed',
+                    error: error?.message || 'Cold repair failed'
+                });
+                return null;
+            })
+            .finally(() => {
+                this.coldRepairPromise = null;
+            });
+        return await this.coldRepairPromise;
+    }
+
+    async #repairColdSession(row, reason) {
+        const definition = this.acpManager.definitions.find(
+            (entry) => entry.id === row.agentId
+        );
+        if (!definition) {
+            throw new Error(`Unknown ACP provider: ${row.agentId}`);
+        }
+        const runtimeEntry = this.#getObserveRuntime(definition, row.cwd);
+        const tabId = crypto.randomUUID();
+        const repairedAt = this.now();
+        let serialized = null;
+        try {
+            serialized = this.#decorateSerializedTab(
+                await runtimeEntry.runtime.resumeTab({
+                    id: tabId,
+                    acpSessionId: row.sessionId,
+                    cwd: row.cwd,
+                    terminalSessionId: '',
+                    title: row.title || ''
+                }, {
+                    replayHistory: true
+                }),
+                runtimeEntry.runtime
+            );
+            const persisted = this.store.saveObservedSession(serialized, {
+                continuityState: 'cached',
+                observedAt: repairedAt,
+                loadedAt: repairedAt,
+                receivedAt: repairedAt,
+                authoritativeSnapshot: true,
+                preserveSnapshotContent: false,
+                upstreamUpdatedAt: row.upstreamUpdatedAt
+            });
+            this.#emitEvent(
+                'session_snapshot_updated',
+                persisted.record,
+                this.#buildSnapshotEventExtra(persisted, {
+                    reason: 'cold_repair',
+                    trigger: reason
+                })
+            );
+            return persisted.record;
+        } finally {
+            runtimeEntry.runtime.detachTab(tabId);
+            await this.#disposeObserveRuntimeIfIdle(runtimeEntry);
+        }
     }
 
     #getSessionCapabilities(runtime) {

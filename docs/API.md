@@ -915,172 +915,30 @@ Response:
 }
 ```
 
-### 12.6 `POST /api/agents/tabs`
+### 12.6 ACP Tab Control
 
-Creates a new ACP tab.
+ACP tab mutations no longer use `/api/agents/tabs*`.
 
-Request:
+All write operations for ACP tabs now go through the unified bus-native command
+route:
 
-```json
-{
-  "agentId": "codex",
-  "cwd": "/Users/leask/Documents/Tabminal",
-  "terminalSessionId": "optional-linked-terminal-session-id",
-  "modeId": "optional-mode-id"
-}
+```text
+POST /api/acp-bus/command
 ```
 
-Response:
+This includes:
 
-- `201 Created`
-- body is the full serialized tab
-
-### 12.7 `POST /api/agents/tabs/resume`
-
-Resumes an existing upstream ACP session into a Tabminal tab.
-
-Request:
-
-```json
-{
-  "agentId": "codex",
-  "cwd": "/Users/leask/Documents/Tabminal",
-  "sessionId": "upstream-session-id",
-  "title": "optional local title override",
-  "terminalSessionId": "optional-linked-terminal-session-id"
-}
-```
-
-Response:
-
-- `201 Created`
-- body is the full serialized tab
-
-Errors:
-
-- `409` session already open in another local tab
-- `501` runtime cannot restore/load sessions
-
-### 12.8 `POST /api/agents/tabs/:tabId/prompt`
-
-Sends a prompt to an open ACP tab.
-
-Supported content types:
-
-- `application/json`
-- `multipart/form-data`
-
-JSON request:
-
-```json
-{
-  "text": "Explain this failure"
-}
-```
-
-Multipart fields:
-
-- text field: `text`
-- attachment field name: `attachments`
-
-Attachment limits:
-
-- max files: `8`
-- max single file: `10 MiB`
-- max total file size: `25 MiB`
-
-Response:
-
-```json
-{
-  "ok": true
-}
-```
-
-Status:
-
-- `202 Accepted`
-
-Validation:
-
-- request must contain non-empty `text` or at least one attachment
-
-### 12.9 `POST /api/agents/tabs/:tabId/cancel`
-
-Cancels the active prompt turn.
-
-Response:
-
-```json
-{
-  "ok": true
-}
-```
-
-Status:
-
-- `202 Accepted`
-
-### 12.10 `POST /api/agents/tabs/:tabId/permissions/:permissionId`
-
-Resolves a pending permission request.
-
-Request:
-
-```json
-{
-  "optionId": "approve"
-}
-```
-
-Response:
-
-```json
-{
-  "ok": true
-}
-```
-
-### 12.11 `POST /api/agents/tabs/:tabId/mode`
-
-Switches ACP session mode.
-
-Request:
-
-```json
-{
-  "modeId": "high"
-}
-```
-
-Response:
-
-- full serialized tab state
-
-### 12.12 `POST /api/agents/tabs/:tabId/config`
-
-Applies one ACP config option.
-
-Request:
-
-```json
-{
-  "configId": "model",
-  "valueId": "gpt-5.4"
-}
-```
-
-Response:
-
-- full serialized tab state
-
-### 12.13 `DELETE /api/agents/tabs/:tabId`
-
-Closes the ACP tab.
-
-Response:
-
-- `204 No Content`
+- create
+- resume
+- attach
+- detach
+- prompt
+- cancel
+- resolve permission
+- set mode
+- set config
+- close tab
+- release managed terminal
 
 ## 13. ACP Bus HTTP API
 
@@ -1147,6 +1005,8 @@ Notes:
 
 - `snapshot` is only present when `snapshot=1`.
 - This endpoint is useful for diagnostics and future session browsers.
+- Continuity repair is backend-owned. Clients should treat `continuityState`
+  as diagnostic metadata and continue reading timeline pages from the bus DB.
 - The current `/resume` picker still uses `/api/agents/sessions`; it is not
   bus-first yet because global upstream listing support differs by provider.
 
@@ -1312,32 +1172,272 @@ Recommended native behavior:
 - Do not derive timestamps from timeline rows for display ordering.
 - Do not parse cursor contents or persist assumptions about cursor encoding.
 
-### 13.6 `POST /api/acp-bus/tabs/:tabId/attach`
+### 13.6 `POST /api/acp-bus/command`
 
-Pins an open agent tab into the bus and ensures the bus observes that upstream
-ACP session.
+The ACP bus command route is the only HTTP mutation surface for ACP tabs.
 
-Response:
+Request body always includes a `type` field.
 
-- authoritative open tab metadata, same shape as
-  `GET /api/acp-bus/tabs/:tabId`
-
-Native clients should call this after restoring an open workspace tab and before
-expecting bus events for that tab.
-
-### 13.7 `DELETE /api/acp-bus/tabs/:tabId/attach`
-
-Removes the UI pin for an open agent tab.
-
-Response:
+#### Command envelope
 
 ```json
 {
-  "ok": true
+  "type": "tab.prompt"
 }
 ```
 
-### 13.8 `GET /api/acp-bus/events`
+Successful responses always include:
+
+```json
+{
+  "ok": true,
+  "command": {
+    "type": "tab.prompt",
+    "requestId": "optional-client-request-id",
+    "deduped": false,
+    "idempotency": "request"
+  }
+}
+```
+
+#### Supported command types
+
+`tab.create`
+
+```json
+{
+  "type": "tab.create",
+  "agentId": "codex",
+  "cwd": "/Users/leask/Documents/Tabminal",
+  "terminalSessionId": "optional-linked-terminal-session-id",
+  "modeId": "optional-mode-id"
+}
+```
+
+Response:
+
+- `201 Created`
+- includes `tab`
+
+Idempotency:
+
+- not idempotent
+- retrying can create another local open tab
+
+`tab.resume`
+
+```json
+{
+  "type": "tab.resume",
+  "agentId": "codex",
+  "cwd": "/Users/leask/Documents/Tabminal",
+  "sessionId": "upstream-session-id",
+  "targetTabId": "optional-existing-open-tab-id",
+  "title": "optional-local-title-override",
+  "terminalSessionId": "optional-linked-terminal-session-id"
+}
+```
+
+Response:
+
+- includes `tab`
+- includes `attach`
+
+Idempotency:
+
+- naturally idempotent for the same target tab and upstream session
+- backend coalesces concurrent resumes for the same `(agentId, sessionId,
+  targetTabId)`
+
+`tab.attach`
+
+```json
+{
+  "type": "tab.attach",
+  "tabId": "open-tab-id"
+}
+```
+
+Response:
+
+- includes `tab`
+- includes `attach`
+
+Idempotency:
+
+- naturally idempotent
+
+`tab.detach`
+
+```json
+{
+  "type": "tab.detach",
+  "tabId": "open-tab-id"
+}
+```
+
+Idempotency:
+
+- naturally idempotent
+
+`tab.prompt`
+
+Supported content types:
+
+- `application/json`
+- `multipart/form-data`
+
+JSON request:
+
+```json
+{
+  "type": "tab.prompt",
+  "tabId": "open-tab-id",
+  "text": "Explain this failure",
+  "requestId": "optional-client-generated-id"
+}
+```
+
+Multipart fields:
+
+- `type = tab.prompt`
+- `tabId`
+- `text`
+- optional `requestId`
+- attachment field name: `attachments`
+
+Attachment limits:
+
+- max files: `8`
+- max single file: `10 MiB`
+- max total file size: `25 MiB`
+
+Response:
+
+- `202 Accepted`
+
+Idempotency:
+
+- prompt is not naturally idempotent
+- without `requestId`, replaying the same request can send the prompt again
+- with `requestId`, the bus provides at-most-once handling for the same open
+  tab and same prompt payload
+- reusing a `requestId` with a different payload returns
+  `409 idempotency_conflict`
+
+Validation:
+
+- request must contain non-empty `text` or at least one attachment
+
+`tab.cancel`
+
+```json
+{
+  "type": "tab.cancel",
+  "tabId": "open-tab-id"
+}
+```
+
+Idempotency:
+
+- naturally idempotent
+
+`tab.resolve_permission`
+
+```json
+{
+  "type": "tab.resolve_permission",
+  "tabId": "open-tab-id",
+  "permissionId": "permission-id",
+  "optionId": "approve"
+}
+```
+
+`tab.set_mode`
+
+```json
+{
+  "type": "tab.set_mode",
+  "tabId": "open-tab-id",
+  "modeId": "high"
+}
+```
+
+Response:
+
+- includes `tab`
+
+`tab.set_config`
+
+```json
+{
+  "type": "tab.set_config",
+  "tabId": "open-tab-id",
+  "configId": "model",
+  "valueId": "gpt-5.4"
+}
+```
+
+Response:
+
+- includes `tab`
+
+`tab.close`
+
+```json
+{
+  "type": "tab.close",
+  "tabId": "open-tab-id"
+}
+```
+
+Idempotency:
+
+- naturally idempotent
+
+`terminal.release`
+
+```json
+{
+  "type": "terminal.release",
+  "terminalSessionId": "managed-terminal-session-id",
+  "destroy": true
+}
+```
+
+This releases a managed ACP terminal from the bus/runtime side.
+
+#### Error envelope
+
+All ACP bus commands use the same error shape:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "runtime_unavailable",
+    "message": "Codex CLI is not ready on this host.",
+    "retryable": true,
+    "details": {}
+  }
+}
+```
+
+Important command error codes:
+
+- `invalid_request`
+- `unknown_agent`
+- `runtime_unavailable`
+- `session_missing`
+- `tab_missing`
+- `permission_stale`
+- `continuity_required`
+- `session_already_open`
+- `idempotency_conflict`
+- `not_supported`
+- `internal_error`
+
+### 13.7 `GET /api/acp-bus/events`
 
 Returns a bounded recent ACP bus event log.
 
@@ -1709,14 +1809,14 @@ not replace:
 - `/api/agents` for definitions, config, and open-tab inventory
 - `/api/acp-bus/tabs/:tabId` for authoritative open-tab metadata
 - `/api/acp-bus/tabs/:tabId/timeline` for paged transcript history
-- `/api/agents/tabs/:tabId/*` HTTP mutations
+- `/api/acp-bus/command` for ACP tab mutations and runtime control
 
 Clients should expect HTTP snapshots and timeline pages to correct drift after
 reconnects, restore, or missed websocket events.
 
 ## 16. Error Model
 
-Tabminal uses plain HTTP status codes plus JSON bodies of the form:
+Most routes use plain HTTP status codes plus JSON bodies of the form:
 
 ```json
 {
@@ -1744,7 +1844,25 @@ Common statuses:
 - `500` internal server/runtime failure
 - `501` runtime capability not supported
 
-### 16.1 Heartbeat write conflict
+### 16.1 ACP Bus Command Errors
+
+`POST /api/acp-bus/command` uses the structured command error envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "runtime_unavailable",
+    "message": "Codex CLI is not ready on this host.",
+    "retryable": true,
+    "details": {}
+  }
+}
+```
+
+This route is the exception to the older string-only error body.
+
+### 16.2 Heartbeat write conflict
 
 Heartbeat file writes may return per-file conflicts through
 `fileWriteResults`:
@@ -1869,14 +1987,6 @@ collapsed into one websocket namespace.
 - `GET /api/agents/config`
 - `PUT /api/agents/config/:agentId`
 - `DELETE /api/agents/config/:agentId`
-- `POST /api/agents/tabs`
-- `POST /api/agents/tabs/resume`
-- `POST /api/agents/tabs/:tabId/prompt`
-- `POST /api/agents/tabs/:tabId/cancel`
-- `POST /api/agents/tabs/:tabId/permissions/:permissionId`
-- `POST /api/agents/tabs/:tabId/mode`
-- `POST /api/agents/tabs/:tabId/config`
-- `DELETE /api/agents/tabs/:tabId`
 
 ### ACP bus
 
@@ -1885,7 +1995,6 @@ collapsed into one websocket namespace.
 - `GET /api/acp-bus/sessions/:agentId/:sessionId`
 - `GET /api/acp-bus/tabs/:tabId`
 - `GET /api/acp-bus/tabs/:tabId/timeline`
-- `POST /api/acp-bus/tabs/:tabId/attach`
-- `DELETE /api/acp-bus/tabs/:tabId/attach`
+- `POST /api/acp-bus/command`
 - `GET /api/acp-bus/events`
 - `WS /ws/acp-bus`

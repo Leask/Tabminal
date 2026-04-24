@@ -10605,19 +10605,26 @@ class AgentTab {
         this.busSyncNeedsTimeline = false;
 
         this.busSyncPromise = (async () => {
-            const response = await this.server.fetch(
-                attach
-                    ? `/api/acp-bus/tabs/${this.id}/attach`
-                    : `/api/acp-bus/tabs/${this.id}`,
-                attach ? { method: 'POST' } : {}
-            );
-            if (!response.ok) {
-                await throwResponseError(
-                    response,
-                    'Failed to synchronize agent tab'
-                );
-            }
-            const data = await response.json();
+            const data = attach
+                ? await sendAcpBusCommand(this.server, {
+                    type: 'tab.attach',
+                    tabId: this.id
+                })
+                : await (async () => {
+                    const response = await this.server.fetch(
+                        `/api/acp-bus/tabs/${this.id}`
+                    );
+                    if (!response.ok) {
+                        await throwResponseError(
+                            response,
+                            'Failed to synchronize agent tab'
+                        );
+                    }
+                    return await response.json();
+                })();
+            const tabData = data?.tab && typeof data.tab === 'object'
+                ? data.tab
+                : data;
             const shouldLoadLatestTimeline = (
                 requestedTimeline
                 && (
@@ -10626,7 +10633,7 @@ class AgentTab {
                     || !this.timelinePage?.hasNewer
                 )
             );
-            this.update(data);
+            this.update(tabData);
             this.busAttachedSessionKey = this.getObservedSessionKey();
             if (shouldLoadLatestTimeline) {
                 await this.loadTimelinePage({
@@ -11609,35 +11616,16 @@ class AgentTab {
             toolCount: this.toolCalls.size,
             permissionCount: this.permissions.size
         };
-        const hasAttachments = Array.isArray(attachments)
-            && attachments.length > 0;
-        const request = {
-            method: 'POST'
-        };
-        if (hasAttachments) {
-            const formData = new FormData();
-            formData.append('text', text);
-            for (const attachment of attachments) {
-                if (attachment?.file instanceof File) {
-                    formData.append(
-                        'attachments',
-                        attachment.file,
-                        attachment.name
-                    );
-                }
-            }
-            request.body = formData;
-        } else {
-            request.headers = { 'Content-Type': 'application/json' };
-            request.body = JSON.stringify({ text });
-        }
-        const response = await this.server.fetch(
-            `/api/agents/tabs/${this.id}/prompt`,
-            request
+        await sendAcpBusCommand(
+            this.server,
+            {
+                type: 'tab.prompt',
+                tabId: this.id,
+                text,
+                requestId: crypto.randomUUID()
+            },
+            { attachments }
         );
-        if (!response.ok) {
-            await throwResponseError(response, 'Failed to send prompt');
-        }
         await syncAgentsForServer(this.server, { force: true });
         void this.#reconcilePromptStart(baseline);
     }
@@ -11775,73 +11763,48 @@ class AgentTab {
     }
 
     async cancel() {
-        const response = await this.server.fetch(
-            `/api/agents/tabs/${this.id}/cancel`,
-            {
-                method: 'POST'
-            }
-        );
-        if (!response.ok) {
-            await throwResponseError(response, 'Failed to stop prompt');
-        }
+        await sendAcpBusCommand(this.server, {
+            type: 'tab.cancel',
+            tabId: this.id
+        });
         await this.#waitForSettled();
     }
 
     async resolvePermission(permissionId, optionId = '') {
-        const response = await this.server.fetch(
-            `/api/agents/tabs/${this.id}/permissions/${permissionId}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ optionId })
-            }
-        );
-        if (!response.ok) {
-            await throwResponseError(response, 'Failed to resolve permission');
-        }
+        await sendAcpBusCommand(this.server, {
+            type: 'tab.resolve_permission',
+            tabId: this.id,
+            permissionId,
+            optionId
+        });
         await syncAgentsForServer(this.server, { force: true });
     }
 
     async setConfigOption(configId, valueId) {
-        const response = await this.server.fetch(
-            `/api/agents/tabs/${this.id}/config`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ configId, valueId })
-            }
-        );
-        if (!response.ok) {
-            await throwResponseError(
-                response,
-                'Failed to update agent setting'
-            );
-        }
-        const data = await response.json();
-        this.update(data);
+        const data = await sendAcpBusCommand(this.server, {
+            type: 'tab.set_config',
+            tabId: this.id,
+            configId,
+            valueId
+        });
+        this.update(data?.tab || data);
         this.notifyUi();
     }
 
     async setMode(modeId) {
-        const response = await this.server.fetch(
-            `/api/agents/tabs/${this.id}/mode`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ modeId })
-            }
-        );
-        if (!response.ok) {
-            await throwResponseError(response, 'Failed to switch mode');
-        }
-        const data = await response.json();
-        this.update(data);
+        const data = await sendAcpBusCommand(this.server, {
+            type: 'tab.set_mode',
+            tabId: this.id,
+            modeId
+        });
+        this.update(data?.tab || data);
         this.notifyUi();
     }
 
     async close() {
-        await this.server.fetch(`/api/agents/tabs/${this.id}`, {
-            method: 'DELETE'
+        await sendAcpBusCommand(this.server, {
+            type: 'tab.close',
+            tabId: this.id
         });
     }
 
@@ -11852,8 +11815,9 @@ class AgentTab {
             this.busSyncTimer = null;
         }
         if (this.server.isAuthenticated) {
-            void this.server.fetch(`/api/acp-bus/tabs/${this.id}/attach`, {
-                method: 'DELETE'
+            void sendAcpBusCommand(this.server, {
+                type: 'tab.detach',
+                tabId: this.id
             }).catch(() => {
                 // Ignore detach failures during local teardown.
             });
@@ -15026,15 +14990,74 @@ function buildAgentSetupMessage(definition) {
 
 async function throwResponseError(response, fallbackMessage) {
     let message = fallbackMessage;
+    let code = '';
+    let retryable = false;
+    let details = null;
     try {
         const payload = await response.json();
-        if (payload?.error) {
+        if (payload?.error && typeof payload.error === 'object') {
+            message = payload.error.message || fallbackMessage;
+            code = typeof payload.error.code === 'string'
+                ? payload.error.code
+                : '';
+            retryable = payload.error.retryable === true;
+            details = payload.error.details && typeof payload.error.details === 'object'
+                ? payload.error.details
+                : null;
+        } else if (payload?.error) {
             message = payload.error;
         }
     } catch {
         // Ignore invalid JSON error bodies.
     }
-    throw new Error(message);
+    const error = new Error(message);
+    error.code = code;
+    error.retryable = retryable;
+    error.details = details;
+    throw error;
+}
+
+async function sendAcpBusCommand(server, command, options = {}) {
+    const attachments = Array.isArray(options.attachments)
+        ? options.attachments
+        : [];
+    const request = {
+        method: 'POST'
+    };
+    if (attachments.length > 0) {
+        const formData = new FormData();
+        for (const [key, value] of Object.entries(command || {})) {
+            if (value === undefined || value === null) {
+                continue;
+            }
+            formData.append(key, String(value));
+        }
+        for (const attachment of attachments) {
+            if (attachment?.file instanceof File) {
+                formData.append(
+                    'attachments',
+                    attachment.file,
+                    attachment.name
+                );
+            }
+        }
+        request.body = formData;
+    } else {
+        request.headers = { 'Content-Type': 'application/json' };
+        request.body = JSON.stringify(command || {});
+    }
+    const response = await server.fetch('/api/acp-bus/command', request);
+    if (!response.ok) {
+        await throwResponseError(response, 'ACP bus command failed');
+    }
+    if (response.status === 204) {
+        return null;
+    }
+    try {
+        return await response.json();
+    } catch {
+        return null;
+    }
 }
 
 function insertTextareaText(textarea, text) {
@@ -15723,23 +15746,16 @@ async function syncAgentsForServer(server, { force = false } = {}) {
 
 async function createAgentTab(session, agentId, options = {}) {
     if (!session || !agentId) return null;
-    const response = await session.server.fetch('/api/agents/tabs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            agentId,
-            cwd: options.cwd || session.cwd || session.initialCwd || '/',
-            terminalSessionId: session.id,
-            modeId: options.modeId || ''
-        })
+    const data = await sendAcpBusCommand(session.server, {
+        type: 'tab.create',
+        agentId,
+        cwd: options.cwd || session.cwd || session.initialCwd || '/',
+        terminalSessionId: session.id,
+        modeId: options.modeId || ''
     });
-    if (!response.ok) {
-        await throwResponseError(response, 'Failed to create agent tab');
-    }
-    const data = await response.json();
     return await activateAgentTab(
         session,
-        upsertAgentTab(session.server, data, {
+        upsertAgentTab(session.server, data?.tab || data, {
             authoritative: true
         })
     );
@@ -15785,22 +15801,15 @@ async function resumeAgentTabFromHistory(session, agentTab, historySession) {
     }
 
     const resumePromise = (async () => {
-        const response = await session.server.fetch('/api/agents/tabs/resume', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                agentId: agentTab.agentId,
-                cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
-                terminalSessionId: session.id,
-                sessionId: historySession.sessionId,
-                targetTabId: agentTab.id,
-                title: historySession.title || ''
-            })
+        const payload = await sendAcpBusCommand(session.server, {
+            type: 'tab.resume',
+            agentId: agentTab.agentId,
+            cwd: agentTab.cwd || session.cwd || session.initialCwd || '/',
+            terminalSessionId: session.id,
+            sessionId: historySession.sessionId,
+            targetTabId: agentTab.id,
+            title: historySession.title || ''
         });
-        if (!response.ok) {
-            await throwResponseError(response, 'Failed to resume agent session');
-        }
-        const payload = await response.json();
         const tabData = payload?.tab && typeof payload.tab === 'object'
             ? payload.tab
             : payload;
