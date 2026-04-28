@@ -8,18 +8,66 @@ import { TerminalSession } from './terminal-session.mjs';
 import * as persistence from './persistence.mjs';
 import { config } from './config.mjs';
 
+function isExecutable(filePath) {
+    if (!filePath) return false;
+    try {
+        fs.accessSync(filePath, fs.constants.X_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function resolveShellByName(name) {
+    if (!name) return name;
+    if (path.isAbsolute(name)) return name;
+    const candidates = process.platform === 'darwin'
+        ? ['/opt/homebrew/bin', '/usr/local/bin', '/bin', '/usr/bin']
+        : ['/usr/local/bin', '/usr/bin', '/bin'];
+    for (const dir of candidates) {
+        const candidate = path.join(dir, name);
+        if (isExecutable(candidate)) return candidate;
+    }
+    return name;
+}
+
+function pickFirstExecutable(candidates) {
+    for (const candidate of candidates) {
+        if (candidate && isExecutable(candidate)) return candidate;
+    }
+    return null;
+}
+
 function resolveShell() {
     if (config.shell) {
-        return config.shell;
+        const configured = resolveShellByName(config.shell);
+        if (path.isAbsolute(configured) && isExecutable(configured)) {
+            return configured;
+        }
+        return configured;
     }
     if (process.platform === 'win32') {
         return process.env.COMSPEC || 'cmd.exe';
     }
-    // Try to use Homebrew installed bash if available (newer version)
-    if (fs.existsSync('/opt/homebrew/bin/bash')) {
-        return '/opt/homebrew/bin/bash';
-    }
-    return '/bin/bash';
+    const envShell = process.env.SHELL;
+    const platformCandidates = process.platform === 'darwin'
+        ? [
+            envShell,
+            '/opt/homebrew/bin/zsh',
+            '/usr/local/bin/zsh',
+            '/bin/zsh',
+            '/opt/homebrew/bin/bash',
+            '/usr/local/bin/bash',
+            '/bin/bash',
+            '/bin/sh'
+        ]
+        : [
+            envShell,
+            '/usr/bin/bash',
+            '/bin/bash',
+            '/bin/sh'
+        ];
+    return pickFirstExecutable(platformCandidates) || '/bin/sh';
 }
 
 const historyLimit = config.historyLimit;
@@ -230,7 +278,10 @@ export class TerminalManager {
 
     _createPtySession(options = {}) {
         const id = options.id || crypto.randomUUID();
-        const shell = options.shell || resolveShell();
+        const requestedShell = options.shell || resolveShell();
+        const shell = path.isAbsolute(requestedShell)
+            ? requestedShell
+            : resolveShellByName(requestedShell);
         const initialCwd = options.cwd
             || process.env.TABMINAL_CWD
             || os.homedir();
@@ -238,6 +289,12 @@ export class TerminalManager {
             ...process.env,
             ...(options.env || {})
         };
+        if (!options.directSpawn
+            && !options.spawnCommand
+            && path.isAbsolute(shell)
+            && env.SHELL !== shell) {
+            env.SHELL = shell;
+        }
         let spawnShell = options.spawnCommand || shell;
         let args = Array.isArray(options.spawnArgs) ? options.spawnArgs : [];
         let initDirPath = null;
@@ -308,6 +365,24 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
         const cols = Number.isFinite(options.cols) ? options.cols : this.lastCols;
         const rows = Number.isFinite(options.rows) ? options.rows : this.lastRows;
 
+        if (path.isAbsolute(spawnShell) && !isExecutable(spawnShell)) {
+            throw new Error(
+                `Shell binary not found or not executable: ${spawnShell}`
+                + ` (requested via "${requestedShell}")`
+            );
+        }
+        let cwdStat;
+        try {
+            cwdStat = fs.statSync(initialCwd);
+        } catch (cwdErr) {
+            throw new Error(
+                `cwd unreadable: ${initialCwd} - ${cwdErr.message}`
+            );
+        }
+        if (!cwdStat.isDirectory()) {
+            throw new Error(`cwd is not a directory: ${initialCwd}`);
+        }
+
         let ptyProcess;
         try {
             const ptyOptions = {
@@ -322,24 +397,32 @@ precmd_functions+=(_tabminal_zsh_apply_prompt_marker)
             }
             ptyProcess = pty.spawn(spawnShell, args, ptyOptions);
         } catch (err) {
+            const errProps = {};
+            if (err) {
+                for (const key of Object.getOwnPropertyNames(err)) {
+                    try { errProps[key] = err[key]; } catch {}
+                }
+            }
             const spawnInfo = {
                 shell: spawnShell,
-                requestedShell: shell,
+                requestedShell,
                 args,
                 cwd: initialCwd,
+                cwdExists: fs.existsSync(initialCwd),
+                shellExecutable: isExecutable(spawnShell),
                 cols,
                 rows,
+                platform: process.platform,
+                arch: process.arch,
+                nodeVersion: process.version,
                 env: {
                     SHELL: env.SHELL,
                     TERM: env.TERM,
                     PATH: env.PATH,
-                    HOME: env.HOME
+                    HOME: env.HOME,
+                    ZDOTDIR: env.ZDOTDIR
                 },
-                error: {
-                    message: err?.message,
-                    code: err?.code,
-                    errno: err?.errno
-                }
+                error: errProps
             };
             console.error('[Manager] Failed to spawn PTY', spawnInfo);
             throw err;
