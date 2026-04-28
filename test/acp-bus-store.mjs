@@ -266,6 +266,115 @@ describe('AcpBusStore', () => {
         });
     });
 
+    it('assigns stable indexes from first observed backend order', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            const first = store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-first-index',
+                cwd: '/tmp/project',
+                title: 'First index session',
+                messages: [
+                    {
+                        id: 'z-final',
+                        role: 'assistant',
+                        text: 'final',
+                        order: 52
+                    },
+                    {
+                        id: 'm-user',
+                        role: 'user',
+                        text: '/timeline',
+                        order: 1
+                    },
+                    {
+                        id: 'a-item-01',
+                        role: 'assistant',
+                        text: 'item 01',
+                        order: 2
+                    },
+                    {
+                        id: 'b-item-02',
+                        role: 'assistant',
+                        text: 'item 02',
+                        order: 3
+                    }
+                ],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:00:00.000Z'
+            });
+
+            assert.deepEqual(
+                first.timelineDelta.changedItems.map((item) => [
+                    item.index,
+                    item.value.id,
+                    item.value.text
+                ]),
+                [
+                    [1, 'm-user', '/timeline'],
+                    [2, 'a-item-01', 'item 01'],
+                    [3, 'b-item-02', 'item 02'],
+                    [4, 'z-final', 'final']
+                ]
+            );
+
+            let page = store.listTimelineItems('codex::s-first-index', {
+                limit: 10
+            });
+            assert.deepEqual(
+                page.items.map((item) => [item.index, item.value.id]),
+                [
+                    [1, 'm-user'],
+                    [2, 'a-item-01'],
+                    [3, 'b-item-02'],
+                    [4, 'z-final']
+                ]
+            );
+            assert.equal('order' in page.items[0].value, false);
+
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-first-index',
+                cwd: '/tmp/project',
+                title: 'First index session',
+                messages: [
+                    {
+                        id: 'a-item-01',
+                        role: 'assistant',
+                        text: 'item 01 updated',
+                        order: 100
+                    },
+                    {
+                        id: 'n-item-03',
+                        role: 'assistant',
+                        text: 'item 03',
+                        order: 101
+                    }
+                ],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:01:00.000Z',
+                preserveSnapshotContent: true
+            });
+
+            page = store.listTimelineItems('codex::s-first-index', {
+                limit: 10
+            });
+            assert.deepEqual(
+                page.items.map((item) => [item.index, item.value.id]),
+                [
+                    [1, 'm-user'],
+                    [2, 'a-item-01'],
+                    [3, 'b-item-02'],
+                    [4, 'z-final'],
+                    [5, 'n-item-03']
+                ]
+            );
+            assert.equal(page.items[1].value.text, 'item 01 updated');
+            assert.equal('order' in page.items[1].value, false);
+        });
+    });
+
     it('preserves cached transcript content while a live attach is restoring', async () => {
         await withStore('acp-bus-store-', async (store) => {
             store.saveObservedSession({

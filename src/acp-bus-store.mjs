@@ -120,17 +120,26 @@ function hashSerializable(value) {
         .slice(0, 16);
 }
 
+function getTimelinePayloadRank(value) {
+    const index = Number(value?.index);
+    if (Number.isFinite(index)) {
+        return index;
+    }
+    const order = Number(value?.order);
+    if (Number.isFinite(order)) {
+        return order;
+    }
+    return null;
+}
+
 function compareTimelinePayload(left, right) {
-    const leftIndex = Number(left?.index);
-    const rightIndex = Number(right?.index);
-    if (Number.isFinite(leftIndex) && Number.isFinite(rightIndex)) {
-        if (leftIndex !== rightIndex) {
-            return leftIndex - rightIndex;
-        }
-    } else if (Number.isFinite(leftIndex)) {
-        return -1;
-    } else if (Number.isFinite(rightIndex)) {
-        return 1;
+    const leftRank = getTimelinePayloadRank(left);
+    const rightRank = getTimelinePayloadRank(right);
+    if (leftRank !== null && rightRank !== null && leftRank !== rightRank) {
+        return leftRank - rightRank;
+    }
+    if (leftRank !== null || rightRank !== null) {
+        return 0;
     }
     return String(left?.id || left?.toolCallId || '').localeCompare(
         String(right?.id || right?.toolCallId || '')
@@ -150,29 +159,6 @@ function compareTimelineRows(left, right) {
         return 1;
     }
     return String(left?.itemKey || '').localeCompare(String(right?.itemKey || ''));
-}
-
-function normalizeTimelineRows(rows = []) {
-    if (!Array.isArray(rows) || rows.length === 0) {
-        return [];
-    }
-    return [...rows]
-        .sort(compareTimelineRows)
-        .map((row, index) => {
-            const itemIndex = index + 1;
-            const value = parseJsonText(row.payloadJson, {});
-            const payload = value && typeof value === 'object'
-                ? { ...value, index: itemIndex }
-                : value;
-            if (payload && typeof payload === 'object') {
-                delete payload.order;
-            }
-            return {
-                ...row,
-                itemIndex,
-                payloadJson: JSON.stringify(payload)
-            };
-        });
 }
 
 function timelineRowValue(row) {
@@ -265,7 +251,16 @@ function mergeSnapshotArray(previousItems, nextItems, type) {
     for (const [index, item] of next.entries()) {
         if (!item || typeof item !== 'object') continue;
         const key = getTimelineItemIdentity(type, item, index);
-        merged.set(key, cloneSerializable(item, {}) || {});
+        const nextItem = cloneSerializable(item, {}) || {};
+        const previousItem = merged.get(key);
+        if (
+            previousItem
+            && Number.isFinite(previousItem.index)
+            && !Number.isFinite(nextItem.index)
+        ) {
+            nextItem.index = previousItem.index;
+        }
+        merged.set(key, nextItem);
     }
     return Array.from(merged.values()).sort(compareTimelinePayload);
 }
@@ -346,23 +341,104 @@ function mergePlanState(previousSnapshot, nextSnapshot, observedAt) {
     };
 }
 
-function stripLegacyTimelineOrder(snapshot) {
+function getTimelineRowSortRank(value, fallback) {
+    const rank = getTimelinePayloadRank(value);
+    return rank === null ? fallback : rank;
+}
+
+function buildPreviousTimelineIndex(rows = []) {
+    const map = new Map();
+    let maxIndex = 0;
+    for (const row of Array.isArray(rows) ? rows : []) {
+        const itemKey = String(row?.item_key || row?.itemKey || '').trim();
+        const itemIndex = Number(row?.item_index || row?.itemIndex || 0);
+        if (!itemKey || !Number.isFinite(itemIndex) || itemIndex <= 0) {
+            continue;
+        }
+        map.set(itemKey, itemIndex);
+        maxIndex = Math.max(maxIndex, itemIndex);
+    }
+    return { map, maxIndex };
+}
+
+function finalizeTimelineRows(rows, options = {}) {
+    const authoritative = options.authoritativeSnapshot === true;
+    const previousIndex = buildPreviousTimelineIndex(options.previousRows);
+    const hasPrevious = previousIndex.map.size > 0;
+    let nextIndex = previousIndex.maxIndex + 1;
+    const sorted = [...rows].sort((left, right) => {
+        const leftExisting = !authoritative
+            ? previousIndex.map.get(left.itemKey)
+            : undefined;
+        const rightExisting = !authoritative
+            ? previousIndex.map.get(right.itemKey)
+            : undefined;
+        if (leftExisting && rightExisting && leftExisting !== rightExisting) {
+            return leftExisting - rightExisting;
+        }
+        if (leftExisting || rightExisting) {
+            return leftExisting ? -1 : 1;
+        }
+        if (left.sortRank !== right.sortRank) {
+            return left.sortRank - right.sortRank;
+        }
+        return left.sequence - right.sequence;
+    });
+    const finalized = sorted.map((row, index) => {
+        const previousItemIndex = !authoritative
+            ? previousIndex.map.get(row.itemKey)
+            : undefined;
+        const itemIndex = previousItemIndex || (
+            authoritative || !hasPrevious
+                ? index + 1
+                : nextIndex++
+        );
+        const value = parseJsonText(row.payloadJson, {});
+        const payload = value && typeof value === 'object'
+            ? { ...value, index: itemIndex }
+            : value;
+        if (payload && typeof payload === 'object') {
+            delete payload.order;
+        }
+        const cleanedRow = { ...row };
+        delete cleanedRow.sortRank;
+        delete cleanedRow.sequence;
+        return {
+            ...cleanedRow,
+            itemIndex,
+            payloadJson: JSON.stringify(payload)
+        };
+    });
+    return finalized.sort(compareTimelineRows);
+}
+
+function applyTimelineIndexesToSnapshot(snapshot, rows = []) {
     const next = cloneSerializable(snapshot, snapshot || {});
     if (!next || typeof next !== 'object') {
         return next;
     }
-    for (const key of [
-        'messages',
-        'toolCalls',
-        'permissions',
-        'planHistory'
+    const indexByKey = new Map(
+        rows.map((row) => [String(row.itemKey || ''), Number(row.itemIndex || 0)])
+    );
+    for (const [key, type] of [
+        ['messages', 'message'],
+        ['toolCalls', 'tool'],
+        ['permissions', 'permission'],
+        ['planHistory', 'plan']
     ]) {
-        if (!Array.isArray(next[key])) continue;
-        next[key] = next[key].map((entry) => {
+        if (!Array.isArray(next[key])) {
+            continue;
+        }
+        next[key] = next[key].map((entry, index) => {
             if (!entry || typeof entry !== 'object') {
                 return entry;
             }
+            const identity = getTimelineItemIdentity(type, entry, index);
+            const itemIndex = indexByKey.get(`${type}:${identity}`);
             const cleaned = { ...entry };
+            if (Number.isFinite(itemIndex) && itemIndex > 0) {
+                cleaned.index = itemIndex;
+            }
             delete cleaned.order;
             return cleaned;
         });
@@ -373,7 +449,12 @@ function stripLegacyTimelineOrder(snapshot) {
     return next;
 }
 
-function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
+function buildTimelineRowsFromSnapshot(
+    sessionKey,
+    snapshot,
+    observedAt,
+    options = {}
+) {
     const rows = [];
     const pushItems = (type, items) => {
         if (!Array.isArray(items)) {
@@ -386,17 +467,20 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
             const value = cloneSerializable(item, {}) || {};
             const identity = getTimelineItemIdentity(type, value, index);
             const itemKey = `${type}:${identity}`;
+            const sequence = rows.length + 1;
             rows.push({
                 sessionKey,
                 itemKey,
                 itemType: type,
                 itemId: identity,
-                itemIndex: normalizeTimelineIndex(value, rows.length + 1),
+                itemIndex: normalizeTimelineIndex(value, sequence),
                 role: String(value.role || ''),
                 kind: String(value.kind || ''),
                 status: String(value.status || ''),
                 updatedAt: observedAt,
-                payloadJson: JSON.stringify(value)
+                payloadJson: JSON.stringify(value),
+                sortRank: getTimelineRowSortRank(value, sequence),
+                sequence
             });
         }
     };
@@ -415,7 +499,7 @@ function buildTimelineRowsFromSnapshot(sessionKey, snapshot, observedAt) {
             entries: activePlan
         }]);
     }
-    return normalizeTimelineRows(rows);
+    return finalizeTimelineRows(rows, options);
 }
 
 function rowToSession(row, includeSnapshot = false) {
@@ -1152,20 +1236,28 @@ export class AcpBusStore {
         const liveAt = typeof options.liveAt === 'string'
             ? options.liveAt.trim()
             : observedAt;
-        const safeSnapshot = stripLegacyTimelineOrder(mergePlanState(
-            previous?.snapshot || null,
-            mergedSnapshot,
-            observedAt
-        ));
-        const timelineRows = buildTimelineRowsFromSnapshot(
-            sessionKey,
-            safeSnapshot,
-            observedAt
-        );
         if (previous) {
             this.#ensureTimelineIndexes(sessionKey);
         }
         const previousTimelineRows = previous ? this.#getTimelineRows(sessionKey) : [];
+        const indexedSnapshot = mergePlanState(
+            previous?.snapshot || null,
+            mergedSnapshot,
+            observedAt
+        );
+        const timelineRows = buildTimelineRowsFromSnapshot(
+            sessionKey,
+            indexedSnapshot,
+            observedAt,
+            {
+                previousRows: previousTimelineRows,
+                authoritativeSnapshot: options.authoritativeSnapshot === true
+            }
+        );
+        const safeSnapshot = applyTimelineIndexesToSnapshot(
+            indexedSnapshot,
+            timelineRows
+        );
         const timelineDelta = buildTimelineDelta(
             previousTimelineRows,
             timelineRows,
