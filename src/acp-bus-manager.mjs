@@ -9,9 +9,9 @@ import {
     mergeDefinitionEnv
 } from './acp-manager.mjs';
 import {
+    AcpBusStore,
     buildAcpBusSessionKey
 } from './acp-bus-store.mjs';
-import { AcpBusAsyncStore } from './acp-bus-store-async.mjs';
 
 const DEFAULT_POLL_INTERVAL_MS = 30000;
 const DEFAULT_HOT_SESSION_LIMIT = 10;
@@ -125,7 +125,7 @@ export class AcpBusManager extends EventEmitter {
             throw new Error('acpManager is required');
         }
         this.acpManager = options.acpManager;
-        this.store = options.store || new AcpBusAsyncStore({
+        this.store = options.store || new AcpBusStore({
             eventLimit: options.eventLimit || DEFAULT_EVENT_LIMIT
         });
         this.runtimeFactory = options.runtimeFactory || (
@@ -193,6 +193,7 @@ export class AcpBusManager extends EventEmitter {
         this.snapshotFlushTimers = new Map();
         this.rebalancePromise = null;
         this.rebalancePendingReason = '';
+        this.eventWritePromises = new Set();
     }
 
     async start(options = {}) {
@@ -257,6 +258,7 @@ export class AcpBusManager extends EventEmitter {
         ));
 
         this.started = false;
+        await this.#drainEventWrites();
         this.storeReady = false;
         await this.store.close();
     }
@@ -2073,6 +2075,9 @@ export class AcpBusManager extends EventEmitter {
     }
 
     #emitEvent(type, row, extra = {}) {
+        if (!this.storeReady) {
+            return;
+        }
         const payload = {
             ...extra,
             session: row
@@ -2098,13 +2103,17 @@ export class AcpBusManager extends EventEmitter {
                 }
                 : null
         };
-        void this.#persistAndEmitEvent({
+        const promise = this.#persistAndEmitEvent({
             createdAt: this.now(),
             type,
             agentId: row?.agentId || '',
             sessionId: row?.sessionId || '',
             payload
         }, type, payload);
+        this.eventWritePromises.add(promise);
+        void promise.finally(() => {
+            this.eventWritePromises.delete(promise);
+        });
     }
 
     async #persistAndEmitEvent(eventPayload, type, payload) {
@@ -2117,6 +2126,12 @@ export class AcpBusManager extends EventEmitter {
                 '[ACP Bus] Failed to persist event:',
                 error?.message || error
             );
+        }
+    }
+
+    async #drainEventWrites() {
+        while (this.eventWritePromises.size > 0) {
+            await Promise.allSettled(Array.from(this.eventWritePromises));
         }
     }
 

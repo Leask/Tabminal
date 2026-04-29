@@ -730,7 +730,7 @@ describe('AcpBusManager', () => {
             }]
         }, async ({ manager, store, runtimeInstances, setNow }) => {
             await store.init();
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 id: 'cached-tab',
                 agentId: 'codex',
                 acpSessionId: 'c-1',

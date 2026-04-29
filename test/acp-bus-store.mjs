@@ -5,7 +5,6 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 
-import { AcpBusAsyncStore } from '../src/acp-bus-store-async.mjs';
 import { AcpBusStore } from '../src/acp-bus-store.mjs';
 
 async function createTempDbPath(prefix) {
@@ -23,15 +22,15 @@ async function withStore(prefix, callback) {
     try {
         await callback(store, { dir, dbPath });
     } finally {
-        store.close();
+        await store.close();
         await fs.rm(dir, { recursive: true, force: true });
     }
 }
 
 describe('AcpBusStore', () => {
-    it('proxies store operations through the async worker adapter', async () => {
-        const { dir, dbPath } = await createTempDbPath('acp-bus-store-async-');
-        const store = new AcpBusAsyncStore({ dbPath });
+    it('uses the async database worker through the business store', async () => {
+        const { dir, dbPath } = await createTempDbPath('acp-bus-store-');
+        const store = new AcpBusStore({ dbPath });
         try {
             await store.init();
             await store.upsertIndexedSession({
@@ -82,11 +81,11 @@ describe('AcpBusStore', () => {
         const store = new AcpBusStore({ dbPath });
         try {
             await store.init();
-            const summary = store.getSummary();
+            const summary = await store.getSummary();
             assert.equal(summary.sessionCount, 0);
             assert.equal(summary.timelineItemCount, 0);
         } finally {
-            store.close();
+            await store.close();
             await fs.rm(dir, { recursive: true, force: true });
         }
     });
@@ -139,15 +138,15 @@ describe('AcpBusStore', () => {
         const store = new AcpBusStore({ dbPath });
         try {
             await store.init();
-            const page = store.listTimelineItems('codex::legacy', {
+            const page = await store.listTimelineItems('codex::legacy', {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.index), [1]);
             assert.equal('order' in page.items[0], false);
             assert.equal('order' in page.items[0].value, false);
-            const migrated = store.db.prepare(`
+            const migrated = await store.db.all(`
                 PRAGMA table_info(acp_bus_timeline_items)
-            `).all();
+            `);
             assert.equal(
                 migrated.some((column) => column.name === 'item_order'),
                 false
@@ -160,14 +159,14 @@ describe('AcpBusStore', () => {
                 true
             );
         } finally {
-            store.close();
+            await store.close();
             await fs.rm(dir, { recursive: true, force: true });
         }
     });
 
     it('keeps indexed activity anchored to upstream updated time', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            const first = store.upsertIndexedSession({
+            const first = await store.upsertIndexedSession({
                 agentId: 'codex',
                 sessionId: 's-1',
                 cwd: '/tmp/project',
@@ -180,7 +179,7 @@ describe('AcpBusStore', () => {
                 '2026-04-14T10:00:00.000Z'
             );
 
-            const second = store.upsertIndexedSession({
+            const second = await store.upsertIndexedSession({
                 agentId: 'codex',
                 sessionId: 's-1',
                 cwd: '/tmp/project',
@@ -201,7 +200,7 @@ describe('AcpBusStore', () => {
 
     it('persists observed snapshots and counts message metadata', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            const saved = store.saveObservedSession({
+            const saved = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-2',
                 cwd: '/tmp/project',
@@ -223,7 +222,7 @@ describe('AcpBusStore', () => {
             assert.equal(saved.record.toolCallCount, 1);
             assert.equal(saved.record.continuityState, 'live');
 
-            const loaded = store.getSession(saved.record.sessionKey, {
+            const loaded = await store.getSession(saved.record.sessionKey, {
                 includeSnapshot: true
             });
             assert.equal(loaded.snapshot.title, 'Observed session');
@@ -239,7 +238,7 @@ describe('AcpBusStore', () => {
 
     it('returns structured incremental timeline deltas', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            const first = store.saveObservedSession({
+            const first = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-delta',
                 cwd: '/tmp/project',
@@ -256,7 +255,7 @@ describe('AcpBusStore', () => {
             });
             assert.equal(first.record.snapshotVersion, 1);
 
-            const second = store.saveObservedSession({
+            const second = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-delta',
                 cwd: '/tmp/project',
@@ -291,7 +290,7 @@ describe('AcpBusStore', () => {
 
     it('assigns stable indexes from first observed bus order', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            const first = store.saveObservedSession({
+            const first = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-first-index',
                 cwd: '/tmp/project',
@@ -341,7 +340,7 @@ describe('AcpBusStore', () => {
                 ]
             );
 
-            let page = store.listTimelineItems('codex::s-first-index', {
+            let page = await store.listTimelineItems('codex::s-first-index', {
                 limit: 10
             });
             assert.deepEqual(
@@ -355,7 +354,7 @@ describe('AcpBusStore', () => {
             );
             assert.equal('order' in page.items[0].value, false);
 
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-first-index',
                 cwd: '/tmp/project',
@@ -380,7 +379,7 @@ describe('AcpBusStore', () => {
                 preserveSnapshotContent: true
             });
 
-            page = store.listTimelineItems('codex::s-first-index', {
+            page = await store.listTimelineItems('codex::s-first-index', {
                 limit: 10
             });
             assert.deepEqual(
@@ -400,7 +399,7 @@ describe('AcpBusStore', () => {
 
     it('uses explicit observed timeline candidates before grouped arrays', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-candidates',
                 cwd: '/tmp/project',
@@ -440,7 +439,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:00:00.000Z'
             });
 
-            const page = store.listTimelineItems('codex::s-candidates', {
+            const page = await store.listTimelineItems('codex::s-candidates', {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.itemKey), [
@@ -455,7 +454,7 @@ describe('AcpBusStore', () => {
 
     it('appends new unranked items in arrival order instead of id order', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-unranked',
                 cwd: '/tmp/project',
@@ -468,7 +467,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:00:00.000Z'
             });
 
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-unranked',
                 cwd: '/tmp/project',
@@ -482,7 +481,7 @@ describe('AcpBusStore', () => {
                 preserveSnapshotContent: true
             });
 
-            const page = store.listTimelineItems('codex::s-unranked', {
+            const page = await store.listTimelineItems('codex::s-unranked', {
                 limit: 10
             });
             assert.deepEqual(
@@ -499,7 +498,7 @@ describe('AcpBusStore', () => {
 
     it('preserves cached transcript content while a live attach is restoring', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-3',
                 cwd: '/tmp/project',
@@ -518,7 +517,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:10:00.000Z'
             });
 
-            const updated = store.saveObservedSession({
+            const updated = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-3',
                 cwd: '/tmp/project',
@@ -543,7 +542,7 @@ describe('AcpBusStore', () => {
             assert.equal(updated.record.messageCount, 2);
             assert.equal(updated.record.toolCallCount, 1);
 
-            const loaded = store.getSession(updated.record.sessionKey, {
+            const loaded = await store.getSession(updated.record.sessionKey, {
                 includeSnapshot: true
             });
             assert.equal(loaded.snapshot.status, 'restoring');
@@ -558,7 +557,7 @@ describe('AcpBusStore', () => {
 
     it('stores timeline rows and pages them by cursor', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-page',
                 cwd: '/tmp/project',
@@ -586,7 +585,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:10:00.000Z'
             });
 
-            const latest = store.listTimelineItems('codex::s-page', {
+            const latest = await store.listTimelineItems('codex::s-page', {
                 limit: 2
             });
             assert.equal(latest.total, 4);
@@ -598,7 +597,7 @@ describe('AcpBusStore', () => {
             assert.equal(latest.hasOlder, true);
             assert.equal(latest.hasNewer, false);
 
-            const older = store.listTimelineItems('codex::s-page', {
+            const older = await store.listTimelineItems('codex::s-page', {
                 before: latest.prevCursor,
                 limit: 2
             });
@@ -609,7 +608,7 @@ describe('AcpBusStore', () => {
             assert.equal(older.hasOlder, false);
             assert.equal(older.hasNewer, true);
 
-            const newer = store.listTimelineItems('codex::s-page', {
+            const newer = await store.listTimelineItems('codex::s-page', {
                 after: older.nextCursor,
                 limit: 2
             });
@@ -622,7 +621,7 @@ describe('AcpBusStore', () => {
 
     it('normalizes upstream timeline indexes into contiguous indexes', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-index',
                 cwd: '/tmp/project',
@@ -651,7 +650,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:10:00.000Z'
             });
 
-            const page = store.listTimelineItems('codex::s-index', {
+            const page = await store.listTimelineItems('codex::s-index', {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.itemKey), [
@@ -674,7 +673,7 @@ describe('AcpBusStore', () => {
 
     it('repairs non-contiguous stored timeline indexes on read', async () => {
         await withStore('acp-bus-store-', async (store, { dbPath }) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-repair',
                 cwd: '/tmp/project',
@@ -698,7 +697,7 @@ describe('AcpBusStore', () => {
                 db.close();
             }
 
-            const page = store.listTimelineItems('codex::s-repair', {
+            const page = await store.listTimelineItems('codex::s-repair', {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.index), [1, 2]);
@@ -713,7 +712,7 @@ describe('AcpBusStore', () => {
 
     it('rebuilds timeline rows for authoritative snapshots', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-rebuild',
                 cwd: '/tmp/project',
@@ -726,7 +725,7 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:00:00.000Z'
             });
 
-            const rebuilt = store.saveObservedSession({
+            const rebuilt = await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-rebuild',
                 cwd: '/tmp/project',
@@ -745,7 +744,7 @@ describe('AcpBusStore', () => {
             assert.deepEqual(rebuilt.timelineDelta.removedItemKeys, [
                 'message:m-stale'
             ]);
-            const page = store.listTimelineItems('codex::s-rebuild', {
+            const page = await store.listTimelineItems('codex::s-rebuild', {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.itemKey), [
@@ -759,7 +758,7 @@ describe('AcpBusStore', () => {
 
     it('stores active and completed plan blocks with explicit state', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-plan',
                 cwd: '/tmp/project',
@@ -775,13 +774,13 @@ describe('AcpBusStore', () => {
                 observedAt: '2026-04-14T10:00:00.000Z'
             });
 
-            let page = store.listTimelineItems('codex::s-plan', { limit: 10 });
+            let page = await store.listTimelineItems('codex::s-plan', { limit: 10 });
             assert.equal(page.items.length, 1);
             assert.equal(page.items[0].type, 'plan');
             assert.equal(page.items[0].value.active, true);
             const activePlanKey = page.items[0].itemKey;
 
-            store.saveObservedSession({
+            await store.saveObservedSession({
                 agentId: 'codex',
                 acpSessionId: 's-plan',
                 cwd: '/tmp/project',
@@ -798,7 +797,7 @@ describe('AcpBusStore', () => {
                 preserveSnapshotContent: true
             });
 
-            page = store.listTimelineItems('codex::s-plan', { limit: 10 });
+            page = await store.listTimelineItems('codex::s-plan', { limit: 10 });
             assert.equal(page.items.length, 1);
             assert.equal(page.items[0].itemKey, activePlanKey);
             assert.equal(page.items[0].value.active, false);
@@ -814,7 +813,7 @@ describe('AcpBusStore', () => {
                 ['s-3', '2026-04-14T10:02:00.000Z']
             ];
             for (const [sessionId, updatedAt] of sessions) {
-                store.upsertIndexedSession({
+                await store.upsertIndexedSession({
                     agentId: 'codex',
                     sessionId,
                     cwd: '/tmp/project',
@@ -824,9 +823,9 @@ describe('AcpBusStore', () => {
                 });
             }
 
-            store.setHotSessionKeys(['codex::s-1']);
-            const removed = store.pruneSessions(1, []);
-            const remaining = store.listSessions();
+            await store.setHotSessionKeys(['codex::s-1']);
+            const removed = await store.pruneSessions(1, []);
+            const remaining = await store.listSessions();
 
             assert.equal(removed.length, 1);
             assert.deepEqual(remaining.map((row) => row.sessionKey).sort(), [
@@ -848,7 +847,7 @@ describe('AcpBusStore', () => {
                 ['hot', '2026-04-14T10:30:00.000Z']
             ];
             for (const [sessionId, updatedAt] of sessions) {
-                store.upsertIndexedSession({
+                await store.upsertIndexedSession({
                     agentId: 'codex',
                     sessionId,
                     cwd: '/tmp/project',
@@ -857,17 +856,17 @@ describe('AcpBusStore', () => {
                     seenAt: '2026-04-14T10:30:00.000Z'
                 });
             }
-            store.updateContinuityState('codex::stale', 'cached', {
+            await store.updateContinuityState('codex::stale', 'cached', {
                 loadedAt: '2026-04-14T10:00:00.000Z',
                 receivedAt: '2026-04-14T10:00:00.000Z'
             });
-            store.updateContinuityState('codex::fresh', 'cached', {
+            await store.updateContinuityState('codex::fresh', 'cached', {
                 loadedAt: '2026-04-14T10:25:00.000Z',
                 receivedAt: '2026-04-14T10:25:00.000Z'
             });
-            store.setHotSessionKeys(['codex::hot']);
+            await store.setHotSessionKeys(['codex::hot']);
 
-            const candidates = store.listColdRepairCandidates(10, {
+            const candidates = await store.listColdRepairCandidates(10, {
                 now: '2026-04-14T10:30:00.000Z',
                 minAgeMs: 10 * 60 * 1000
             });
@@ -881,7 +880,7 @@ describe('AcpBusStore', () => {
 
     it('prioritizes forced resync candidates even when hot', async () => {
         await withStore('acp-bus-store-', async (store) => {
-            store.upsertIndexedSession({
+            await store.upsertIndexedSession({
                 agentId: 'codex',
                 sessionId: 'hot',
                 cwd: '/tmp/project',
@@ -889,14 +888,14 @@ describe('AcpBusStore', () => {
                 updatedAt: '2026-04-14T10:30:00.000Z',
                 seenAt: '2026-04-14T10:30:00.000Z'
             });
-            store.updateContinuityState('codex::hot', 'cached', {
+            await store.updateContinuityState('codex::hot', 'cached', {
                 loadedAt: '2026-04-14T10:29:00.000Z',
                 receivedAt: '2026-04-14T10:29:00.000Z'
             });
-            store.setHotSessionKeys(['codex::hot']);
-            store.markSessionForUpstreamSync('codex::hot');
+            await store.setHotSessionKeys(['codex::hot']);
+            await store.markSessionForUpstreamSync('codex::hot');
 
-            const candidates = store.listColdRepairCandidates(10, {
+            const candidates = await store.listColdRepairCandidates(10, {
                 now: '2026-04-14T10:30:00.000Z',
                 minAgeMs: 10 * 60 * 1000
             });
@@ -910,14 +909,14 @@ describe('AcpBusStore', () => {
     it('returns inserted event envelopes while pruning old events', async () => {
         await withStore('acp-bus-store-', async (store) => {
             store.eventLimit = 1;
-            const first = store.appendEvent({
+            const first = await store.appendEvent({
                 createdAt: '2026-04-14T10:00:00.000Z',
                 type: 'first',
                 agentId: 'codex',
                 sessionId: 's-1',
                 payload: { value: 1 }
             });
-            const second = store.appendEvent({
+            const second = await store.appendEvent({
                 createdAt: '2026-04-14T10:01:00.000Z',
                 type: 'second',
                 agentId: 'codex',
@@ -927,7 +926,8 @@ describe('AcpBusStore', () => {
 
             assert.equal(first.id > 0, true);
             assert.equal(second.id > first.id, true);
-            assert.deepEqual(store.listEvents(10).map((event) => event.type), [
+            const events = await store.listEvents(10);
+            assert.deepEqual(events.map((event) => event.type), [
                 'second'
             ]);
         });

@@ -17,7 +17,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
 import { AcpBusManager } from './acp-bus-manager.mjs';
-import { AcpBusAsyncStore } from './acp-bus-store-async.mjs';
+import { AcpBusStore } from './acp-bus-store.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import {
@@ -405,7 +405,7 @@ router.post('/api/auth/logout-others', async (ctx) => {
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
 const acpManager = new AcpManager({ terminalManager });
-const acpBusStore = new AcpBusAsyncStore({
+const acpBusStore = new AcpBusStore({
     dbPath: config.acpBusDbPath || undefined,
     eventLimit: config.acpBusEventLimit
 });

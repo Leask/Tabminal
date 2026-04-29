@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+
+import { AsyncDatabaseSync } from './async-database-sync.mjs';
 
 const BASE_DIR = path.join(os.homedir(), '.tabminal');
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
@@ -671,8 +672,9 @@ export class AcpBusStore {
             return;
         }
         await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
-        this.db = new DatabaseSync(this.dbPath);
-        this.db.exec(`
+        this.db = new AsyncDatabaseSync(this.dbPath);
+        await this.db.open();
+        await this.db.exec(`
             PRAGMA busy_timeout = ${this.busyTimeoutMs};
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
@@ -732,29 +734,29 @@ export class AcpBusStore {
             CREATE INDEX IF NOT EXISTS idx_acp_bus_events_created_at
                 ON acp_bus_events(created_at DESC);
         `);
-        this.#ensureColumn(
+        await this.#ensureColumn(
             'acp_bus_sessions',
             'last_received_at',
             "TEXT NOT NULL DEFAULT ''"
         );
-        this.#ensureColumn(
+        await this.#ensureColumn(
             'acp_bus_sessions',
             'last_detached_at',
             "TEXT NOT NULL DEFAULT ''"
         );
-        this.#ensureColumn(
+        await this.#ensureColumn(
             'acp_bus_sessions',
             'snapshot_version',
             'INTEGER NOT NULL DEFAULT 0'
         );
-        this.#ensureTimelineIndexColumn();
+        await this.#ensureTimelineIndexColumn();
     }
 
-    close() {
+    async close() {
         if (!this.db) {
             return;
         }
-        this.db.close();
+        await this.db.close();
         this.db = null;
     }
 
@@ -765,20 +767,20 @@ export class AcpBusStore {
         return this.db;
     }
 
-    #ensureColumn(tableName, columnName, definition) {
+    async #ensureColumn(tableName, columnName, definition) {
         const db = this.#requireDb();
-        const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+        const columns = await db.all(`PRAGMA table_info(${tableName})`);
         if (columns.some((column) => column.name === columnName)) {
             return;
         }
-        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+        await db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
     }
 
-    #ensureTimelineIndexColumn() {
+    async #ensureTimelineIndexColumn() {
         const db = this.#requireDb();
-        const columns = db.prepare(`
+        const columns = await db.all(`
             PRAGMA table_info(acp_bus_timeline_items)
-        `).all();
+        `);
         const hasItemIndex = columns.some((column) => (
             column.name === 'item_index'
         ));
@@ -791,98 +793,105 @@ export class AcpBusStore {
         const hasIntegerIndex = /^INTEGER$/i.test(
             String(itemIndexColumn?.type || '')
         );
-        db.exec('DROP INDEX IF EXISTS idx_acp_bus_timeline_order');
+        await db.exec('DROP INDEX IF EXISTS idx_acp_bus_timeline_order');
         if (hasItemIndex && hasIntegerIndex && !hasItemOrder) {
-            db.exec(`
+            await db.exec(`
                 CREATE INDEX IF NOT EXISTS idx_acp_bus_timeline_index
                     ON acp_bus_timeline_items(session_key, item_index, item_key)
             `);
             return;
         }
         const sourceIndexColumn = hasItemIndex ? 'item_index' : 'item_order';
-        db.exec('BEGIN');
-        try {
-            db.exec(`
-                ALTER TABLE acp_bus_timeline_items
-                RENAME TO acp_bus_timeline_items_legacy
-            `);
-            db.exec(`
-                CREATE TABLE acp_bus_timeline_items (
-                    session_key TEXT NOT NULL,
-                    item_key TEXT NOT NULL,
-                    item_type TEXT NOT NULL,
-                    item_id TEXT NOT NULL DEFAULT '',
-                    item_index INTEGER NOT NULL DEFAULT 0,
-                    role TEXT NOT NULL DEFAULT '',
-                    kind TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT '',
-                    payload_json TEXT NOT NULL DEFAULT '{}',
-                    PRIMARY KEY(session_key, item_key)
-                )
-            `);
-            db.exec(`
-                INSERT INTO acp_bus_timeline_items (
-                    session_key,
-                    item_key,
-                    item_type,
-                    item_id,
-                    item_index,
-                    role,
-                    kind,
-                    status,
-                    updated_at,
-                    payload_json
-                )
-                SELECT
-                    session_key,
-                    item_key,
-                    item_type,
-                    item_id,
-                    CAST(${sourceIndexColumn} AS INTEGER),
-                    role,
-                    kind,
-                    status,
-                    updated_at,
-                    payload_json
-                FROM acp_bus_timeline_items_legacy
-            `);
-            db.exec('DROP TABLE acp_bus_timeline_items_legacy');
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
-        }
-        db.exec(`
+        await db.transaction([
+            {
+                type: 'exec',
+                sql: `
+                    ALTER TABLE acp_bus_timeline_items
+                    RENAME TO acp_bus_timeline_items_legacy
+                `
+            },
+            {
+                type: 'exec',
+                sql: `
+                    CREATE TABLE acp_bus_timeline_items (
+                        session_key TEXT NOT NULL,
+                        item_key TEXT NOT NULL,
+                        item_type TEXT NOT NULL,
+                        item_id TEXT NOT NULL DEFAULT '',
+                        item_index INTEGER NOT NULL DEFAULT 0,
+                        role TEXT NOT NULL DEFAULT '',
+                        kind TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL DEFAULT '',
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        PRIMARY KEY(session_key, item_key)
+                    )
+                `
+            },
+            {
+                type: 'exec',
+                sql: `
+                    INSERT INTO acp_bus_timeline_items (
+                        session_key,
+                        item_key,
+                        item_type,
+                        item_id,
+                        item_index,
+                        role,
+                        kind,
+                        status,
+                        updated_at,
+                        payload_json
+                    )
+                    SELECT
+                        session_key,
+                        item_key,
+                        item_type,
+                        item_id,
+                        CAST(${sourceIndexColumn} AS INTEGER),
+                        role,
+                        kind,
+                        status,
+                        updated_at,
+                        payload_json
+                    FROM acp_bus_timeline_items_legacy
+                `
+            },
+            {
+                type: 'exec',
+                sql: 'DROP TABLE acp_bus_timeline_items_legacy'
+            }
+        ]);
+        await db.exec(`
             CREATE INDEX IF NOT EXISTS idx_acp_bus_timeline_index
                 ON acp_bus_timeline_items(session_key, item_index, item_key)
         `);
     }
 
-    #getSessionRow(sessionKey) {
+    async #getSessionRow(sessionKey) {
         const db = this.#requireDb();
-        return db.prepare(`
+        return await db.get(`
             SELECT *
             FROM acp_bus_sessions
             WHERE session_key = ?
-        `).get(sessionKey) || null;
+        `, [sessionKey]) || null;
     }
 
-    getSession(sessionKey, options = {}) {
-        const row = this.#getSessionRow(sessionKey);
+    async getSession(sessionKey, options = {}) {
+        const row = await this.#getSessionRow(sessionKey);
         return rowToSession(row, options.includeSnapshot === true);
     }
 
-    getSessionByIdentity(agentId, sessionId, options = {}) {
-        return this.getSession(
+    async getSessionByIdentity(agentId, sessionId, options = {}) {
+        return await this.getSession(
             buildAcpBusSessionKey(agentId, sessionId),
             options
         );
     }
 
-    #writeSession(record) {
+    async #writeSession(record) {
         const db = this.#requireDb();
-        db.prepare(`
+        await db.run(`
             INSERT INTO acp_bus_sessions (
                 session_key,
                 agent_id,
@@ -955,7 +964,7 @@ export class AcpBusStore {
                 is_present = excluded.is_present,
                 snapshot_version = excluded.snapshot_version,
                 snapshot_json = excluded.snapshot_json
-        `).run({
+        `, {
             sessionKey: record.sessionKey,
             agentId: record.agentId,
             sessionId: record.sessionId,
@@ -984,12 +993,12 @@ export class AcpBusStore {
         });
     }
 
-    #upsertTimelineRows(rows = []) {
+    async #upsertTimelineRows(rows = []) {
         if (!Array.isArray(rows) || rows.length === 0) {
             return;
         }
         const db = this.#requireDb();
-        const insert = db.prepare(`
+        const sql = `
             INSERT INTO acp_bus_timeline_items (
                 session_key,
                 item_key,
@@ -1022,77 +1031,72 @@ export class AcpBusStore {
                 status = excluded.status,
                 updated_at = excluded.updated_at,
                 payload_json = excluded.payload_json
-        `);
-        db.exec('BEGIN');
-        try {
-            for (const row of rows) {
-                insert.run(row);
-            }
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
-        }
+        `;
+        await db.transaction(rows.map((row) => ({
+            type: 'run',
+            sql,
+            params: row
+        })));
     }
 
-    #replaceTimelineRows(sessionKey, rows = []) {
+    async #replaceTimelineRows(sessionKey, rows = []) {
         const db = this.#requireDb();
-        db.exec('BEGIN');
-        try {
-            db.prepare(`
+        const insertSql = `
+            INSERT INTO acp_bus_timeline_items (
+                session_key,
+                item_key,
+                item_type,
+                item_id,
+                item_index,
+                role,
+                kind,
+                status,
+                updated_at,
+                payload_json
+            ) VALUES (
+                @sessionKey,
+                @itemKey,
+                @itemType,
+                @itemId,
+                @itemIndex,
+                @role,
+                @kind,
+                @status,
+                @updatedAt,
+                @payloadJson
+            )
+        `;
+        const operations = [{
+            type: 'run',
+            sql: `
                 DELETE FROM acp_bus_timeline_items
                 WHERE session_key = ?
-            `).run(sessionKey);
-            if (Array.isArray(rows) && rows.length > 0) {
-                const insert = db.prepare(`
-                    INSERT INTO acp_bus_timeline_items (
-                        session_key,
-                        item_key,
-                        item_type,
-                        item_id,
-                        item_index,
-                        role,
-                        kind,
-                        status,
-                        updated_at,
-                        payload_json
-                    ) VALUES (
-                        @sessionKey,
-                        @itemKey,
-                        @itemType,
-                        @itemId,
-                        @itemIndex,
-                        @role,
-                        @kind,
-                        @status,
-                        @updatedAt,
-                        @payloadJson
-                    )
-                `);
-                for (const row of rows) {
-                    insert.run(row);
-                }
-            }
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
+            `,
+            params: [sessionKey]
+        }];
+        for (const row of Array.isArray(rows) ? rows : []) {
+            operations.push({
+                type: 'run',
+                sql: insertSql,
+                params: row
+            });
         }
+        await db.transaction(operations);
     }
 
-    #getTimelineRows(sessionKey) {
+    async #getTimelineRows(sessionKey) {
         const db = this.#requireDb();
-        return db.prepare(`
+        return await db.all(`
             SELECT *
             FROM acp_bus_timeline_items
             WHERE session_key = ?
             ORDER BY item_index ASC, item_key ASC
-        `).all(String(sessionKey || '').trim());
+        `, [String(sessionKey || '').trim()]);
     }
 
-    #ensureTimelineIndexes(sessionKey) {
+    async #ensureTimelineIndexes(sessionKey) {
         const db = this.#requireDb();
-        const bounds = db.prepare(`
+        const bounds = await db.get(`
             SELECT
                 COUNT(*) AS count,
                 COUNT(DISTINCT item_index) AS distinct_count,
@@ -1101,7 +1105,7 @@ export class AcpBusStore {
                 SUM(item_index) AS sum_index
             FROM acp_bus_timeline_items
             WHERE session_key = ?
-        `).get(sessionKey) || {};
+        `, [sessionKey]) || {};
         const count = Number(bounds.count || 0);
         if (count === 0) {
             return;
@@ -1119,50 +1123,50 @@ export class AcpBusStore {
         ) {
             return;
         }
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT item_key, item_index, payload_json
             FROM acp_bus_timeline_items
             WHERE session_key = ?
             ORDER BY item_index ASC, item_key ASC
-        `).all(sessionKey);
-        const update = db.prepare(`
+        `, [sessionKey]);
+        const updateSql = `
             UPDATE acp_bus_timeline_items
             SET item_index = ?, payload_json = ?
             WHERE session_key = ? AND item_key = ?
-        `);
-        db.exec('BEGIN');
-        try {
-            for (const [index, row] of rows.entries()) {
-                const itemIndex = index + 1;
-                const value = parseJsonText(row.payload_json, {});
-                const payload = value && typeof value === 'object'
-                    ? { ...value, index: itemIndex }
-                    : value;
-                if (payload && typeof payload === 'object') {
-                    delete payload.order;
-                }
-                update.run(
+        `;
+        const operations = rows.map((row, index) => {
+            const itemIndex = index + 1;
+            const value = parseJsonText(row.payload_json, {});
+            const payload = value && typeof value === 'object'
+                ? { ...value, index: itemIndex }
+                : value;
+            if (payload && typeof payload === 'object') {
+                delete payload.order;
+            }
+            return {
+                type: 'run',
+                sql: updateSql,
+                params: [
                     itemIndex,
                     JSON.stringify(payload),
                     sessionKey,
                     row.item_key
-                );
-            }
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
-        }
+                ]
+            };
+        });
+        await db.transaction(operations);
     }
 
-    upsertIndexedSession(entry = {}) {
+    async upsertIndexedSession(entry = {}) {
         const agentId = String(entry.agentId || '').trim();
         const sessionId = String(entry.sessionId || '').trim();
         if (!agentId || !sessionId) {
             throw new Error('agentId and sessionId are required');
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
-        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+        const previous = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         const seenAt = typeof entry.seenAt === 'string' && entry.seenAt.trim()
             ? entry.seenAt.trim()
             : this.now();
@@ -1207,8 +1211,10 @@ export class AcpBusStore {
                 ? JSON.stringify(previous.snapshot)
                 : ''
         };
-        this.#writeSession(next);
-        const record = this.getSession(sessionKey, { includeSnapshot: true });
+        await this.#writeSession(next);
+        const record = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         return {
             created: !previous,
             previous,
@@ -1217,7 +1223,7 @@ export class AcpBusStore {
         };
     }
 
-    saveObservedSession(snapshot, options = {}) {
+    async saveObservedSession(snapshot, options = {}) {
         const rawSnapshot = cloneSerializable(snapshot, null);
         const agentId = String(rawSnapshot?.agentId || '').trim();
         const sessionId = String(rawSnapshot?.acpSessionId || '').trim();
@@ -1225,7 +1231,7 @@ export class AcpBusStore {
             throw new Error('Observed snapshot must include agentId and sessionId');
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
-        const previousRow = this.#getSessionRow(sessionKey);
+        const previousRow = await this.#getSessionRow(sessionKey);
         const previous = rowToSession(previousRow, true);
         const mergedSnapshot = mergeObservedSnapshot(
             previous?.snapshot || null,
@@ -1246,9 +1252,11 @@ export class AcpBusStore {
             ? options.liveAt.trim()
             : observedAt;
         if (previous) {
-            this.#ensureTimelineIndexes(sessionKey);
+            await this.#ensureTimelineIndexes(sessionKey);
         }
-        const previousTimelineRows = previous ? this.#getTimelineRows(sessionKey) : [];
+        const previousTimelineRows = previous
+            ? await this.#getTimelineRows(sessionKey)
+            : [];
         const indexedSnapshot = mergePlanState(
             previous?.snapshot || null,
             mergedSnapshot,
@@ -1334,13 +1342,15 @@ export class AcpBusStore {
             snapshotVersion,
             snapshotJson
         };
-        this.#writeSession(next);
+        await this.#writeSession(next);
         if (options.authoritativeSnapshot === true) {
-            this.#replaceTimelineRows(sessionKey, timelineRows);
+            await this.#replaceTimelineRows(sessionKey, timelineRows);
         } else {
-            this.#upsertTimelineRows(timelineRows);
+            await this.#upsertTimelineRows(timelineRows);
         }
-        const record = this.getSession(sessionKey, { includeSnapshot: true });
+        const record = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         return {
             created: !previous,
             previous,
@@ -1353,14 +1363,16 @@ export class AcpBusStore {
         };
     }
 
-    markSessionInterest(entry = {}) {
+    async markSessionInterest(entry = {}) {
         const agentId = String(entry.agentId || '').trim();
         const sessionId = String(entry.sessionId || '').trim();
         if (!agentId || !sessionId) {
             throw new Error('agentId and sessionId are required');
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
-        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+        const previous = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         const next = {
             sessionKey,
             agentId,
@@ -1390,8 +1402,10 @@ export class AcpBusStore {
                 ? JSON.stringify(previous.snapshot)
                 : ''
         };
-        this.#writeSession(next);
-        const record = this.getSession(sessionKey, { includeSnapshot: true });
+        await this.#writeSession(next);
+        const record = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         return {
             created: !previous,
             previous,
@@ -1400,8 +1414,10 @@ export class AcpBusStore {
         };
     }
 
-    updateContinuityState(sessionKey, continuityState, options = {}) {
-        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+    async updateContinuityState(sessionKey, continuityState, options = {}) {
+        const previous = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         if (!previous) {
             return null;
         }
@@ -1433,12 +1449,14 @@ export class AcpBusStore {
                 ? JSON.stringify(previous.snapshot)
                 : ''
         };
-        this.#writeSession(next);
-        return this.getSession(sessionKey, { includeSnapshot: true });
+        await this.#writeSession(next);
+        return await this.getSession(sessionKey, { includeSnapshot: true });
     }
 
-    markSessionForUpstreamSync(sessionKey, options = {}) {
-        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+    async markSessionForUpstreamSync(sessionKey, options = {}) {
+        const previous = await this.getSession(sessionKey, {
+            includeSnapshot: true
+        });
         if (!previous) {
             return null;
         }
@@ -1460,12 +1478,19 @@ export class AcpBusStore {
                 ? JSON.stringify(previous.snapshot)
                 : ''
         };
-        this.#writeSession(next);
-        return this.getSession(sessionKey, { includeSnapshot: true });
+        await this.#writeSession(next);
+        return await this.getSession(sessionKey, { includeSnapshot: true });
     }
 
-    reconcileAgentPresence(agentId, seenSessionKeys = [], reconciledAt = this.now()) {
-        const rows = this.listSessions({ agentId, includeSnapshot: true });
+    async reconcileAgentPresence(
+        agentId,
+        seenSessionKeys = [],
+        reconciledAt = this.now()
+    ) {
+        const rows = await this.listSessions({
+            agentId,
+            includeSnapshot: true
+        });
         const seen = new Set(seenSessionKeys);
         const missing = [];
         for (const row of rows) {
@@ -1480,71 +1505,74 @@ export class AcpBusStore {
                 lastDetachedAt: row.lastDetachedAt || '',
                 snapshotJson: row.snapshot ? JSON.stringify(row.snapshot) : ''
             };
-            this.#writeSession(next);
+            await this.#writeSession(next);
             missing.push(
-                this.getSession(row.sessionKey, { includeSnapshot: true })
+                await this.getSession(row.sessionKey, { includeSnapshot: true })
             );
         }
         return missing;
     }
 
-    deleteSession(sessionKey) {
+    async deleteSession(sessionKey) {
         const db = this.#requireDb();
         const normalizedSessionKey = String(sessionKey || '').trim();
         if (!normalizedSessionKey) {
             return null;
         }
-        const previous = this.getSession(normalizedSessionKey, {
+        const previous = await this.getSession(normalizedSessionKey, {
             includeSnapshot: true
         });
         if (!previous) {
             return null;
         }
-        db.exec('BEGIN');
-        try {
-            db.prepare(`
-                DELETE FROM acp_bus_timeline_items
-                WHERE session_key = ?
-            `).run(normalizedSessionKey);
-            db.prepare(`
-                DELETE FROM acp_bus_sessions
-                WHERE session_key = ?
-            `).run(normalizedSessionKey);
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
-        }
+        await db.transaction([
+            {
+                type: 'run',
+                sql: `
+                    DELETE FROM acp_bus_timeline_items
+                    WHERE session_key = ?
+                `,
+                params: [normalizedSessionKey]
+            },
+            {
+                type: 'run',
+                sql: `
+                    DELETE FROM acp_bus_sessions
+                    WHERE session_key = ?
+                `,
+                params: [normalizedSessionKey]
+            }
+        ]);
         return previous;
     }
 
-    setHotSessionKeys(sessionKeys = []) {
+    async setHotSessionKeys(sessionKeys = []) {
         const db = this.#requireDb();
         const normalized = sessionKeys
             .map((key) => String(key || '').trim())
             .filter(Boolean);
-        db.exec('BEGIN');
-        try {
-            db.prepare(`
+        const operations = [{
+            type: 'run',
+            sql: `
                 UPDATE acp_bus_sessions
                 SET hot_rank = NULL
-            `).run();
-            const update = db.prepare(`
-                UPDATE acp_bus_sessions
-                SET hot_rank = ?
-                WHERE session_key = ?
-            `);
-            normalized.forEach((sessionKey, index) => {
-                update.run(index, sessionKey);
+            `
+        }];
+        for (const [index, sessionKey] of normalized.entries()) {
+            operations.push({
+                type: 'run',
+                sql: `
+                    UPDATE acp_bus_sessions
+                    SET hot_rank = ?
+                    WHERE session_key = ?
+                `,
+                params: [index, sessionKey]
             });
-            db.exec('COMMIT');
-        } catch (error) {
-            db.exec('ROLLBACK');
-            throw error;
         }
+        await db.transaction(operations);
     }
 
-    listSessions(options = {}) {
+    async listSessions(options = {}) {
         const db = this.#requireDb();
         const clauses = [];
         const params = [];
@@ -1564,7 +1592,7 @@ export class AcpBusStore {
         const limitClause = Number.isFinite(options.limit) && options.limit > 0
             ? `LIMIT ${Math.floor(options.limit)}`
             : '';
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_sessions
             ${whereClause}
@@ -1576,13 +1604,13 @@ export class AcpBusStore {
                 last_seen_at DESC,
                 title COLLATE NOCASE ASC
             ${limitClause}
-        `).all(...params);
+        `, params);
         return rows.map((row) =>
             rowToSession(row, options.includeSnapshot === true)
         );
     }
 
-    listMostActiveSessions(limit, options = {}) {
+    async listMostActiveSessions(limit, options = {}) {
         const db = this.#requireDb();
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
@@ -1595,7 +1623,7 @@ export class AcpBusStore {
         const whereClause = clauses.length > 0
             ? `WHERE ${clauses.join(' AND ')}`
             : '';
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_sessions
             ${whereClause}
@@ -1605,11 +1633,13 @@ export class AcpBusStore {
                 last_seen_at DESC,
                 title COLLATE NOCASE ASC
             LIMIT ${safeLimit}
-        `).all(...params);
-        return rows.map((row) => rowToSession(row, options.includeSnapshot === true));
+        `, params);
+        return rows.map((row) =>
+            rowToSession(row, options.includeSnapshot === true)
+        );
     }
 
-    listHotCandidates(limit, options = {}) {
+    async listHotCandidates(limit, options = {}) {
         const db = this.#requireDb();
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
@@ -1621,7 +1651,7 @@ export class AcpBusStore {
         const whereClause = clauses.length > 0
             ? `WHERE ${clauses.join(' AND ')}`
             : '';
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_sessions
             ${whereClause}
@@ -1631,13 +1661,13 @@ export class AcpBusStore {
                 last_seen_at DESC,
                 title COLLATE NOCASE ASC
             LIMIT ${safeLimit}
-        `).all();
+        `);
         return rows.map((row) =>
             rowToSession(row, options.includeSnapshot === true)
         );
     }
 
-    listColdRepairCandidates(limit, options = {}) {
+    async listColdRepairCandidates(limit, options = {}) {
         const db = this.#requireDb();
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
@@ -1650,7 +1680,7 @@ export class AcpBusStore {
         const minAgeMs = Number.isFinite(options.minAgeMs)
             ? Math.max(0, Math.floor(options.minAgeMs))
             : 10 * 60 * 1000;
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_sessions
             WHERE is_present = 1
@@ -1667,7 +1697,7 @@ export class AcpBusStore {
                 last_received_at ASC,
                 upstream_updated_at ASC,
                 title COLLATE NOCASE ASC
-        `).all();
+        `);
         const candidates = [];
         for (const row of rows) {
             const session = rowToSession(
@@ -1701,22 +1731,24 @@ export class AcpBusStore {
         return candidates;
     }
 
-    listHotSessions(limit, options = {}) {
+    async listHotSessions(limit, options = {}) {
         const db = this.#requireDb();
         const limitClause = Number.isFinite(limit) && limit > 0
             ? `LIMIT ${Math.floor(limit)}`
             : '';
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_sessions
             WHERE hot_rank IS NOT NULL
             ORDER BY hot_rank ASC
             ${limitClause}
-        `).all();
-        return rows.map((row) => rowToSession(row, options.includeSnapshot === true));
+        `);
+        return rows.map((row) =>
+            rowToSession(row, options.includeSnapshot === true)
+        );
     }
 
-    pruneSessions(limit, preserveKeys = []) {
+    async pruneSessions(limit, preserveKeys = []) {
         const db = this.#requireDb();
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
@@ -1724,7 +1756,7 @@ export class AcpBusStore {
         const preserved = new Set(
             preserveKeys.map((key) => String(key || '').trim()).filter(Boolean)
         );
-        const rows = this.listMostActiveSessions(safeLimit, {
+        const rows = await this.listMostActiveSessions(safeLimit, {
             presentOnly: false,
             includeSnapshot: false
         });
@@ -1736,27 +1768,39 @@ export class AcpBusStore {
             keep.add(key);
         }
         const deleted = [];
-        const allRows = this.listSessions({ includeSnapshot: false });
-        const remove = db.prepare(`
-            DELETE FROM acp_bus_sessions
-            WHERE session_key = ?
-        `);
-        const removeTimeline = db.prepare(`
-            DELETE FROM acp_bus_timeline_items
-            WHERE session_key = ?
-        `);
+        const allRows = await this.listSessions({ includeSnapshot: false });
+        const operations = [];
         for (const row of allRows) {
             if (row.hotRank !== null || keep.has(row.sessionKey)) {
                 continue;
             }
-            remove.run(row.sessionKey);
-            removeTimeline.run(row.sessionKey);
+            operations.push(
+                {
+                    type: 'run',
+                    sql: `
+                        DELETE FROM acp_bus_sessions
+                        WHERE session_key = ?
+                    `,
+                    params: [row.sessionKey]
+                },
+                {
+                    type: 'run',
+                    sql: `
+                        DELETE FROM acp_bus_timeline_items
+                        WHERE session_key = ?
+                    `,
+                    params: [row.sessionKey]
+                }
+            );
             deleted.push(row);
+        }
+        if (operations.length > 0) {
+            await db.transaction(operations);
         }
         return deleted;
     }
 
-    listTimelineItems(sessionKey, options = {}) {
+    async listTimelineItems(sessionKey, options = {}) {
         const db = this.#requireDb();
         const normalizedSessionKey = String(sessionKey || '').trim();
         if (!normalizedSessionKey) {
@@ -1773,7 +1817,7 @@ export class AcpBusStore {
                 nextCursor: ''
             };
         }
-        this.#ensureTimelineIndexes(normalizedSessionKey);
+        await this.#ensureTimelineIndexes(normalizedSessionKey);
         const safeLimit = Number.isFinite(options.limit)
             ? Math.min(200, Math.max(1, Math.floor(options.limit)))
             : 30;
@@ -1781,7 +1825,7 @@ export class AcpBusStore {
         const after = decodeTimelineCursor(options.after);
         let rows = [];
         if (before) {
-            rows = db.prepare(`
+            rows = (await db.all(`
                 SELECT *
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
@@ -1791,15 +1835,15 @@ export class AcpBusStore {
                     )
                 ORDER BY item_index DESC, item_key DESC
                 LIMIT ?
-            `).all(
+            `, [
                 normalizedSessionKey,
                 before.index,
                 before.index,
                 before.key,
                 safeLimit
-            ).reverse();
+            ])).reverse();
         } else if (after) {
-            rows = db.prepare(`
+            rows = await db.all(`
                 SELECT *
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
@@ -1809,39 +1853,39 @@ export class AcpBusStore {
                     )
                 ORDER BY item_index ASC, item_key ASC
                 LIMIT ?
-            `).all(
+            `, [
                 normalizedSessionKey,
                 after.index,
                 after.index,
                 after.key,
                 safeLimit
-            );
+            ]);
         } else {
-            rows = db.prepare(`
+            rows = (await db.all(`
                 SELECT *
                 FROM acp_bus_timeline_items
                 WHERE session_key = ?
                 ORDER BY item_index DESC, item_key DESC
                 LIMIT ?
-            `).all(normalizedSessionKey, safeLimit).reverse();
+            `, [normalizedSessionKey, safeLimit])).reverse();
         }
-        const total = Number(db.prepare(`
+        const total = Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_timeline_items
             WHERE session_key = ?
-        `).get(normalizedSessionKey)?.count || 0);
-        const bounds = db.prepare(`
+        `, [normalizedSessionKey]))?.count || 0);
+        const bounds = await db.get(`
             SELECT
                 MIN(item_index) AS min_index,
                 MAX(item_index) AS max_index
             FROM acp_bus_timeline_items
             WHERE session_key = ?
-        `).get(normalizedSessionKey) || {};
+        `, [normalizedSessionKey]) || {};
         const minIndex = Number(bounds.min_index || 0);
         const maxIndex = Number(bounds.max_index || 0);
         const first = rows[0] || null;
         const last = rows.at(-1) || null;
-        const hasOlder = first ? Number(db.prepare(`
+        const hasOlder = first ? Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_timeline_items
             WHERE session_key = ?
@@ -1849,13 +1893,13 @@ export class AcpBusStore {
                     item_index < ?
                     OR (item_index = ? AND item_key < ?)
                 )
-        `).get(
+        `, [
             normalizedSessionKey,
             first.item_index,
             first.item_index,
             first.item_key
-        )?.count || 0) > 0 : false;
-        const hasNewer = last ? Number(db.prepare(`
+        ]))?.count || 0) > 0 : false;
+        const hasNewer = last ? Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_timeline_items
             WHERE session_key = ?
@@ -1863,12 +1907,12 @@ export class AcpBusStore {
                     item_index > ?
                     OR (item_index = ? AND item_key > ?)
                 )
-        `).get(
+        `, [
             normalizedSessionKey,
             last.item_index,
             last.item_index,
             last.item_key
-        )?.count || 0) > 0 : false;
+        ]))?.count || 0) > 0 : false;
         return {
             items: rows.map((row) => timelineRowToItem(row)),
             total,
@@ -1883,7 +1927,7 @@ export class AcpBusStore {
         };
     }
 
-    appendEvent(event = {}) {
+    async appendEvent(event = {}) {
         const db = this.#requireDb();
         const createdAt = typeof event.createdAt === 'string'
             && event.createdAt.trim()
@@ -1897,7 +1941,7 @@ export class AcpBusStore {
             sessionId: String(event.sessionId || '').trim(),
             payload
         };
-        db.prepare(`
+        await db.run(`
             INSERT INTO acp_bus_events (
                 created_at,
                 type,
@@ -1905,17 +1949,17 @@ export class AcpBusStore {
                 session_id,
                 payload_json
             ) VALUES (?, ?, ?, ?, ?)
-        `).run(
+        `, [
             eventRecord.createdAt,
             eventRecord.type,
             eventRecord.agentId,
             eventRecord.sessionId,
             JSON.stringify(eventRecord.payload)
-        );
-        const row = db.prepare(`
+        ]);
+        const row = await db.get(`
             SELECT last_insert_rowid() AS id
-        `).get();
-        db.prepare(`
+        `);
+        await db.run(`
             DELETE FROM acp_bus_events
             WHERE id NOT IN (
                 SELECT id
@@ -1923,24 +1967,24 @@ export class AcpBusStore {
                 ORDER BY id DESC
                 LIMIT ?
             )
-        `).run(this.eventLimit);
+        `, [this.eventLimit]);
         return {
             id: Number(row?.id || 0),
             ...eventRecord
         };
     }
 
-    listEvents(limit = 100) {
+    async listEvents(limit = 100) {
         const db = this.#requireDb();
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
             : 100;
-        const rows = db.prepare(`
+        const rows = await db.all(`
             SELECT *
             FROM acp_bus_events
             ORDER BY id DESC
             LIMIT ?
-        `).all(safeLimit);
+        `, [safeLimit]);
         return rows.map((row) => ({
             id: Number(row.id),
             createdAt: String(row.created_at || ''),
@@ -1951,25 +1995,25 @@ export class AcpBusStore {
         }));
     }
 
-    getSummary() {
+    async getSummary() {
         const db = this.#requireDb();
-        const sessionCount = db.prepare(`
+        const sessionCount = Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_sessions
-        `).get().count;
-        const hotCount = db.prepare(`
+        `))?.count || 0);
+        const hotCount = Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_sessions
             WHERE hot_rank IS NOT NULL
-        `).get().count;
-        const eventCount = db.prepare(`
+        `))?.count || 0);
+        const eventCount = Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_events
-        `).get().count;
-        const timelineItemCount = db.prepare(`
+        `))?.count || 0);
+        const timelineItemCount = Number((await db.get(`
             SELECT COUNT(*) AS count
             FROM acp_bus_timeline_items
-        `).get().count;
+        `))?.count || 0);
         return {
             dbPath: this.dbPath,
             sessionCount,
@@ -1978,4 +2022,5 @@ export class AcpBusStore {
             eventCount
         };
     }
+
 }
