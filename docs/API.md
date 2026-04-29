@@ -1854,7 +1854,7 @@ inside the owning terminal session workspace snapshot:
 This state answers which tabs should reopen with the workspace. ACP transcript
 content, tool calls, plans, permissions, and managed terminal summaries are
 stored in the ACP bus database and fetched through bus-backed APIs.
-Production servers access the bus database through the generic
+Production servers access the bus database through the generic `src/sqlite.mjs`
 `AsyncDatabaseSync` worker-thread wrapper, so DB-backed ACP bus reads do not run
 SQLite work on the main event loop.
 

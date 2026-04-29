@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-import { AsyncDatabaseSync } from './async-database-sync.mjs';
+import { AsyncDatabaseSync } from './sqlite.mjs';
 
 const BASE_DIR = path.join(os.homedir(), '.tabminal');
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');

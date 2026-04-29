@@ -57,7 +57,7 @@ agentId + '::' + sessionId
 ### Backend Store
 
 `src/acp-bus-store.mjs` owns `~/.tabminal/acp-bus.sqlite` by default.
-It uses the generic `src/async-database-sync.mjs` wrapper, which runs
+It uses the generic `src/sqlite.mjs` wrapper, which runs
 `node:sqlite` `DatabaseSync` work in a worker thread and exposes only
 `async` methods to business code. The bus manager therefore depends on one ACP
 business store while SQLite work stays off the main event loop.
