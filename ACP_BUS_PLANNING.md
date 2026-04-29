@@ -57,6 +57,9 @@ agentId + '::' + sessionId
 ### Backend Store
 
 `src/acp-bus-store.mjs` owns `~/.tabminal/acp-bus.sqlite` by default.
+Production server code reaches it through `src/acp-bus-store-async.mjs`, which
+runs the synchronous SQLite implementation in a worker thread. The bus manager
+therefore exposes async APIs and keeps SQLite work off the main event loop.
 
 Important tables:
 
@@ -96,7 +99,7 @@ Timeline rules:
 
 - polls ACP providers for global session metadata
 - keeps the hot set attached based on ACP metadata `updatedAt`
-- treats provider discovery as deletion-authoritative only when `scope = all`
+- treats provider discovery as additive metadata, not deletion-authoritative
 - attaches hot or UI-pinned sessions through bus-owned runtime handles
 - owns lightweight open agent tab metadata
 - persists bus events for downstream clients
@@ -111,20 +114,25 @@ hot session limit: 10
 cached session retention: 1000
 ```
 
+The retention value is a read/query cap, not a proactive deletion policy.
+Session metadata is retained until an attach/load path proves that the upstream
+session no longer exists.
+
 ### Upstream Sync Worker
 
 The bus worker runs every 30 seconds by default.
 
 Worker pipeline:
 
-1. Discover available ACP providers.
-2. For each provider, scan up to 300 upstream session metadata rows.
+1. Discover configured ACP providers without running blocking availability
+   probes.
+2. For each provider, scan up to 300 upstream session metadata rows. Providers
+   that cannot list all sessions naturally return cwd-scoped results.
 3. Build a deduplicated cwd set from currently open terminal/workspace state.
-4. After the all-session pass, scan up to 300 cwd-scoped session rows for each
+4. After the provider metadata pass, scan up to 300 cwd-scoped session rows for each
    workspace cwd.
 5. Upsert all discovered metadata into `acp_bus_sessions`.
-6. Reconcile deletion only when upstream reports `scope = all`, using the union
-   of all-session and workspace-cwd scan results.
+6. Never delete missing metadata just because it was absent from a scan.
 7. Rebalance the hot set from metadata `updatedAt`.
 8. On non-startup polls, repair at most one stale session when CPU load is below
    the configured threshold.
@@ -143,6 +151,8 @@ Attach behavior:
 - if attach sees an upstream/local gap greater than 10 minutes, it marks the row
   `resync_required` and clears local receive/load markers
 - the next low-load worker pass performs the authoritative repair
+- if attach/load fails with an explicit upstream session-missing error, the bus
+  deletes that session metadata and emits `session_index_removed`
 
 ### Server API Surface
 

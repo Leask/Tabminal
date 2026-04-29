@@ -852,6 +852,8 @@ Notes:
 - normal `scope` is `"bus"` and does not block on upstream ACP listing
 - if the bus index is empty, the response is an empty `"bus"` result
 - `/resume` never performs cwd or all upstream scans synchronously
+- session metadata is retained until attach/load proves the upstream session is
+  missing; absence from a metadata scan is not deletion-authoritative
 
 Errors:
 
@@ -1852,6 +1854,8 @@ inside the owning terminal session workspace snapshot:
 This state answers which tabs should reopen with the workspace. ACP transcript
 content, tool calls, plans, permissions, and managed terminal summaries are
 stored in the ACP bus database and fetched through bus-backed APIs.
+Production servers access the bus database through a worker-thread adapter, so
+DB-backed ACP bus reads do not run SQLite work on the main event loop.
 
 ### 15.4 Authority model
 

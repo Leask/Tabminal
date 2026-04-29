@@ -95,6 +95,9 @@ class FakeBusRuntime extends EventEmitter {
             ...structuredClone(meta),
             replayHistory: options.replayHistory
         });
+        if (this.definition.missingSessions?.includes(meta.acpSessionId)) {
+            throw new Error('Session not found');
+        }
         const tab = {
             id: meta.id,
             runtimeId: `runtime-${this.definition.id}`,
@@ -278,7 +281,7 @@ async function withBusManager(prefix, options, callback) {
 async function waitFor(condition, timeoutMs = 500, intervalMs = 10) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() <= deadline) {
-        if (condition()) {
+        if (await condition()) {
             return;
         }
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -327,13 +330,13 @@ describe('AcpBusManager', () => {
             });
             await manager.start();
 
-            const hotSessions = manager.listSessions({ hotOnly: true });
+            const hotSessions = await manager.listSessions({ hotOnly: true });
             assert.equal(hotSessions.length, 2);
             assert.deepEqual(
                 hotSessions.map((row) => row.sessionKey),
                 ['codex::c-1', 'gemini::g-1']
             );
-            assert.equal(manager.getState().observedSessionCount, 2);
+            assert.equal((await manager.getState()).observedSessionCount, 2);
 
             const observeRuntimes = runtimeInstances.filter((runtime) =>
                 runtime.kind === 'observe'
@@ -383,7 +386,8 @@ describe('AcpBusManager', () => {
         }, async ({ manager, setNow }) => {
             await manager.start();
             assert.deepEqual(
-                manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
+                (await manager.listSessions({ hotOnly: true }))
+                    .map((row) => row.sessionKey),
                 ['codex::c-1']
             );
 
@@ -398,10 +402,11 @@ describe('AcpBusManager', () => {
             await new Promise((resolve) => setTimeout(resolve, 25));
 
             assert.deepEqual(
-                manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
+                (await manager.listSessions({ hotOnly: true }))
+                    .map((row) => row.sessionKey),
                 ['codex::c-1']
             );
-            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal((await manager.getState()).observedSessionCount, 1);
         });
     });
 
@@ -438,22 +443,22 @@ describe('AcpBusManager', () => {
             await manager.start();
 
             assert.equal(
-                manager.getSession('codex', 'older-cold').messageCount,
+                (await manager.getSession('codex', 'older-cold')).messageCount,
                 0
             );
             assert.equal(
-                manager.getSession('codex', 'newer-cold').messageCount,
+                (await manager.getSession('codex', 'newer-cold')).messageCount,
                 0
             );
 
             await manager.syncNow('poll');
 
             assert.equal(
-                manager.getSession('codex', 'older-cold').messageCount,
+                (await manager.getSession('codex', 'older-cold')).messageCount,
                 1
             );
             assert.equal(
-                manager.getSession('codex', 'newer-cold').messageCount,
+                (await manager.getSession('codex', 'newer-cold')).messageCount,
                 0
             );
             const observeRuntime = runtimeInstances.find((runtime) =>
@@ -494,7 +499,7 @@ describe('AcpBusManager', () => {
             await manager.start();
             await manager.syncNow('poll');
 
-            assert.equal(manager.getSession('codex', 'cold').messageCount, 0);
+            assert.equal((await manager.getSession('codex', 'cold')).messageCount, 0);
             const observeRuntime = runtimeInstances.find((runtime) =>
                 runtime.kind === 'observe'
             );
@@ -758,7 +763,7 @@ describe('AcpBusManager', () => {
             );
             assert.ok(observeRuntime);
             assert.equal(observeRuntime.resumeCalls[0].replayHistory, false);
-            let session = manager.getSession('codex', 'c-1');
+            let session = await manager.getSession('codex', 'c-1');
             assert.equal(session.continuityState, 'resync_required');
             assert.equal(session.lastReceivedAt, '');
 
@@ -766,7 +771,7 @@ describe('AcpBusManager', () => {
             await manager.syncNow('poll');
 
             assert.equal(observeRuntime.resumeCalls[1].replayHistory, true);
-            session = manager.getSession('codex', 'c-1');
+            session = await manager.getSession('codex', 'c-1');
             assert.equal(session.continuityState, 'live');
             assert.equal(session.lastReceivedAt, '2026-04-14T10:31:00.000Z');
         });
@@ -798,7 +803,7 @@ describe('AcpBusManager', () => {
         }, async ({ manager }) => {
             await manager.start();
             assert.equal(
-                manager.getSession('codex', 'c-2')?.isPresent,
+                (await manager.getSession('codex', 'c-2'))?.isPresent,
                 true
             );
 
@@ -807,7 +812,7 @@ describe('AcpBusManager', () => {
             await manager.syncNow('cwd-only');
 
             assert.equal(
-                manager.getSession('codex', 'c-2')?.isPresent,
+                (await manager.getSession('codex', 'c-2'))?.isPresent,
                 true
             );
 
@@ -815,9 +820,37 @@ describe('AcpBusManager', () => {
             await manager.syncNow('all');
 
             assert.equal(
-                manager.getSession('codex', 'c-2')?.isPresent,
-                false
+                (await manager.getSession('codex', 'c-2'))?.isPresent,
+                true
             );
+        });
+    });
+
+    it('deletes metadata only after upstream reports a missing session on attach', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                missingSessions: ['missing'],
+                busSessions: [{
+                    sessionId: 'missing',
+                    cwd: '/tmp/codex',
+                    title: 'Missing upstream',
+                    updatedAt: '2026-04-14T10:01:00.000Z'
+                }]
+            }]
+        }, async ({ manager }) => {
+            const events = [];
+            manager.on('event', (event) => {
+                events.push(event);
+            });
+            await manager.start();
+
+            assert.equal(await manager.getSession('codex', 'missing'), null);
+            await waitFor(() => events.some((event) =>
+                event.type === 'session_index_removed'
+            ));
         });
     });
 
@@ -844,7 +877,7 @@ describe('AcpBusManager', () => {
             }]
         }, async ({ manager }) => {
             await manager.start();
-            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal((await manager.getState()).observedSessionCount, 1);
 
             const pinned = await manager.pinSession(
                 'agent-tab:test',
@@ -858,25 +891,28 @@ describe('AcpBusManager', () => {
             );
 
             assert.equal(pinned.sessionKey, 'codex::c-2');
-            assert.equal(manager.getState().pinnedSessionCount, 1);
-            assert.equal(manager.getState().observedSessionCount, 2);
+            assert.equal((await manager.getState()).pinnedSessionCount, 1);
+            assert.equal((await manager.getState()).observedSessionCount, 2);
             assert.deepEqual(
-                manager.listSessions({ hotOnly: true }).map((row) => row.sessionKey),
+                (await manager.listSessions({ hotOnly: true }))
+                    .map((row) => row.sessionKey),
                 ['codex::c-1', 'codex::c-2']
             );
             assert.equal(
-                manager.getSession('codex', 'c-2').continuityState,
+                (await manager.getSession('codex', 'c-2')).continuityState,
                 'live'
             );
 
             await manager.unpinSession('agent-tab:test', 'test_detach');
 
-            await waitFor(() => manager.getState().observedSessionCount === 1);
+            await waitFor(async () =>
+                (await manager.getState()).observedSessionCount === 1
+            );
 
-            assert.equal(manager.getState().pinnedSessionCount, 0);
-            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal((await manager.getState()).pinnedSessionCount, 0);
+            assert.equal((await manager.getState()).observedSessionCount, 1);
             assert.equal(
-                manager.getSession('codex', 'c-2').continuityState,
+                (await manager.getSession('codex', 'c-2')).continuityState,
                 'resync_required'
             );
 
@@ -913,12 +949,12 @@ describe('AcpBusManager', () => {
                 validTerminalSessionIds: new Set(['term-1'])
             });
 
-            const tab = manager.getOpenTab('open-tab-1');
+            const tab = await manager.getOpenTab('open-tab-1');
 
             assert.equal(tab.id, 'open-tab-1');
             assert.equal(tab.acpSessionId, 's-1');
             assert.equal(tab.terminalSessionId, 'term-1');
-            assert.equal(manager.getState().observedSessionCount, 1);
+            assert.equal((await manager.getState()).observedSessionCount, 1);
             assert.equal(runtimeInstances.filter((runtime) =>
                 runtime.kind === 'observe'
             ).length, 1);
@@ -954,7 +990,7 @@ describe('AcpBusManager', () => {
             });
             assert.equal(created.agentId, 'codex');
             assert.equal(created.terminalSessionId, 'term-1');
-            assert.equal(manager.listOpenTabs().length, 1);
+            assert.equal((await manager.listOpenTabs()).length, 1);
             const state = await manager.listState();
             assert.equal(state.bus.openTabCount, 1);
             assert.equal(state.definitions.length, 1);
@@ -978,7 +1014,7 @@ describe('AcpBusManager', () => {
             });
             assert.equal(resumed.serialized.id, created.id);
             assert.equal(resumed.serialized.acpSessionId, 'c-1');
-            assert.equal(manager.listOpenTabs().length, 1);
+            assert.equal((await manager.listOpenTabs()).length, 1);
             assert.ok(savedTabs.length >= 2);
         });
     });
@@ -1093,7 +1129,7 @@ describe('AcpBusManager', () => {
 
             await new Promise((resolve) => setTimeout(resolve, 100));
 
-            const lightweight = manager.getOpenTab(created.id);
+            const lightweight = await manager.getOpenTab(created.id);
             assert.equal(lightweight.messages.length, 0);
             assert.equal(lightweight.toolCalls.length, 0);
             assert.equal(lightweight.terminals.length, 1);
@@ -1111,7 +1147,7 @@ describe('AcpBusManager', () => {
             assert.ok(event);
             assert.equal(event.payload.resources.terminals[0].output, 'alpha\nbeta\n');
 
-            const full = manager.getOpenTab(created.id, {
+            const full = await manager.getOpenTab(created.id, {
                 includeTranscript: true
             });
             assert.equal(full.messages.length, 1);
@@ -1184,7 +1220,7 @@ describe('AcpBusManager', () => {
 
             await new Promise((resolve) => setTimeout(resolve, 100));
 
-            const lightweight = manager.getOpenTab(created.id);
+            const lightweight = await manager.getOpenTab(created.id);
             assert.equal(lightweight.messages.length, 0);
             assert.deepEqual(
                 lightweight.toolCalls.map((entry) => entry.toolCallId),
@@ -1222,7 +1258,7 @@ describe('AcpBusManager', () => {
                 ['Active step', 'Pending step']
             );
 
-            const full = manager.getOpenTab(created.id, {
+            const full = await manager.getOpenTab(created.id, {
                 includeTranscript: true
             });
             assert.equal(full.messages.length, 1);
@@ -1265,13 +1301,13 @@ describe('AcpBusManager', () => {
 
             await new Promise((resolve) => setTimeout(resolve, 100));
 
-            const updated = manager.getSession('codex', 'c-1', {
+            const updated = await manager.getSession('codex', 'c-1', {
                 includeSnapshot: true
             });
             assert.equal(updated.messageCount, 2);
             assert.equal(updated.snapshot.messages.length, 2);
 
-            const snapshotEvents = manager.listEvents(10).filter((event) =>
+            const snapshotEvents = (await manager.listEvents(10)).filter((event) =>
                 event.type === 'session_snapshot_updated'
             );
             assert.equal(snapshotEvents.length, 1);
@@ -1279,7 +1315,7 @@ describe('AcpBusManager', () => {
             handle.runtimeEntry.runtime.emit('runtime_exit', { code: 1 });
             await new Promise((resolve) => setTimeout(resolve, 0));
 
-            const resync = manager.getSession('codex', 'c-1');
+            const resync = await manager.getSession('codex', 'c-1');
             assert.equal(resync.continuityState, 'resync_required');
             assert.equal(resync.status, 'disconnected');
         });

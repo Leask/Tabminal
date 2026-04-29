@@ -17,7 +17,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { TerminalManager } from './terminal-manager.mjs';
 import { AcpManager } from './acp-manager.mjs';
 import { AcpBusManager } from './acp-bus-manager.mjs';
-import { AcpBusStore } from './acp-bus-store.mjs';
+import { AcpBusAsyncStore } from './acp-bus-store-async.mjs';
 import { SystemMonitor } from './system-monitor.mjs';
 import { config } from './config.mjs';
 import {
@@ -405,7 +405,7 @@ router.post('/api/auth/logout-others', async (ctx) => {
 const systemMonitor = new SystemMonitor();
 const terminalManager = new TerminalManager();
 const acpManager = new AcpManager({ terminalManager });
-const acpBusStore = new AcpBusStore({
+const acpBusStore = new AcpBusAsyncStore({
     dbPath: config.acpBusDbPath || undefined,
     eventLimit: config.acpBusEventLimit
 });
@@ -453,17 +453,15 @@ async function buildBusBackedAgentTab(
     tabId,
     { attach = false } = {}
 ) {
-    await acpBusReadyPromise;
     if (attach) {
         const result = await acpBusManager.attachOpenTab(tabId);
         return result?.tab || null;
     }
-    return acpBusManager.getOpenTab(tabId);
+    return await acpBusManager.getOpenTab(tabId);
 }
 
 async function buildBusTimelinePage(tabId, query = {}) {
-    await acpBusReadyPromise;
-    return acpBusManager.getTimelinePageForTab(tabId, query);
+    return await acpBusManager.getTimelinePageForTab(tabId, query);
 }
 
 function buildBusCommandMeta(
@@ -842,10 +840,9 @@ router.get('/api/acp-bus/state', async (ctx) => {
 });
 
 router.get('/api/acp-bus/sessions', async (ctx) => {
-    await acpBusReadyPromise;
     const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
     ctx.body = {
-        sessions: acpBusManager.listSessions({
+        sessions: await acpBusManager.listSessions({
             agentId: typeof ctx.query.agentId === 'string'
                 ? ctx.query.agentId
                 : '',
@@ -860,11 +857,10 @@ router.get('/api/acp-bus/sessions', async (ctx) => {
 });
 
 router.get('/api/acp-bus/sessions/:agentId/:sessionId', async (ctx) => {
-    await acpBusReadyPromise;
     const includeSnapshot = parseQueryBoolean(
         String(ctx.query.snapshot || '')
     );
-    const session = acpBusManager.getSession(
+    const session = await acpBusManager.getSession(
         ctx.params.agentId,
         ctx.params.sessionId,
         { includeSnapshot }
@@ -974,10 +970,9 @@ router.get('/api/acp-bus/tabs/:tabId/timeline', async (ctx) => {
 });
 
 router.get('/api/acp-bus/events', async (ctx) => {
-    await acpBusReadyPromise;
     const limit = Number.parseInt(String(ctx.query.limit || ''), 10);
     ctx.body = {
-        events: acpBusManager.listEvents(
+        events: await acpBusManager.listEvents(
             Number.isFinite(limit) && limit > 0 ? limit : 100
         )
     };
@@ -1400,7 +1395,7 @@ wss.on('connection', (socket, target) => {
             sendWebSocketJson(socket, {
                 type: 'snapshot',
                 state,
-                sessions: acpBusManager.listSessions({
+                sessions: await acpBusManager.listSessions({
                     limit: config.acpBusCacheSessionLimit
                 })
             });

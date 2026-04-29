@@ -9,9 +9,9 @@ import {
     mergeDefinitionEnv
 } from './acp-manager.mjs';
 import {
-    AcpBusStore,
     buildAcpBusSessionKey
 } from './acp-bus-store.mjs';
+import { AcpBusAsyncStore } from './acp-bus-store-async.mjs';
 
 const DEFAULT_POLL_INTERVAL_MS = 30000;
 const DEFAULT_HOT_SESSION_LIMIT = 10;
@@ -125,7 +125,7 @@ export class AcpBusManager extends EventEmitter {
             throw new Error('acpManager is required');
         }
         this.acpManager = options.acpManager;
-        this.store = options.store || new AcpBusStore({
+        this.store = options.store || new AcpBusAsyncStore({
             eventLimit: options.eventLimit || DEFAULT_EVENT_LIMIT
         });
         this.runtimeFactory = options.runtimeFactory || (
@@ -218,7 +218,7 @@ export class AcpBusManager extends EventEmitter {
             await this.#restoreOpenTabs(options);
             await this.syncNow('startup');
             this.started = true;
-            await this.#restoreHotSessions();
+            await this.#rebalanceHotSessions('restore');
             this.#scheduleNextPoll();
         } finally {
             this.restoring = false;
@@ -258,10 +258,11 @@ export class AcpBusManager extends EventEmitter {
 
         this.started = false;
         this.storeReady = false;
-        this.store.close();
+        await this.store.close();
     }
 
-    getState() {
+    async getState() {
+        await this.#ensureStoreReady();
         return {
             started: this.started,
             restoring: this.restoring,
@@ -273,16 +274,18 @@ export class AcpBusManager extends EventEmitter {
             openTabCount: this.openTabs.size,
             discoveryRuntimeCount: this.discoveryRuntimes.size,
             observeRuntimeCount: this.observeRuntimes.size,
-            store: this.store.getSummary()
+            store: await this.store.getSummary()
         };
     }
 
-    listSessions(options = {}) {
-        return this.store.listSessions(options);
+    async listSessions(options = {}) {
+        await this.#ensureStoreReady();
+        return await this.store.listSessions(options);
     }
 
-    getSession(agentId, sessionId, options = {}) {
-        return this.store.getSessionByIdentity(agentId, sessionId, options);
+    async getSession(agentId, sessionId, options = {}) {
+        await this.#ensureStoreReady();
+        return await this.store.getSessionByIdentity(agentId, sessionId, options);
     }
 
     async listResumeSessions(options = {}) {
@@ -292,12 +295,12 @@ export class AcpBusManager extends EventEmitter {
         const limit = Number.isFinite(options.limit)
             ? Math.min(DEFAULT_RESUME_LIST_LIMIT, Math.max(1, Math.floor(options.limit)))
             : DEFAULT_RESUME_LIST_LIMIT;
-        const busSessions = this.store.listSessions({
+        const busSessions = (await this.store.listSessions({
             agentId: definition.id,
             presentOnly: true,
             limit,
             includeSnapshot: false
-        }).map((row) => this.#resumeSessionFromBusRow(row));
+        })).map((row) => this.#resumeSessionFromBusRow(row));
 
         if (busSessions.length > 0) {
             return {
@@ -313,30 +316,32 @@ export class AcpBusManager extends EventEmitter {
         };
     }
 
-    listEvents(limit = 100) {
-        return this.store.listEvents(limit);
+    async listEvents(limit = 100) {
+        await this.#ensureStoreReady();
+        return await this.store.listEvents(limit);
     }
 
-    listTimelineItems(sessionKey, options = {}) {
-        return this.store.listTimelineItems(sessionKey, options);
+    async listTimelineItems(sessionKey, options = {}) {
+        await this.#ensureStoreReady();
+        return await this.store.listTimelineItems(sessionKey, options);
     }
 
     async listState() {
         await this.acpManager.ensureConfigsLoaded();
         await this.#ensureStoreReady();
         return {
-            bus: this.getState(),
+            bus: await this.getState(),
             restoring: this.restoring,
             definitions: await this.acpManager.listDefinitionsFast(),
             configs: await this.acpManager.listAgentConfigs(),
-            tabs: this.listOpenTabs()
+            tabs: await this.listOpenTabs()
         };
     }
 
     async listInventory() {
         return {
             restoring: this.restoring,
-            tabs: this.listOpenTabs().map((tab) => ({
+            tabs: (await this.listOpenTabs()).map((tab) => ({
                 id: tab.id,
                 runtimeId: tab.runtimeId,
                 runtimeKey: tab.runtimeKey,
@@ -360,19 +365,20 @@ export class AcpBusManager extends EventEmitter {
         };
     }
 
-    listOpenTabs(options = {}) {
+    async listOpenTabs(options = {}) {
         const includeTranscript = options.includeTranscript === true;
-        return Array.from(this.openTabs.keys())
-            .map((tabId) => this.getOpenTab(tabId, { includeTranscript }))
-            .filter(Boolean);
+        const tabs = await Promise.all(Array.from(this.openTabs.keys())
+            .map((tabId) => this.getOpenTab(tabId, { includeTranscript })));
+        return tabs.filter(Boolean);
     }
 
-    getOpenTab(tabId, options = {}) {
+    async getOpenTab(tabId, options = {}) {
+        await this.#ensureStoreReady();
         const meta = this.openTabs.get(String(tabId || '').trim());
         if (!meta) {
             return null;
         }
-        const session = this.store.getSession(
+        const session = await this.store.getSession(
             buildAcpBusSessionKey(meta.agentId, meta.acpSessionId),
             { includeSnapshot: true }
         );
@@ -408,17 +414,18 @@ export class AcpBusManager extends EventEmitter {
             reason
         );
         return {
-            tab: this.getOpenTab(meta.id),
+            tab: await this.getOpenTab(meta.id),
             session
         };
     }
 
-    getTimelinePageForTab(tabId, query = {}) {
+    async getTimelinePageForTab(tabId, query = {}) {
+        await this.#ensureStoreReady();
         const meta = this.openTabs.get(String(tabId || '').trim());
         if (!meta) {
             return null;
         }
-        const session = this.store.getSession(
+        const session = await this.store.getSession(
             buildAcpBusSessionKey(meta.agentId, meta.acpSessionId)
         );
         if (!session) {
@@ -438,16 +445,16 @@ export class AcpBusManager extends EventEmitter {
         }
         return {
             sessionKey: session.sessionKey,
-            ...this.store.listTimelineItems(session.sessionKey, {
+            ...(await this.store.listTimelineItems(session.sessionKey, {
                 limit: Number.parseInt(query.limit, 10),
                 before: typeof query.before === 'string' ? query.before : '',
                 after: typeof query.after === 'string' ? query.after : ''
-            })
+            }))
         };
     }
 
     async markSessionInterest(entry = {}) {
-        const result = this.store.markSessionInterest(entry);
+        const result = await this.store.markSessionInterest(entry);
         this.#emitEvent('session_index_updated', result.record, {
             reason: 'interest'
         });
@@ -460,7 +467,7 @@ export class AcpBusManager extends EventEmitter {
         if (!normalizedPinId) {
             throw new Error('pinId is required');
         }
-        const result = this.store.markSessionInterest(entry);
+        const result = await this.store.markSessionInterest(entry);
         const previousSessionKey = this.pinnedSessions.get(normalizedPinId) || '';
         this.pinnedSessions.set(normalizedPinId, result.record.sessionKey);
         await this.#ensureObservedSession(result.record, reason);
@@ -471,14 +478,14 @@ export class AcpBusManager extends EventEmitter {
                 pinId: normalizedPinId
             });
         }
-        return this.store.getSession(result.record.sessionKey, {
+        return await this.store.getSession(result.record.sessionKey, {
             includeSnapshot: true
         });
     }
 
     async createTabForUi(options = {}) {
         await this.#ensureInteractiveReady();
-        const definition = this.#getAvailableDefinition(options.agentId);
+        const definition = this.#getDefinition(options.agentId);
         const cwd = path.resolve(options.cwd || process.cwd());
         const runtimeEntry = this.#getObserveRuntime(definition, cwd);
         const tabId = crypto.randomUUID();
@@ -503,7 +510,7 @@ export class AcpBusManager extends EventEmitter {
             tabId,
             serialized
         );
-        const persisted = this.store.saveObservedSession(serialized, {
+        const persisted = await this.store.saveObservedSession(serialized, {
             continuityState: 'live',
             observedAt: this.now(),
             attachedAt: this.now(),
@@ -525,12 +532,12 @@ export class AcpBusManager extends EventEmitter {
             reason: 'agent_tab_create',
             pinId: `agent-tab:${serialized.id}`
         });
-        return this.getOpenTab(serialized.id);
+        return await this.getOpenTab(serialized.id);
     }
 
     async resumeTabForUi(options = {}) {
         await this.#ensureInteractiveReady();
-        const previous = this.getSession(
+        const previous = await this.getSession(
             options.agentId,
             options.sessionId
         );
@@ -554,7 +561,7 @@ export class AcpBusManager extends EventEmitter {
     }
 
     async #resumeTabForUiInternal(options = {}, previous = null) {
-        const definition = this.#getAvailableDefinition(options.agentId);
+        const definition = this.#getDefinition(options.agentId);
         const cwd = path.resolve(options.cwd || process.cwd());
         const targetTabId = String(options.targetTabId || '').trim();
         const tabId = targetTabId || crypto.randomUUID();
@@ -595,7 +602,7 @@ export class AcpBusManager extends EventEmitter {
             }
             handle = this.#registerRuntimeHandle(runtimeEntry, tabId, serialized);
             runtimeEntry.sessionKeys.add(handle.sessionKey);
-            const persisted = this.store.saveObservedSession(serialized, {
+            const persisted = await this.store.saveObservedSession(serialized, {
                 continuityState: 'live',
                 observedAt: this.now(),
                 attachedAt: this.now(),
@@ -639,7 +646,7 @@ export class AcpBusManager extends EventEmitter {
                 ? 'cache'
                 : 'cold';
         return {
-            serialized: this.getOpenTab(tabId) || uiSerialized,
+            serialized: (await this.getOpenTab(tabId)) || uiSerialized,
             busSession,
             attachSource
         };
@@ -656,7 +663,7 @@ export class AcpBusManager extends EventEmitter {
         }
         this.pinnedSessions.delete(normalizedPinId);
         this.#scheduleRebalance(reason);
-        const record = this.store.getSession(sessionKey, {
+        const record = await this.store.getSession(sessionKey, {
             includeSnapshot: true
         });
         if (record) {
@@ -747,7 +754,7 @@ export class AcpBusManager extends EventEmitter {
             seenTabIds.add(tab.id);
             restoredTabs.push(tab);
             this.openTabs.set(tab.id, tab);
-            const result = this.store.markSessionInterest({
+            const result = await this.store.markSessionInterest({
                 agentId: tab.agentId,
                 sessionId: tab.acpSessionId,
                 cwd: tab.cwd,
@@ -767,7 +774,7 @@ export class AcpBusManager extends EventEmitter {
             throw new Error('Open agent tab requires a session identity');
         }
         this.openTabs.set(tab.id, tab);
-        const result = this.store.markSessionInterest({
+        const result = await this.store.markSessionInterest({
             agentId: tab.agentId,
             sessionId: tab.acpSessionId,
             cwd: tab.cwd,
@@ -829,7 +836,7 @@ export class AcpBusManager extends EventEmitter {
         throw new Error('Agent tab not found');
     }
 
-    #persistBusHandleSnapshot(handle, reason) {
+    async #persistBusHandleSnapshot(handle, reason) {
         if (!handle?.runtimeEntry?.runtime || !handle.tabId) {
             return null;
         }
@@ -841,7 +848,7 @@ export class AcpBusManager extends EventEmitter {
         const serialized = handle.runtimeEntry.runtime.serializeTab(tab);
         const authoritativeSnapshot = tab.authoritativeSnapshot === true
             || serialized.authoritativeSnapshot === true;
-        const persisted = this.store.saveObservedSession(serialized, {
+        const persisted = await this.store.saveObservedSession(serialized, {
             continuityState: 'live',
             observedAt,
             liveAt: observedAt,
@@ -895,7 +902,7 @@ export class AcpBusManager extends EventEmitter {
                 text,
                 attachments
             );
-            this.#persistBusHandleSnapshot(target.handle, 'send_prompt');
+            await this.#persistBusHandleSnapshot(target.handle, 'send_prompt');
             return;
         }
     }
@@ -969,7 +976,7 @@ export class AcpBusManager extends EventEmitter {
         const target = this.#getControlTarget(tabId);
         if (target.source === 'bus') {
             await target.handle.runtimeEntry.runtime.cancel(target.tabId);
-            this.#persistBusHandleSnapshot(target.handle, 'cancel');
+            await this.#persistBusHandleSnapshot(target.handle, 'cancel');
             return;
         }
     }
@@ -982,7 +989,10 @@ export class AcpBusManager extends EventEmitter {
                 permissionId,
                 optionId
             );
-            this.#persistBusHandleSnapshot(target.handle, 'resolve_permission');
+            await this.#persistBusHandleSnapshot(
+                target.handle,
+                'resolve_permission'
+            );
             return;
         }
     }
@@ -994,8 +1004,8 @@ export class AcpBusManager extends EventEmitter {
                 target.tabId,
                 modeId
             );
-            this.#persistBusHandleSnapshot(target.handle, 'set_mode');
-            return this.getOpenTab(tabId) || serialized;
+            await this.#persistBusHandleSnapshot(target.handle, 'set_mode');
+            return (await this.getOpenTab(tabId)) || serialized;
         }
         throw new Error('Agent tab not found');
     }
@@ -1005,8 +1015,11 @@ export class AcpBusManager extends EventEmitter {
         if (target.source === 'bus') {
             const serialized = await target.handle.runtimeEntry.runtime
                 .setConfigOption(target.tabId, configId, valueId);
-            this.#persistBusHandleSnapshot(target.handle, 'set_config_option');
-            return this.getOpenTab(tabId) || serialized;
+            await this.#persistBusHandleSnapshot(
+                target.handle,
+                'set_config_option'
+            );
+            return (await this.getOpenTab(tabId)) || serialized;
         }
         throw new Error('Agent tab not found');
     }
@@ -1091,17 +1104,15 @@ export class AcpBusManager extends EventEmitter {
         if (availableDefinitions.length === 0) {
             return {
                 complete: false,
-                state: this.getState()
+                state: await this.getState()
             };
         }
         let complete = true;
 
         for (const definition of availableDefinitions) {
             const runtimeEntry = this.#getDiscoveryRuntime(definition);
-            const seenKeys = [];
-            let canReconcilePresence = false;
             try {
-                const result = await this.#listAndRecordIndexedSessions(
+                await this.#listAndRecordIndexedSessions(
                     runtimeEntry.runtime,
                     {
                         definition,
@@ -1111,11 +1122,9 @@ export class AcpBusManager extends EventEmitter {
                         reason
                     }
                 );
-                seenKeys.push(...result.records.map((row) => row.sessionKey));
-                canReconcilePresence = result.scope === 'all';
 
                 for (const workspaceCwd of this.#listWorkspaceDiscoveryCwds()) {
-                    const cwdResult = await this.#listAndRecordIndexedSessions(
+                    await this.#listAndRecordIndexedSessions(
                         runtimeEntry.runtime,
                         {
                             definition,
@@ -1125,23 +1134,6 @@ export class AcpBusManager extends EventEmitter {
                             reason: `${reason}:workspace_cwd`
                         }
                     );
-                    seenKeys.push(
-                        ...cwdResult.records.map((row) => row.sessionKey)
-                    );
-                }
-
-                if (canReconcilePresence) {
-                    const removed = this.store.reconcileAgentPresence(
-                        definition.id,
-                        Array.from(new Set(seenKeys)),
-                        this.now()
-                    );
-                    for (const row of removed) {
-                        this.#emitEvent('session_index_removed', row, {
-                            reason,
-                            providerId: definition.id
-                        });
-                    }
                 }
             } catch (error) {
                 complete = false;
@@ -1173,7 +1165,7 @@ export class AcpBusManager extends EventEmitter {
 
         return {
             complete,
-            state: this.getState()
+            state: await this.getState()
         };
     }
 
@@ -1217,15 +1209,6 @@ export class AcpBusManager extends EventEmitter {
         return cwds;
     }
 
-    #getAvailableDefinition(agentId) {
-        const definition = this.#getDefinition(agentId);
-        const availability = this.acpManager.getDefinitionAvailability(definition);
-        if (!availability.available) {
-            throw new Error(availability.reason || 'Agent unavailable');
-        }
-        return definition;
-    }
-
     #getDefinition(agentId) {
         const normalizedAgentId = String(agentId || '').trim();
         const definition = this.acpManager.definitions.find(
@@ -1257,11 +1240,11 @@ export class AcpBusManager extends EventEmitter {
         if (this.#isSystemBusyForColdRepair()) {
             return null;
         }
-        const candidate = this.store.listColdRepairCandidates(1, {
+        const candidate = (await this.store.listColdRepairCandidates(1, {
             minAgeMs: this.replayGapMs,
             now: this.now(),
             includeSnapshot: true
-        }).find((row) => (
+        })).find((row) => (
             row.continuityState === 'resync_required'
             || !this.observedSessions.has(row.sessionKey)
         ));
@@ -1269,8 +1252,8 @@ export class AcpBusManager extends EventEmitter {
             return null;
         }
         this.coldRepairPromise = this.#repairColdSession(candidate, reason)
-            .catch((error) => {
-                const updated = this.store.updateContinuityState(
+            .catch(async (error) => {
+                const updated = await this.store.updateContinuityState(
                     candidate.sessionKey,
                     'resync_required',
                     {
@@ -1326,7 +1309,7 @@ export class AcpBusManager extends EventEmitter {
             }
             sessions.push(...batch);
             for (const session of batch) {
-                const change = this.#recordIndexedSession(
+                const change = await this.#recordIndexedSession(
                     options.definition,
                     session,
                     options.reason || 'session_list'
@@ -1355,8 +1338,8 @@ export class AcpBusManager extends EventEmitter {
         return { sessions, records, scope };
     }
 
-    #recordIndexedSession(definition, session, reason) {
-        const change = this.store.upsertIndexedSession({
+    async #recordIndexedSession(definition, session, reason) {
+        const change = await this.store.upsertIndexedSession({
             agentId: definition.id,
             sessionId: session.sessionId,
             cwd: session.cwd,
@@ -1470,7 +1453,7 @@ export class AcpBusManager extends EventEmitter {
                 }),
                 runtimeEntry.runtime
             );
-            const persisted = this.store.saveObservedSession(serialized, {
+            const persisted = await this.store.saveObservedSession(serialized, {
                 continuityState: this.observedSessions.has(row.sessionKey)
                     ? 'live'
                     : 'cached',
@@ -1744,43 +1727,8 @@ export class AcpBusManager extends EventEmitter {
         await runtimeEntry.runtime.dispose().catch(() => {});
     }
 
-    async #restoreHotSessions() {
-        const hotRows = this.store.listHotCandidates(this.hotSessionLimit, {
-            includeSnapshot: true
-        });
-        const desiredKeys = new Set([
-            ...hotRows.map((row) => row.sessionKey),
-            ...this.pinnedSessions.values()
-        ]);
-        this.store.setHotSessionKeys(Array.from(desiredKeys));
-        for (const sessionKey of desiredKeys) {
-            const row = hotRows.find((entry) => entry.sessionKey === sessionKey)
-                || this.store.getSession(sessionKey, { includeSnapshot: true });
-            if (!row) {
-                continue;
-            }
-            try {
-                await this.#attachHotSession(row, 'restore');
-            } catch (error) {
-                this.store.updateContinuityState(
-                    row.sessionKey,
-                    'resync_required',
-                    {
-                        status: 'disconnected',
-                        busy: false,
-                        errorMessage: error?.message || 'Restore failed'
-                    }
-                );
-                this.#emitEvent('session_resync_required', row, {
-                    reason: 'restore',
-                    error: error?.message || 'Restore failed'
-                });
-            }
-        }
-    }
-
     async #rebalanceHotSessions(reason) {
-        const hotRows = this.store.listHotCandidates(
+        const hotRows = await this.store.listHotCandidates(
             this.hotSessionLimit,
             {
                 presentOnly: true,
@@ -1792,12 +1740,12 @@ export class AcpBusManager extends EventEmitter {
             ...hotKeys,
             ...this.pinnedSessions.values()
         ]);
-        this.store.setHotSessionKeys(Array.from(desiredKeys));
+        await this.store.setHotSessionKeys(Array.from(desiredKeys));
 
         for (const sessionKey of desiredKeys) {
             let row = hotRows.find((entry) => entry.sessionKey === sessionKey);
             if (!row) {
-                row = this.store.getSession(sessionKey, {
+                row = await this.store.getSession(sessionKey, {
                     includeSnapshot: true
                 });
             }
@@ -1805,18 +1753,10 @@ export class AcpBusManager extends EventEmitter {
             try {
                 await this.#ensureObservedSession(row, reason);
             } catch (error) {
-                this.store.updateContinuityState(
-                    row.sessionKey,
-                    'resync_required',
-                    {
-                        status: 'disconnected',
-                        busy: false,
-                        errorMessage: error?.message || 'Hot attach failed'
-                    }
-                );
-                this.#emitEvent('session_resync_required', row, {
+                await this.#handleSessionAttachFailure(row, error, {
                     reason,
-                    error: error?.message || 'Hot attach failed'
+                    status: 'disconnected',
+                    message: 'Hot attach failed'
                 });
             }
         }
@@ -1827,16 +1767,42 @@ export class AcpBusManager extends EventEmitter {
             }
             await this.#detachHotSession(sessionKey, 'rebalance');
         }
+    }
 
-        const deleted = this.store.pruneSessions(
-            this.cacheSessionLimit,
-            Array.from(desiredKeys)
+    async #handleSessionAttachFailure(row, error, options = {}) {
+        if (this.#isUpstreamSessionMissingError(error)) {
+            const deleted = await this.store.deleteSession(row.sessionKey);
+            if (deleted) {
+                this.#emitEvent('session_index_removed', deleted, {
+                    reason: options.reason || 'session_missing',
+                    error: error?.message || 'Session missing upstream'
+                });
+            }
+            return;
+        }
+        const updated = await this.store.updateContinuityState(
+            row.sessionKey,
+            'resync_required',
+            {
+                status: options.status || 'disconnected',
+                busy: false,
+                errorMessage: error?.message
+                    || options.message
+                    || 'Attach failed'
+            }
         );
-        for (const row of deleted) {
-            this.#emitEvent('session_index_removed', row, {
-                reason: 'eviction'
+        if (updated) {
+            this.#emitEvent('session_resync_required', updated, {
+                reason: options.reason || 'attach_failed',
+                error: error?.message || options.message || 'Attach failed'
             });
         }
+    }
+
+    #isUpstreamSessionMissingError(error) {
+        const message = String(error?.message || error || '').toLowerCase();
+        return /session/.test(message)
+            && /(not found|missing|does not exist|unknown)/.test(message);
     }
 
     async #ensureObservedSession(row, reason) {
@@ -1897,7 +1863,7 @@ export class AcpBusManager extends EventEmitter {
         );
         const handle = this.#registerRuntimeHandle(runtimeEntry, tabId, serialized);
         runtimeEntry.sessionKeys.add(handle.sessionKey);
-        const persisted = this.store.saveObservedSession(serialized, {
+        const persisted = await this.store.saveObservedSession(serialized, {
             continuityState: 'live',
             observedAt: attachedAt,
             attachedAt,
@@ -1907,7 +1873,7 @@ export class AcpBusManager extends EventEmitter {
         });
         let eventRecord = persisted.record;
         if (hasReplayGap) {
-            eventRecord = this.store.markSessionForUpstreamSync(
+            eventRecord = await this.store.markSessionForUpstreamSync(
                 persisted.record.sessionKey,
                 {
                     status: persisted.record.status,
@@ -1944,7 +1910,7 @@ export class AcpBusManager extends EventEmitter {
         handle.runtimeEntry.runtime.detachTab(handle.tabId);
         handle.runtimeEntry.sessionKeys.delete(sessionKey);
 
-        const updated = this.store.updateContinuityState(
+        const updated = await this.store.updateContinuityState(
             sessionKey,
             'resync_required',
             {
@@ -1991,7 +1957,7 @@ export class AcpBusManager extends EventEmitter {
         const serialized = handle.runtimeEntry.runtime.serializeTab(tab);
         const authoritativeSnapshot = tab.authoritativeSnapshot === true
             || serialized.authoritativeSnapshot === true;
-        const persisted = this.store.saveObservedSession(serialized, {
+        const persisted = await this.store.saveObservedSession(serialized, {
             continuityState: 'live',
             observedAt,
             liveAt: observedAt,
@@ -2020,7 +1986,7 @@ export class AcpBusManager extends EventEmitter {
             }
             this.observedSessions.delete(sessionKey);
             this.tabToSessionKey.delete(handle.tabId);
-            const updated = this.store.updateContinuityState(
+            const updated = await this.store.updateContinuityState(
                 sessionKey,
                 'resync_required',
                 {
@@ -2132,15 +2098,26 @@ export class AcpBusManager extends EventEmitter {
                 }
                 : null
         };
-        const event = this.store.appendEvent({
+        void this.#persistAndEmitEvent({
             createdAt: this.now(),
             type,
             agentId: row?.agentId || '',
             sessionId: row?.sessionId || '',
             payload
-        });
-        this.emit('event', event);
-        this.emit(type, payload);
+        }, type, payload);
+    }
+
+    async #persistAndEmitEvent(eventPayload, type, payload) {
+        try {
+            const event = await this.store.appendEvent(eventPayload);
+            this.emit('event', event);
+            this.emit(type, payload);
+        } catch (error) {
+            console.warn(
+                '[ACP Bus] Failed to persist event:',
+                error?.message || error
+            );
+        }
     }
 
     #scheduleNextPoll() {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 
+import { AcpBusAsyncStore } from '../src/acp-bus-store-async.mjs';
 import { AcpBusStore } from '../src/acp-bus-store.mjs';
 
 async function createTempDbPath(prefix) {
@@ -28,6 +29,28 @@ async function withStore(prefix, callback) {
 }
 
 describe('AcpBusStore', () => {
+    it('proxies store operations through the async worker adapter', async () => {
+        const { dir, dbPath } = await createTempDbPath('acp-bus-store-async-');
+        const store = new AcpBusAsyncStore({ dbPath });
+        try {
+            await store.init();
+            await store.upsertIndexedSession({
+                agentId: 'codex',
+                sessionId: 'worker-session',
+                cwd: '/tmp/codex',
+                title: 'Worker session',
+                updatedAt: '2026-04-14T10:00:00.000Z',
+                seenAt: '2026-04-14T10:00:01.000Z'
+            });
+            const sessions = await store.listSessions({ agentId: 'codex' });
+            assert.equal(sessions.length, 1);
+            assert.equal(sessions[0].sessionKey, 'codex::worker-session');
+        } finally {
+            await store.close();
+            await fs.rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('migrates a legacy session table before creating new indexes', async () => {
         const { dir, dbPath } = await createTempDbPath('acp-bus-store-');
         const db = new DatabaseSync(dbPath);

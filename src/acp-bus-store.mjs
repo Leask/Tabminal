@@ -1488,6 +1488,36 @@ export class AcpBusStore {
         return missing;
     }
 
+    deleteSession(sessionKey) {
+        const db = this.#requireDb();
+        const normalizedSessionKey = String(sessionKey || '').trim();
+        if (!normalizedSessionKey) {
+            return null;
+        }
+        const previous = this.getSession(normalizedSessionKey, {
+            includeSnapshot: true
+        });
+        if (!previous) {
+            return null;
+        }
+        db.exec('BEGIN');
+        try {
+            db.prepare(`
+                DELETE FROM acp_bus_timeline_items
+                WHERE session_key = ?
+            `).run(normalizedSessionKey);
+            db.prepare(`
+                DELETE FROM acp_bus_sessions
+                WHERE session_key = ?
+            `).run(normalizedSessionKey);
+            db.exec('COMMIT');
+        } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+        }
+        return previous;
+    }
+
     setHotSessionKeys(sessionKeys = []) {
         const db = this.#requireDb();
         const normalized = sessionKeys
