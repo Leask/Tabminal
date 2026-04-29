@@ -14,7 +14,7 @@ import * as persistence from './persistence.mjs';
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
 const DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS = 30 * 1000;
-const DEFAULT_PROBE_CACHE_TTL_MS = 15 * 1000;
+const DEFAULT_PROBE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS = 250;
 const ALL_SESSION_AGENT_IDS = new Set([
     'claude',
@@ -2171,15 +2171,44 @@ export class AcpRuntime extends EventEmitter {
 
     async #listSessionsViaGeminiCli() {
         const args = this.#buildGeminiSessionListArgs();
-        const result = spawnSync(this.definition.command, args, {
-            encoding: 'utf8',
-            timeout: 5000,
-            cwd: this.cwd,
-            env: withAgentPath(this.env)
+        const result = await new Promise((resolve, reject) => {
+            const child = spawn(this.definition.command, args, {
+                cwd: this.cwd,
+                env: withAgentPath(this.env),
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+            let stdout = '';
+            let stderr = '';
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill('SIGTERM');
+                reject(new Error('Gemini session listing timed out'));
+            }, 5000);
+            child.stdout?.on('data', (chunk) => {
+                stdout += Buffer.isBuffer(chunk)
+                    ? chunk.toString('utf8')
+                    : String(chunk);
+            });
+            child.stderr?.on('data', (chunk) => {
+                stderr += Buffer.isBuffer(chunk)
+                    ? chunk.toString('utf8')
+                    : String(chunk);
+            });
+            child.on('error', (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(error);
+            });
+            child.on('close', (status) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve({ status, stdout, stderr });
+            });
         });
-        if (result.error) {
-            throw result.error;
-        }
         if (result.status !== 0) {
             const detail = [
                 result.stdout,
@@ -3046,6 +3075,13 @@ export class AcpRuntime extends EventEmitter {
                 selectedOptionId: item.selectedOptionId || ''
             }))
             .sort(compareTimelineOrder);
+        const timelineItems = [
+            ...messages.map((value) => ({ type: 'message', value })),
+            ...toolCalls.map((value) => ({ type: 'tool', value })),
+            ...permissions.map((value) => ({ type: 'permission', value }))
+        ].sort((left, right) =>
+            compareTimelineOrder(left.value, right.value)
+        );
         const plan = Array.isArray(tab.plan)
             ? cloneSerializable(tab.plan, []).sort(compareTimelineOrder)
             : [];
@@ -3073,6 +3109,7 @@ export class AcpRuntime extends EventEmitter {
             messages,
             toolCalls,
             permissions,
+            timelineItems,
             plan,
             usage: serializeUsageState(tab.usage),
             terminals: Array.from(tab.terminals.values())
@@ -4597,6 +4634,27 @@ export class AcpManager extends EventEmitter {
         });
     }
 
+    async listDefinitionsFast() {
+        await this.ensureConfigsLoaded();
+        return this.definitions.map((definition) => {
+            const availabilityOverride =
+                this.#getDefinitionAvailabilityOverride(definition.id);
+            return {
+                id: definition.id,
+                label: definition.label,
+                description: definition.description,
+                websiteUrl: definition.websiteUrl || '',
+                commandLabel: definition.commandLabel,
+                setupCommandLabel: definition.setupCommandLabel || '',
+                available: availabilityOverride
+                    ? availabilityOverride.available
+                    : true,
+                reason: availabilityOverride?.reason || '',
+                config: this.getSerializedAgentConfig(definition.id)
+            };
+        });
+    }
+
     async listState() {
         await this.ensureConfigsLoaded();
         return {
@@ -4768,7 +4826,7 @@ export class AcpManager extends EventEmitter {
         const cwd = path.resolve(options.cwd || process.cwd());
         const { runtimeEntry, createdRuntime, runtimeStoreKey } =
             this.#ensureRuntimeEntry(definition, cwd);
-        const branchLimit = 500;
+        const branchLimit = 300;
         const mergedLimit = 300;
 
         const listBranch = async (all) => {

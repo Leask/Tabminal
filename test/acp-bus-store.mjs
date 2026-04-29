@@ -266,7 +266,7 @@ describe('AcpBusStore', () => {
         });
     });
 
-    it('assigns stable indexes from first observed backend order', async () => {
+    it('assigns stable indexes from first observed bus order', async () => {
         await withStore('acp-bus-store-', async (store) => {
             const first = store.saveObservedSession({
                 agentId: 'codex',
@@ -311,10 +311,10 @@ describe('AcpBusStore', () => {
                     item.value.text
                 ]),
                 [
-                    [1, 'm-user', '/timeline'],
-                    [2, 'a-item-01', 'item 01'],
-                    [3, 'b-item-02', 'item 02'],
-                    [4, 'z-final', 'final']
+                    [1, 'z-final', 'final'],
+                    [2, 'm-user', '/timeline'],
+                    [3, 'a-item-01', 'item 01'],
+                    [4, 'b-item-02', 'item 02']
                 ]
             );
 
@@ -324,10 +324,10 @@ describe('AcpBusStore', () => {
             assert.deepEqual(
                 page.items.map((item) => [item.index, item.value.id]),
                 [
-                    [1, 'm-user'],
-                    [2, 'a-item-01'],
-                    [3, 'b-item-02'],
-                    [4, 'z-final']
+                    [1, 'z-final'],
+                    [2, 'm-user'],
+                    [3, 'a-item-01'],
+                    [4, 'b-item-02']
                 ]
             );
             assert.equal('order' in page.items[0].value, false);
@@ -363,15 +363,114 @@ describe('AcpBusStore', () => {
             assert.deepEqual(
                 page.items.map((item) => [item.index, item.value.id]),
                 [
-                    [1, 'm-user'],
-                    [2, 'a-item-01'],
-                    [3, 'b-item-02'],
-                    [4, 'z-final'],
+                    [1, 'z-final'],
+                    [2, 'm-user'],
+                    [3, 'a-item-01'],
+                    [4, 'b-item-02'],
                     [5, 'n-item-03']
                 ]
             );
-            assert.equal(page.items[1].value.text, 'item 01 updated');
+            assert.equal(page.items[2].value.text, 'item 01 updated');
+            assert.equal('order' in page.items[2].value, false);
+        });
+    });
+
+    it('uses explicit observed timeline candidates before grouped arrays', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-candidates',
+                cwd: '/tmp/project',
+                messages: [{
+                    id: 'z-message',
+                    role: 'assistant',
+                    text: 'message',
+                    order: 1000
+                }],
+                toolCalls: [{
+                    toolCallId: 'a-tool',
+                    title: 'tool',
+                    status: 'completed',
+                    order: 1
+                }],
+                timelineItems: [
+                    {
+                        type: 'tool',
+                        value: {
+                            toolCallId: 'a-tool',
+                            title: 'tool',
+                            status: 'completed',
+                            order: 1
+                        }
+                    },
+                    {
+                        type: 'message',
+                        value: {
+                            id: 'z-message',
+                            role: 'assistant',
+                            text: 'message',
+                            order: 1000
+                        }
+                    }
+                ]
+            }, {
+                observedAt: '2026-04-14T10:00:00.000Z'
+            });
+
+            const page = store.listTimelineItems('codex::s-candidates', {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.itemKey), [
+                'tool:a-tool',
+                'message:z-message'
+            ]);
+            assert.deepEqual(page.items.map((item) => item.index), [1, 2]);
+            assert.equal('order' in page.items[0].value, false);
             assert.equal('order' in page.items[1].value, false);
+        });
+    });
+
+    it('appends new unranked items in arrival order instead of id order', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-unranked',
+                cwd: '/tmp/project',
+                messages: [
+                    { id: 'm-user', role: 'user', text: 'one' },
+                    { id: 'z-prev', role: 'assistant', text: 'two' }
+                ],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:00:00.000Z'
+            });
+
+            store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-unranked',
+                cwd: '/tmp/project',
+                messages: [
+                    { id: 'n-later', role: 'assistant', text: 'three' },
+                    { id: 'a-final', role: 'assistant', text: 'four' }
+                ],
+                toolCalls: []
+            }, {
+                observedAt: '2026-04-14T10:01:00.000Z',
+                preserveSnapshotContent: true
+            });
+
+            const page = store.listTimelineItems('codex::s-unranked', {
+                limit: 10
+            });
+            assert.deepEqual(
+                page.items.map((item) => [item.index, item.value.id]),
+                [
+                    [1, 'm-user'],
+                    [2, 'z-prev'],
+                    [3, 'n-later'],
+                    [4, 'a-final']
+                ]
+            );
         });
     });
 
@@ -533,8 +632,8 @@ describe('AcpBusStore', () => {
                 limit: 10
             });
             assert.deepEqual(page.items.map((item) => item.itemKey), [
-                'tool:t-1',
                 'message:m-1',
+                'tool:t-1',
                 'plan:p-1'
             ]);
             assert.deepEqual(page.items.map((item) => item.index), [1, 2, 3]);
@@ -657,6 +756,7 @@ describe('AcpBusStore', () => {
             assert.equal(page.items.length, 1);
             assert.equal(page.items[0].type, 'plan');
             assert.equal(page.items[0].value.active, true);
+            const activePlanKey = page.items[0].itemKey;
 
             store.saveObservedSession({
                 agentId: 'codex',
@@ -676,10 +776,10 @@ describe('AcpBusStore', () => {
             });
 
             page = store.listTimelineItems('codex::s-plan', { limit: 10 });
-            assert.equal(
-                page.items.some((item) => item.value.active === false),
-                true
-            );
+            assert.equal(page.items.length, 1);
+            assert.equal(page.items[0].itemKey, activePlanKey);
+            assert.equal(page.items[0].value.active, false);
+            assert.equal(page.items[0].value.status, 'completed');
         });
     });
 
@@ -753,6 +853,34 @@ describe('AcpBusStore', () => {
                 'never',
                 'stale'
             ]);
+        });
+    });
+
+    it('prioritizes forced resync candidates even when hot', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            store.upsertIndexedSession({
+                agentId: 'codex',
+                sessionId: 'hot',
+                cwd: '/tmp/project',
+                title: 'hot',
+                updatedAt: '2026-04-14T10:30:00.000Z',
+                seenAt: '2026-04-14T10:30:00.000Z'
+            });
+            store.updateContinuityState('codex::hot', 'cached', {
+                loadedAt: '2026-04-14T10:29:00.000Z',
+                receivedAt: '2026-04-14T10:29:00.000Z'
+            });
+            store.setHotSessionKeys(['codex::hot']);
+            store.markSessionForUpstreamSync('codex::hot');
+
+            const candidates = store.listColdRepairCandidates(10, {
+                now: '2026-04-14T10:30:00.000Z',
+                minAgeMs: 10 * 60 * 1000
+            });
+
+            assert.deepEqual(candidates.map((row) => row.sessionId), ['hot']);
+            assert.equal(candidates[0].lastReceivedAt, '');
+            assert.equal(candidates[0].continuityState, 'resync_required');
         });
     });
 

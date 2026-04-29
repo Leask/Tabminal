@@ -546,13 +546,13 @@ async function main() {
                     );
                 });
             } catch {
-                const authState = await getAuthState();
+                const freshAuthState = await getAuthState();
                 await evaluate(
                     toExpression(`
                         () => {
                             localStorage.setItem(
                                 'tabminal_auth_state:main',
-                                ${JSON.stringify(JSON.stringify(authState))}
+                                ${JSON.stringify(JSON.stringify(freshAuthState))}
                             );
                             return true;
                         }
@@ -1038,7 +1038,7 @@ async function main() {
                                     active.textContent || ''
                                 ).includes(${JSON.stringify(expectedLabel)});
                             if (
-                                count >= ${JSON.stringify(existingCount + 1)}
+                                count >= ${JSON.stringify(existingCount)}
                                 && hasExpectedActive
                             ) {
                                 return 'created';
@@ -1975,8 +1975,13 @@ async function main() {
         toExpression(`
             () => {
                 const input = document.querySelector('.agent-panel-input');
+                input.focus();
                 input.value = '/resume';
-                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'insertText',
+                    data: '/resume'
+                }));
                 return true;
             }
         `)

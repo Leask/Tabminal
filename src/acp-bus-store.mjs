@@ -79,20 +79,16 @@ function decodeTimelineCursor(cursor) {
     }
 }
 
-function normalizeTimelineIndex(entry, fallbackIndex) {
-    if (Number.isFinite(entry?.index)) {
-        return Number(entry.index);
-    }
-    return Number.isFinite(fallbackIndex) ? fallbackIndex : 0;
-}
-
 function getTimelineItemIdentity(type, value, fallbackIndex) {
     const index = Number.isFinite(fallbackIndex) ? fallbackIndex : 0;
+    const order = Number(value?.order);
+    const orderIdentity = Number.isFinite(order) ? `order:${order}` : '';
     if (type === 'message') {
         return String(
             value?.id
             || value?.messageId
             || value?.streamKey
+            || orderIdentity
             || `message-${index}`
         );
     }
@@ -100,14 +96,15 @@ function getTimelineItemIdentity(type, value, fallbackIndex) {
         return String(
             value?.toolCallId
             || value?.id
+            || orderIdentity
             || `tool-${index}`
         );
     }
     if (type === 'permission') {
-        return String(value?.id || `permission-${index}`);
+        return String(value?.id || orderIdentity || `permission-${index}`);
     }
     if (type === 'plan') {
-        return String(value?.id || `plan-${index}`);
+        return String(value?.id || orderIdentity || `plan-${index}`);
     }
     return `${type}-${index}`;
 }
@@ -118,32 +115,6 @@ function hashSerializable(value) {
         .update(JSON.stringify(value ?? null))
         .digest('hex')
         .slice(0, 16);
-}
-
-function getTimelinePayloadRank(value) {
-    const index = Number(value?.index);
-    if (Number.isFinite(index)) {
-        return index;
-    }
-    const order = Number(value?.order);
-    if (Number.isFinite(order)) {
-        return order;
-    }
-    return null;
-}
-
-function compareTimelinePayload(left, right) {
-    const leftRank = getTimelinePayloadRank(left);
-    const rightRank = getTimelinePayloadRank(right);
-    if (leftRank !== null && rightRank !== null && leftRank !== rightRank) {
-        return leftRank - rightRank;
-    }
-    if (leftRank !== null || rightRank !== null) {
-        return 0;
-    }
-    return String(left?.id || left?.toolCallId || '').localeCompare(
-        String(right?.id || right?.toolCallId || '')
-    );
 }
 
 function compareTimelineRows(left, right) {
@@ -262,7 +233,7 @@ function mergeSnapshotArray(previousItems, nextItems, type) {
         }
         merged.set(key, nextItem);
     }
-    return Array.from(merged.values()).sort(compareTimelinePayload);
+    return Array.from(merged.values());
 }
 
 function normalizePlanEntries(entries) {
@@ -289,22 +260,25 @@ function isPlanComplete(entries = []) {
         );
 }
 
-function buildPlanHistoryEntry(entries, observedAt, fallbackIndex) {
+function buildPlanHistoryEntry(entries, observedAt, options = {}) {
     const normalizedEntries = normalizePlanEntries(entries);
-    const fingerprint = hashSerializable(normalizedEntries);
+    const completed = isPlanComplete(normalizedEntries);
     return {
-        id: `plan-${fingerprint}`,
-        active: false,
-        status: 'completed',
-        createdAt: observedAt,
-        index: Number.isFinite(fallbackIndex) ? fallbackIndex : 0,
-        summary: '',
+        id: String(options.id || `plan-${hashSerializable({
+            entries: normalizedEntries,
+            observedAt
+        })}`),
+        active: !completed,
+        status: completed ? 'completed' : 'active',
+        createdAt: String(options.createdAt || observedAt || ''),
+        summary: options.summary || '',
         entries: normalizedEntries
     };
 }
 
-function mergePlanState(previousSnapshot, nextSnapshot, observedAt) {
-    const previousHistory = Array.isArray(previousSnapshot?.planHistory)
+function mergePlanState(previousSnapshot, nextSnapshot, observedAt, options = {}) {
+    const authoritative = options.authoritativeSnapshot === true;
+    const previousHistory = !authoritative && Array.isArray(previousSnapshot?.planHistory)
         ? cloneSerializable(previousSnapshot.planHistory, [])
         : [];
     const nextHistory = Array.isArray(nextSnapshot?.planHistory)
@@ -318,32 +292,41 @@ function mergePlanState(previousSnapshot, nextSnapshot, observedAt) {
         history.set(id, {
             ...item,
             id,
-            index,
             active: false,
             status: item.status || 'completed',
             entries: normalizePlanEntries(item.entries)
         });
+        if (Number.isFinite(index)) {
+            history.get(id).index = index;
+        }
         delete history.get(id).order;
     }
     const plan = normalizePlanEntries(nextSnapshot?.plan);
-    if (isPlanComplete(plan)) {
+    if (plan.length > 0) {
+        const activeHistory = Array.from(history.values()).find((item) => {
+            const status = String(item?.status || '').toLowerCase();
+            return item?.active === true
+                || status === 'active'
+                || status === 'pending'
+                || status === 'running'
+                || status === 'in_progress';
+        });
         const entry = buildPlanHistoryEntry(
             plan,
             observedAt,
-            history.size + 1
+            {
+                id: activeHistory?.id,
+                createdAt: activeHistory?.createdAt,
+                summary: activeHistory?.summary
+            }
         );
         history.set(entry.id, entry);
     }
     return {
         ...nextSnapshot,
         plan,
-        planHistory: Array.from(history.values()).sort(compareTimelinePayload)
+        planHistory: Array.from(history.values())
     };
-}
-
-function getTimelineRowSortRank(value, fallback) {
-    const rank = getTimelinePayloadRank(value);
-    return rank === null ? fallback : rank;
 }
 
 function buildPreviousTimelineIndex(rows = []) {
@@ -367,6 +350,9 @@ function finalizeTimelineRows(rows, options = {}) {
     const hasPrevious = previousIndex.map.size > 0;
     let nextIndex = previousIndex.maxIndex + 1;
     const sorted = [...rows].sort((left, right) => {
+        if (authoritative) {
+            return left.sequence - right.sequence;
+        }
         const leftExisting = !authoritative
             ? previousIndex.map.get(left.itemKey)
             : undefined;
@@ -378,9 +364,6 @@ function finalizeTimelineRows(rows, options = {}) {
         }
         if (leftExisting || rightExisting) {
             return leftExisting ? -1 : 1;
-        }
-        if (left.sortRank !== right.sortRank) {
-            return left.sortRank - right.sortRank;
         }
         return left.sequence - right.sequence;
     });
@@ -401,7 +384,6 @@ function finalizeTimelineRows(rows, options = {}) {
             delete payload.order;
         }
         const cleanedRow = { ...row };
-        delete cleanedRow.sortRank;
         delete cleanedRow.sequence;
         return {
             ...cleanedRow,
@@ -446,7 +428,72 @@ function applyTimelineIndexesToSnapshot(snapshot, rows = []) {
     if (Array.isArray(next.plan)) {
         next.plan = normalizePlanEntries(next.plan);
     }
+    delete next.timelineItems;
     return next;
+}
+
+function normalizeTimelineCandidate(raw, fallbackIndex) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const type = String(raw.type || raw.itemType || '').trim();
+    const value = raw.value && typeof raw.value === 'object'
+        ? raw.value
+        : raw.payload && typeof raw.payload === 'object'
+            ? raw.payload
+            : raw.item && typeof raw.item === 'object'
+                ? raw.item
+                : null;
+    if (!type || !value) {
+        return null;
+    }
+    return {
+        type,
+        value: cloneSerializable(value, {}) || {},
+        fallbackIndex
+    };
+}
+
+function buildTimelineCandidates(snapshot) {
+    const candidates = [];
+    const pushItem = (type, item, fallbackIndex) => {
+        if (!item || typeof item !== 'object') {
+            return;
+        }
+        candidates.push({
+            type,
+            value: cloneSerializable(item, {}) || {},
+            fallbackIndex
+        });
+    };
+    const timelineItems = Array.isArray(snapshot?.timelineItems)
+        ? snapshot.timelineItems
+        : [];
+    if (timelineItems.length > 0) {
+        for (const [index, item] of timelineItems.entries()) {
+            const candidate = normalizeTimelineCandidate(item, index);
+            if (candidate) {
+                candidates.push(candidate);
+            }
+        }
+        for (const [index, item] of (snapshot?.planHistory || []).entries()) {
+            pushItem('plan', item, index);
+        }
+        return candidates;
+    }
+    for (const [index, item] of (snapshot?.messages || []).entries()) {
+        pushItem('message', item, index);
+    }
+    for (const [index, item] of (snapshot?.toolCalls || []).entries()) {
+        pushItem('tool', item, index);
+    }
+    for (const [index, item] of (snapshot?.permissions || []).entries()) {
+        pushItem('permission', item, index);
+    }
+    for (const [index, item] of (snapshot?.planHistory || []).entries()) {
+        pushItem('plan', item, index);
+    }
+    return candidates;
 }
 
 function buildTimelineRowsFromSnapshot(
@@ -456,48 +503,28 @@ function buildTimelineRowsFromSnapshot(
     options = {}
 ) {
     const rows = [];
-    const pushItems = (type, items) => {
-        if (!Array.isArray(items)) {
-            return;
-        }
-        for (const [index, item] of items.entries()) {
-            if (!item || typeof item !== 'object') {
-                continue;
-            }
-            const value = cloneSerializable(item, {}) || {};
-            const identity = getTimelineItemIdentity(type, value, index);
-            const itemKey = `${type}:${identity}`;
-            const sequence = rows.length + 1;
-            rows.push({
-                sessionKey,
-                itemKey,
-                itemType: type,
-                itemId: identity,
-                itemIndex: normalizeTimelineIndex(value, sequence),
-                role: String(value.role || ''),
-                kind: String(value.kind || ''),
-                status: String(value.status || ''),
-                updatedAt: observedAt,
-                payloadJson: JSON.stringify(value),
-                sortRank: getTimelineRowSortRank(value, sequence),
-                sequence
-            });
-        }
-    };
-    pushItems('message', snapshot?.messages);
-    pushItems('tool', snapshot?.toolCalls);
-    pushItems('permission', snapshot?.permissions);
-    pushItems('plan', snapshot?.planHistory);
-    const activePlan = normalizePlanEntries(snapshot?.plan);
-    if (activePlan.length > 0 && !isPlanComplete(activePlan)) {
-        pushItems('plan', [{
-            id: 'active-plan',
-            active: true,
-            status: 'active',
-            index: rows.length + 1,
-            summary: '',
-            entries: activePlan
-        }]);
+    for (const candidate of buildTimelineCandidates(snapshot)) {
+        const value = cloneSerializable(candidate.value, {}) || {};
+        const identity = getTimelineItemIdentity(
+            candidate.type,
+            value,
+            candidate.fallbackIndex
+        );
+        const itemKey = `${candidate.type}:${identity}`;
+        const sequence = rows.length + 1;
+        rows.push({
+            sessionKey,
+            itemKey,
+            itemType: candidate.type,
+            itemId: identity,
+            itemIndex: sequence,
+            role: String(value.role || ''),
+            kind: String(value.kind || ''),
+            status: String(value.status || ''),
+            updatedAt: observedAt,
+            payloadJson: JSON.stringify(value),
+            sequence
+        });
     }
     return finalizeTimelineRows(rows, options);
 }
@@ -1053,24 +1080,6 @@ export class AcpBusStore {
         }
     }
 
-    #deleteTimelineItems(sessionKey, itemKeys = []) {
-        const keys = itemKeys
-            .map((key) => String(key || '').trim())
-            .filter(Boolean);
-        if (keys.length === 0) {
-            return;
-        }
-        const db = this.#requireDb();
-        const remove = db.prepare(`
-            DELETE FROM acp_bus_timeline_items
-            WHERE session_key = ?
-                AND item_key = ?
-        `);
-        for (const key of keys) {
-            remove.run(sessionKey, key);
-        }
-    }
-
     #getTimelineRows(sessionKey) {
         const db = this.#requireDb();
         return db.prepare(`
@@ -1243,7 +1252,10 @@ export class AcpBusStore {
         const indexedSnapshot = mergePlanState(
             previous?.snapshot || null,
             mergedSnapshot,
-            observedAt
+            observedAt,
+            {
+                authoritativeSnapshot: options.authoritativeSnapshot === true
+            }
         );
         const timelineRows = buildTimelineRowsFromSnapshot(
             sessionKey,
@@ -1326,9 +1338,6 @@ export class AcpBusStore {
         if (options.authoritativeSnapshot === true) {
             this.#replaceTimelineRows(sessionKey, timelineRows);
         } else {
-            if (!timelineRows.some((row) => row.itemKey === 'plan:active-plan')) {
-                this.#deleteTimelineItems(sessionKey, ['plan:active-plan']);
-            }
             this.#upsertTimelineRows(timelineRows);
         }
         const record = this.getSession(sessionKey, { includeSnapshot: true });
@@ -1411,6 +1420,33 @@ export class AcpBusStore {
                 options.detachedAt
             ),
             lastActivityAt: maxIso(previous.lastActivityAt, options.activityAt),
+            status: typeof options.status === 'string'
+                ? options.status
+                : previous.status,
+            busy: typeof options.busy === 'boolean'
+                ? options.busy
+                : previous.busy,
+            errorMessage: typeof options.errorMessage === 'string'
+                ? options.errorMessage
+                : previous.errorMessage,
+            snapshotJson: previous.snapshot
+                ? JSON.stringify(previous.snapshot)
+                : ''
+        };
+        this.#writeSession(next);
+        return this.getSession(sessionKey, { includeSnapshot: true });
+    }
+
+    markSessionForUpstreamSync(sessionKey, options = {}) {
+        const previous = this.getSession(sessionKey, { includeSnapshot: true });
+        if (!previous) {
+            return null;
+        }
+        const next = {
+            ...previous,
+            continuityState: 'resync_required',
+            lastLoadedAt: '',
+            lastReceivedAt: '',
             status: typeof options.status === 'string'
                 ? options.status
                 : previous.status,
@@ -1588,8 +1624,11 @@ export class AcpBusStore {
             SELECT *
             FROM acp_bus_sessions
             WHERE is_present = 1
-                AND hot_rank IS NULL
             ORDER BY
+                CASE
+                    WHEN continuity_state = 'resync_required' THEN 0
+                    ELSE 1
+                END ASC,
                 CASE
                     WHEN last_loaded_at = '' AND last_received_at = '' THEN 0
                     ELSE 1
@@ -1612,7 +1651,11 @@ export class AcpBusStore {
             const lastSyncMs = Date.parse(lastSyncAt || '');
             const upstreamMs = Date.parse(session.upstreamUpdatedAt || '');
             const neverSynced = !Number.isFinite(lastSyncMs);
-            if (!neverSynced) {
+            const forced = session.continuityState === 'resync_required';
+            if (!forced && session.hotRank !== null) {
+                continue;
+            }
+            if (!forced && !neverSynced) {
                 if (Number.isFinite(nowMs) && (nowMs - lastSyncMs) < minAgeMs) {
                     continue;
                 }

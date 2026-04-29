@@ -24,6 +24,7 @@ class FakeBusRuntime extends EventEmitter {
         this.tabs = new Map();
         this.createCalls = [];
         this.resumeCalls = [];
+        this.listCalls = [];
         this.promptCalls = [];
         this.detachCalls = [];
         this.disposed = false;
@@ -32,11 +33,27 @@ class FakeBusRuntime extends EventEmitter {
             : 'discovery';
     }
 
-    async listSessions() {
+    async listSessions(options = {}) {
+        this.listCalls.push(structuredClone(options));
+        const sourceSessions = options.all === true
+            && Array.isArray(this.definition.busAllSessions)
+            ? this.definition.busAllSessions
+            : this.definition.busSessions;
+        const sessions = Array.isArray(sourceSessions)
+            ? structuredClone(sourceSessions)
+            : [];
+        const shouldFilterByCwd = this.definition.filterBusSessionsByCwd
+            && (
+                options.all !== true
+                || this.definition.busScope === 'cwd'
+            );
+        const filteredSessions = shouldFilterByCwd
+            ? sessions.filter((session) =>
+                path.resolve(session.cwd || '/') === path.resolve(options.cwd || '/')
+            )
+            : sessions;
         return {
-            sessions: Array.isArray(this.definition.busSessions)
-                ? structuredClone(this.definition.busSessions)
-                : [],
+            sessions: filteredSessions,
             scope: this.definition.busScope || 'all'
         };
     }
@@ -73,8 +90,11 @@ class FakeBusRuntime extends EventEmitter {
         return this.serializeTab(tab);
     }
 
-    async resumeTab(meta) {
-        this.resumeCalls.push(structuredClone(meta));
+    async resumeTab(meta, options = {}) {
+        this.resumeCalls.push({
+            ...structuredClone(meta),
+            replayHistory: options.replayHistory
+        });
         const tab = {
             id: meta.id,
             runtimeId: `runtime-${this.definition.id}`,
@@ -188,6 +208,10 @@ class FakeAcpManager {
         return structuredClone(this.definitions);
     }
 
+    async listDefinitionsFast() {
+        return structuredClone(this.definitions);
+    }
+
     async listAgentConfigs() {
         return Object.fromEntries(this.configs.entries());
     }
@@ -228,6 +252,7 @@ async function withBusManager(prefix, options, callback) {
         discoveryCwd: '/tmp/discovery',
         loadOpenTabs: options.loadOpenTabs,
         saveOpenTabs: options.saveOpenTabs,
+        listWorkspaceCwds: options.listWorkspaceCwds,
         runtimeFactory: (definition, runtimeOptions) => {
             const runtime = new FakeBusRuntime(definition, runtimeOptions);
             runtimeInstances.push(runtime);
@@ -478,6 +503,272 @@ describe('AcpBusManager', () => {
                 observeRuntime.resumeCalls.map((call) => call.acpSessionId),
                 ['hot']
             );
+        });
+    });
+
+    it('serves resume picker from bus cache without blocking on upstream', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                filterBusSessionsByCwd: true,
+                busSessions: [
+                    {
+                        sessionId: 'current',
+                        cwd: '/tmp/current',
+                        title: 'Current cwd',
+                        updatedAt: '2026-04-14T10:01:00.000Z'
+                    },
+                    {
+                        sessionId: 'other',
+                        cwd: '/tmp/other',
+                        title: 'Other cwd',
+                        updatedAt: '2026-04-14T10:02:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const discoveryRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'discovery'
+            );
+            const before = discoveryRuntime.listCalls.length;
+
+            const result = await manager.listResumeSessions({
+                agentId: 'codex',
+                cwd: '/tmp/current'
+            });
+            const newCalls = discoveryRuntime.listCalls.slice(before);
+
+            assert.equal(newCalls.length, 0);
+            assert.equal(result.scope, 'bus');
+            assert.deepEqual(
+                result.sessions.map((session) => session.sessionId),
+                ['other', 'current']
+            );
+        });
+    });
+
+    it('returns an empty resume picker from bus when cache is empty', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                filterBusSessionsByCwd: true,
+                busSessions: []
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            manager.acpManager.definitions[0].busSessions = [{
+                sessionId: 'current',
+                cwd: '/tmp/current',
+                title: 'Current cwd',
+                updatedAt: '2026-04-14T10:01:00.000Z'
+            }];
+            const discoveryRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'discovery'
+            );
+            const before = discoveryRuntime.listCalls.length;
+
+            const result = await manager.listResumeSessions({
+                agentId: 'codex',
+                cwd: '/tmp/current'
+            });
+            const newCalls = discoveryRuntime.listCalls.slice(before);
+
+            assert.equal(newCalls.length, 0);
+            assert.equal(result.scope, 'bus');
+            assert.deepEqual(result.sessions, []);
+        });
+    });
+
+    it('syncs current workspace cwd sessions into the bus index', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.1,
+            listWorkspaceCwds: () => [
+                '/tmp/current',
+                '/tmp/current',
+                '/tmp/other'
+            ],
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busScope: 'cwd',
+                filterBusSessionsByCwd: true,
+                busSessions: [
+                    {
+                        sessionId: 'current',
+                        cwd: '/tmp/current',
+                        title: 'Current cwd',
+                        updatedAt: '2026-04-14T10:01:00.000Z'
+                    },
+                    {
+                        sessionId: 'other',
+                        cwd: '/tmp/other',
+                        title: 'Other cwd',
+                        updatedAt: '2026-04-14T10:02:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const discoveryRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'discovery'
+            );
+            assert.deepEqual(
+                discoveryRuntime.listCalls.map((call) => ({
+                    all: call.all,
+                    cwd: call.cwd
+                })),
+                [
+                    { all: true, cwd: '/tmp/discovery' },
+                    { all: false, cwd: '/tmp/current' },
+                    { all: false, cwd: '/tmp/other' }
+                ]
+            );
+            const result = await manager.listResumeSessions({
+                agentId: 'codex',
+                cwd: '/tmp/current'
+            });
+            assert.equal(result.scope, 'bus');
+            assert.deepEqual(
+                result.sessions.map((session) => session.sessionId),
+                ['other', 'current']
+            );
+        });
+    });
+
+    it('supplements all-session sync with current workspace cwd scans', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0.1,
+            listWorkspaceCwds: () => ['/tmp/current', '/tmp/other'],
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busScope: 'all',
+                filterBusSessionsByCwd: true,
+                busAllSessions: [
+                    {
+                        sessionId: 'global',
+                        cwd: '/tmp/global',
+                        title: 'Global',
+                        updatedAt: '2026-04-14T10:00:00.000Z'
+                    }
+                ],
+                busSessions: [
+                    {
+                        sessionId: 'global',
+                        cwd: '/tmp/global',
+                        title: 'Global',
+                        updatedAt: '2026-04-14T10:00:00.000Z'
+                    },
+                    {
+                        sessionId: 'current',
+                        cwd: '/tmp/current',
+                        title: 'Current cwd',
+                        updatedAt: '2026-04-14T10:01:00.000Z'
+                    },
+                    {
+                        sessionId: 'other',
+                        cwd: '/tmp/other',
+                        title: 'Other cwd',
+                        updatedAt: '2026-04-14T10:02:00.000Z'
+                    }
+                ]
+            }]
+        }, async ({ manager, runtimeInstances }) => {
+            await manager.start();
+            const discoveryRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'discovery'
+            );
+            assert.deepEqual(
+                discoveryRuntime.listCalls.map((call) => ({
+                    all: call.all,
+                    cwd: call.cwd
+                })),
+                [
+                    { all: true, cwd: '/tmp/discovery' },
+                    { all: false, cwd: '/tmp/current' },
+                    { all: false, cwd: '/tmp/other' }
+                ]
+            );
+            const result = await manager.listResumeSessions({
+                agentId: 'codex',
+                cwd: '/tmp/current'
+            });
+            assert.equal(result.scope, 'bus');
+            assert.deepEqual(
+                result.sessions.map((session) => session.sessionId),
+                ['other', 'current', 'global']
+            );
+        });
+    });
+
+    it('marks attach gaps for worker repair instead of immediate replay', async () => {
+        await withBusManager('acp-bus-manager-', {
+            hotSessionLimit: 1,
+            definitions: [{
+                id: 'codex',
+                label: 'Codex',
+                busSessions: [{
+                    sessionId: 'c-1',
+                    cwd: '/tmp/codex',
+                    title: 'Gap',
+                    updatedAt: '2026-04-14T10:30:00.000Z'
+                }]
+            }]
+        }, async ({ manager, store, runtimeInstances, setNow }) => {
+            await store.init();
+            store.saveObservedSession({
+                id: 'cached-tab',
+                agentId: 'codex',
+                acpSessionId: 'c-1',
+                cwd: '/tmp/codex',
+                title: 'Gap',
+                status: 'ready',
+                busy: false,
+                messages: [{
+                    id: 'cached-message',
+                    kind: 'message',
+                    role: 'assistant',
+                    text: 'cached'
+                }],
+                toolCalls: [],
+                permissions: [],
+                plan: [],
+                terminals: []
+            }, {
+                continuityState: 'cached',
+                observedAt: '2026-04-14T10:00:00.000Z',
+                loadedAt: '2026-04-14T10:00:00.000Z',
+                receivedAt: '2026-04-14T10:00:00.000Z',
+                upstreamUpdatedAt: '2026-04-14T10:00:00.000Z',
+                authoritativeSnapshot: true
+            });
+
+            await manager.start();
+            const observeRuntime = runtimeInstances.find((runtime) =>
+                runtime.kind === 'observe' && runtime.resumeCalls.length > 0
+            );
+            assert.ok(observeRuntime);
+            assert.equal(observeRuntime.resumeCalls[0].replayHistory, false);
+            let session = manager.getSession('codex', 'c-1');
+            assert.equal(session.continuityState, 'resync_required');
+            assert.equal(session.lastReceivedAt, '');
+
+            setNow('2026-04-14T10:31:00.000Z');
+            await manager.syncNow('poll');
+
+            assert.equal(observeRuntime.resumeCalls[1].replayHistory, true);
+            session = manager.getSession('codex', 'c-1');
+            assert.equal(session.continuityState, 'live');
+            assert.equal(session.lastReceivedAt, '2026-04-14T10:31:00.000Z');
         });
     });
 

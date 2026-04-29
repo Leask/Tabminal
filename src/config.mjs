@@ -21,7 +21,7 @@ const DEFAULT_CONFIG = {
     cloudflareKey: null,
     shell: null,
     acpBusDbPath: '',
-    acpBusPollIntervalMs: 10000,
+    acpBusPollIntervalMs: 30000,
     acpBusHotSessionLimit: 10,
     acpBusCacheSessionLimit: 1000,
     acpBusEventLimit: 2000

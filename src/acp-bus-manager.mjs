@@ -13,7 +13,7 @@ import {
     buildAcpBusSessionKey
 } from './acp-bus-store.mjs';
 
-const DEFAULT_POLL_INTERVAL_MS = 10000;
+const DEFAULT_POLL_INTERVAL_MS = 30000;
 const DEFAULT_HOT_SESSION_LIMIT = 10;
 const DEFAULT_CACHE_SESSION_LIMIT = 1000;
 const DEFAULT_EVENT_LIMIT = 2000;
@@ -22,6 +22,7 @@ const DEFAULT_REPLAY_GAP_MS = 10 * 60 * 1000;
 const DEFAULT_COMMAND_REQUEST_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_COMMAND_REQUEST_LIMIT = 500;
 const DEFAULT_COLD_REPAIR_LOAD_THRESHOLD = 0.7;
+const DEFAULT_RESUME_LIST_LIMIT = 300;
 
 function nowIso() {
     return new Date().toISOString();
@@ -136,6 +137,9 @@ export class AcpBusManager extends EventEmitter {
         this.saveOpenTabs = typeof options.saveOpenTabs === 'function'
             ? options.saveOpenTabs
             : async () => {};
+        this.listWorkspaceCwds = typeof options.listWorkspaceCwds === 'function'
+            ? options.listWorkspaceCwds
+            : () => [];
         this.pollIntervalMs = Number.isFinite(options.pollIntervalMs)
             ? Math.max(500, Math.floor(options.pollIntervalMs))
             : DEFAULT_POLL_INTERVAL_MS;
@@ -171,6 +175,8 @@ export class AcpBusManager extends EventEmitter {
         this.now = typeof options.now === 'function' ? options.now : nowIso;
         this.started = false;
         this.restoring = false;
+        this.storeReady = false;
+        this.storeReadyPromise = null;
         this.startPromise = null;
         this.syncPromise = null;
         this.pollTimer = null;
@@ -208,7 +214,7 @@ export class AcpBusManager extends EventEmitter {
         this.restoring = true;
         try {
             await this.acpManager.ensureConfigsLoaded();
-            await this.store.init();
+            await this.#ensureStoreReady();
             await this.#restoreOpenTabs(options);
             await this.syncNow('startup');
             this.started = true;
@@ -251,6 +257,7 @@ export class AcpBusManager extends EventEmitter {
         ));
 
         this.started = false;
+        this.storeReady = false;
         this.store.close();
     }
 
@@ -278,6 +285,34 @@ export class AcpBusManager extends EventEmitter {
         return this.store.getSessionByIdentity(agentId, sessionId, options);
     }
 
+    async listResumeSessions(options = {}) {
+        await this.#ensureStoreReady();
+        const definition = this.#getDefinition(options.agentId);
+        const cwd = path.resolve(options.cwd || process.cwd());
+        const limit = Number.isFinite(options.limit)
+            ? Math.min(DEFAULT_RESUME_LIST_LIMIT, Math.max(1, Math.floor(options.limit)))
+            : DEFAULT_RESUME_LIST_LIMIT;
+        const busSessions = this.store.listSessions({
+            agentId: definition.id,
+            presentOnly: true,
+            limit,
+            includeSnapshot: false
+        }).map((row) => this.#resumeSessionFromBusRow(row));
+
+        if (busSessions.length > 0) {
+            return {
+                sessions: this.#mergeResumeSessions(busSessions, cwd, limit),
+                nextCursor: '',
+                scope: 'bus'
+            };
+        }
+        return {
+            sessions: [],
+            nextCursor: '',
+            scope: 'bus'
+        };
+    }
+
     listEvents(limit = 100) {
         return this.store.listEvents(limit);
     }
@@ -288,10 +323,11 @@ export class AcpBusManager extends EventEmitter {
 
     async listState() {
         await this.acpManager.ensureConfigsLoaded();
+        await this.#ensureStoreReady();
         return {
             bus: this.getState(),
             restoring: this.restoring,
-            definitions: await this.acpManager.listDefinitions(),
+            definitions: await this.acpManager.listDefinitionsFast(),
             configs: await this.acpManager.listAgentConfigs(),
             tabs: this.listOpenTabs()
         };
@@ -441,7 +477,7 @@ export class AcpBusManager extends EventEmitter {
     }
 
     async createTabForUi(options = {}) {
-        await this.start();
+        await this.#ensureInteractiveReady();
         const definition = this.#getAvailableDefinition(options.agentId);
         const cwd = path.resolve(options.cwd || process.cwd());
         const runtimeEntry = this.#getObserveRuntime(definition, cwd);
@@ -493,7 +529,7 @@ export class AcpBusManager extends EventEmitter {
     }
 
     async resumeTabForUi(options = {}) {
-        await this.start();
+        await this.#ensureInteractiveReady();
         const previous = this.getSession(
             options.agentId,
             options.sessionId
@@ -1021,6 +1057,35 @@ export class AcpBusManager extends EventEmitter {
         }
     }
 
+    async #ensureStoreReady() {
+        if (this.storeReady) {
+            return;
+        }
+        if (!this.storeReadyPromise) {
+            this.storeReadyPromise = (async () => {
+                await this.store.init();
+                this.storeReady = true;
+            })()
+                .finally(() => {
+                    this.storeReadyPromise = null;
+                });
+        }
+        await this.storeReadyPromise;
+    }
+
+    async #ensureInteractiveReady() {
+        await this.acpManager.ensureConfigsLoaded();
+        await this.#ensureStoreReady();
+        if (!this.started && !this.startPromise) {
+            void this.start().catch((error) => {
+                console.warn(
+                    '[ACP Bus] Failed to complete background startup:',
+                    error?.message || error
+                );
+            });
+        }
+    }
+
     async #syncNowInternal(reason) {
         const availableDefinitions = await this.#listAvailableDefinitions();
         if (availableDefinitions.length === 0) {
@@ -1034,39 +1099,41 @@ export class AcpBusManager extends EventEmitter {
         for (const definition of availableDefinitions) {
             const runtimeEntry = this.#getDiscoveryRuntime(definition);
             const seenKeys = [];
+            let canReconcilePresence = false;
             try {
-                const result = await runtimeEntry.runtime.listSessions({
-                    cwd: this.discoveryCwd,
-                    all: true
-                });
-                const sessions = Array.isArray(result?.sessions)
-                    ? result.sessions
-                    : [];
-                const scope = result?.scope === 'all' ? 'all' : 'cwd';
-                for (const session of sessions) {
-                    const change = this.store.upsertIndexedSession({
-                        agentId: definition.id,
-                        sessionId: session.sessionId,
-                        cwd: session.cwd,
-                        title: session.title || '',
-                        updatedAt: session.updatedAt || '',
-                        seenAt: this.now()
-                    });
-                    seenKeys.push(change.record.sessionKey);
-                    const eventType = shouldRecordIndexChange(
-                        change.previous,
-                        change.record
-                    );
-                    if (eventType) {
-                        this.#emitEvent(eventType, change.record, {
-                            reason
-                        });
+                const result = await this.#listAndRecordIndexedSessions(
+                    runtimeEntry.runtime,
+                    {
+                        definition,
+                        cwd: this.discoveryCwd,
+                        all: true,
+                        limit: DEFAULT_RESUME_LIST_LIMIT,
+                        reason
                     }
+                );
+                seenKeys.push(...result.records.map((row) => row.sessionKey));
+                canReconcilePresence = result.scope === 'all';
+
+                for (const workspaceCwd of this.#listWorkspaceDiscoveryCwds()) {
+                    const cwdResult = await this.#listAndRecordIndexedSessions(
+                        runtimeEntry.runtime,
+                        {
+                            definition,
+                            cwd: workspaceCwd,
+                            all: false,
+                            limit: DEFAULT_RESUME_LIST_LIMIT,
+                            reason: `${reason}:workspace_cwd`
+                        }
+                    );
+                    seenKeys.push(
+                        ...cwdResult.records.map((row) => row.sessionKey)
+                    );
                 }
-                if (scope === 'all') {
+
+                if (canReconcilePresence) {
                     const removed = this.store.reconcileAgentPresence(
                         definition.id,
-                        seenKeys,
+                        Array.from(new Set(seenKeys)),
                         this.now()
                     );
                     for (const row of removed) {
@@ -1100,7 +1167,7 @@ export class AcpBusManager extends EventEmitter {
         if (complete) {
             await this.#rebalanceHotSessions(reason);
             if (reason !== 'startup') {
-                await this.#maybeRepairOneColdSession(reason);
+                await this.#maybeSyncOneUpstreamSession(reason);
             }
         }
 
@@ -1112,25 +1179,60 @@ export class AcpBusManager extends EventEmitter {
 
     async #listAvailableDefinitions() {
         await this.acpManager.ensureConfigsLoaded();
-        return this.acpManager.definitions.filter((definition) => {
-            const availability = this.acpManager.getDefinitionAvailability(
-                definition
-            );
-            return availability.available;
-        });
+        return this.acpManager.definitions;
+    }
+
+    #listWorkspaceDiscoveryCwds() {
+        let rawCwds = [];
+        try {
+            rawCwds = this.listWorkspaceCwds();
+        } catch (error) {
+            this.#emitEvent('session_runtime_exit', {
+                agentId: '',
+                sessionId: '',
+                sessionKey: '',
+                title: '',
+                cwd: this.discoveryCwd,
+                continuityState: 'cold',
+                hotRank: null,
+                busy: false,
+                status: 'disconnected',
+                errorMessage: error?.message || 'Failed to list workspace cwd',
+                isPresent: true
+            }, {
+                reason: 'workspace_cwd_discovery'
+            });
+            return [];
+        }
+        const seen = new Set();
+        const cwds = [];
+        for (const rawCwd of Array.isArray(rawCwds) ? rawCwds : []) {
+            const value = String(rawCwd || '').trim();
+            if (!value) continue;
+            const cwd = path.resolve(value);
+            if (seen.has(cwd)) continue;
+            seen.add(cwd);
+            cwds.push(cwd);
+        }
+        return cwds;
     }
 
     #getAvailableDefinition(agentId) {
+        const definition = this.#getDefinition(agentId);
+        const availability = this.acpManager.getDefinitionAvailability(definition);
+        if (!availability.available) {
+            throw new Error(availability.reason || 'Agent unavailable');
+        }
+        return definition;
+    }
+
+    #getDefinition(agentId) {
         const normalizedAgentId = String(agentId || '').trim();
         const definition = this.acpManager.definitions.find(
             (entry) => entry.id === normalizedAgentId
         );
         if (!definition) {
             throw new Error('Unknown agent');
-        }
-        const availability = this.acpManager.getDefinitionAvailability(definition);
-        if (!availability.available) {
-            throw new Error(availability.reason || 'Agent unavailable');
         }
         return definition;
     }
@@ -1148,7 +1250,7 @@ export class AcpBusManager extends EventEmitter {
         return ratio >= this.coldRepairLoadThreshold;
     }
 
-    async #maybeRepairOneColdSession(reason) {
+    async #maybeSyncOneUpstreamSession(reason) {
         if (this.coldRepairPromise) {
             return await this.coldRepairPromise;
         }
@@ -1159,7 +1261,10 @@ export class AcpBusManager extends EventEmitter {
             minAgeMs: this.replayGapMs,
             now: this.now(),
             includeSnapshot: true
-        }).find((row) => !this.observedSessions.has(row.sessionKey));
+        }).find((row) => (
+            row.continuityState === 'resync_required'
+            || !this.observedSessions.has(row.sessionKey)
+        ));
         if (!candidate) {
             return null;
         }
@@ -1184,6 +1289,161 @@ export class AcpBusManager extends EventEmitter {
                 this.coldRepairPromise = null;
             });
         return await this.coldRepairPromise;
+    }
+
+    async #listRuntimeSessionPage(runtime, options = {}) {
+        return await runtime.listSessions({
+            cwd: options.cwd,
+            all: options.all,
+            cursor: options.cursor || ''
+        });
+    }
+
+    async #listRuntimeSessions(runtime, options = {}) {
+        const result = await this.#listAndRecordIndexedSessions(runtime, options);
+        return result.sessions.map((session) =>
+            this.#resumeSessionFromRuntime(session)
+        );
+    }
+
+    async #listAndRecordIndexedSessions(runtime, options = {}) {
+        const sessions = [];
+        const records = [];
+        let scope = 'cwd';
+        let nextCursor = '';
+        const seenCursors = new Set();
+        for (;;) {
+            const result = await this.#listRuntimeSessionPage(runtime, {
+                cwd: options.cwd,
+                all: options.all,
+                cursor: nextCursor
+            });
+            const batch = Array.isArray(result?.sessions)
+                ? result.sessions
+                : [];
+            if (result?.scope === 'all') {
+                scope = 'all';
+            }
+            sessions.push(...batch);
+            for (const session of batch) {
+                const change = this.#recordIndexedSession(
+                    options.definition,
+                    session,
+                    options.reason || 'session_list'
+                );
+                records.push(change.record);
+            }
+            if (sessions.length >= options.limit) {
+                return {
+                    sessions: sessions.slice(0, options.limit),
+                    records: records.slice(0, options.limit),
+                    scope
+                };
+            }
+            const previousCursor = nextCursor;
+            nextCursor = typeof result?.nextCursor === 'string'
+                ? result.nextCursor
+                : '';
+            if (!nextCursor || nextCursor === previousCursor) {
+                break;
+            }
+            if (seenCursors.has(nextCursor)) {
+                break;
+            }
+            seenCursors.add(nextCursor);
+        }
+        return { sessions, records, scope };
+    }
+
+    #recordIndexedSession(definition, session, reason) {
+        const change = this.store.upsertIndexedSession({
+            agentId: definition.id,
+            sessionId: session.sessionId,
+            cwd: session.cwd,
+            title: session.title || '',
+            updatedAt: session.updatedAt || session.lastReceivedAt || '',
+            seenAt: this.now()
+        });
+        const eventType = shouldRecordIndexChange(
+            change.previous,
+            change.record
+        );
+        if (eventType) {
+            this.#emitEvent(eventType, change.record, { reason });
+        }
+        return change;
+    }
+
+    #resumeSessionFromRuntime(session = {}) {
+        return {
+            sessionId: String(session.sessionId || '').trim(),
+            cwd: String(session.cwd || '').trim(),
+            title: typeof session.title === 'string' ? session.title : '',
+            updatedAt: typeof session.updatedAt === 'string'
+                ? session.updatedAt
+                : '',
+            relativeUpdatedAt: typeof session.relativeUpdatedAt === 'string'
+                ? session.relativeUpdatedAt
+                : ''
+        };
+    }
+
+    #resumeSessionFromBusRow(row = {}) {
+        return {
+            sessionId: String(row.sessionId || '').trim(),
+            cwd: String(row.cwd || '').trim(),
+            title: typeof row.title === 'string' ? row.title : '',
+            updatedAt: row.upstreamUpdatedAt
+                || row.lastReceivedAt
+                || row.lastSeenAt
+                || '',
+            relativeUpdatedAt: ''
+        };
+    }
+
+    #mergeResumeSessions(sessions, cwd, limit) {
+        const currentCwd = path.resolve(cwd || process.cwd());
+        const merged = new Map();
+        for (const session of sessions) {
+            const sessionId = String(session?.sessionId || '').trim();
+            const sessionCwd = String(session?.cwd || '').trim();
+            if (!sessionId || !sessionCwd) continue;
+            const previous = merged.get(sessionId);
+            const currentTime = Date.parse(session.updatedAt || '') || 0;
+            const previousTime = Date.parse(previous?.updatedAt || '') || 0;
+            if (!previous || currentTime >= previousTime) {
+                merged.set(sessionId, {
+                    sessionId,
+                    cwd: sessionCwd,
+                    title: typeof session.title === 'string' ? session.title : '',
+                    updatedAt: typeof session.updatedAt === 'string'
+                        ? session.updatedAt
+                        : '',
+                    relativeUpdatedAt: typeof session.relativeUpdatedAt === 'string'
+                        ? session.relativeUpdatedAt
+                        : ''
+                });
+            }
+        }
+        return Array.from(merged.values())
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.updatedAt || '') || 0;
+                const rightTime = Date.parse(right.updatedAt || '') || 0;
+                if (leftTime !== rightTime) {
+                    return rightTime - leftTime;
+                }
+                const leftCwd = path.resolve(left.cwd || process.cwd());
+                const rightCwd = path.resolve(right.cwd || process.cwd());
+                const leftCurrent = leftCwd === currentCwd ? 0 : 1;
+                const rightCurrent = rightCwd === currentCwd ? 0 : 1;
+                if (leftCurrent !== rightCurrent) {
+                    return leftCurrent - rightCurrent;
+                }
+                return String(left.title || left.sessionId).localeCompare(
+                    String(right.title || right.sessionId)
+                );
+            })
+            .slice(0, limit);
     }
 
     async #repairColdSession(row, reason) {
@@ -1211,7 +1471,9 @@ export class AcpBusManager extends EventEmitter {
                 runtimeEntry.runtime
             );
             const persisted = this.store.saveObservedSession(serialized, {
-                continuityState: 'cached',
+                continuityState: this.observedSessions.has(row.sessionKey)
+                    ? 'live'
+                    : 'cached',
                 observedAt: repairedAt,
                 loadedAt: repairedAt,
                 receivedAt: repairedAt,
@@ -1584,7 +1846,7 @@ export class AcpBusManager extends EventEmitter {
         return this.#attachHotSession(row, reason);
     }
 
-    #shouldReplayOnAttach(row) {
+    #hasReplayGap(row) {
         const upstreamUpdatedAt = Date.parse(row?.upstreamUpdatedAt || '');
         const lastReceivedAt = Date.parse(
             row?.lastReceivedAt
@@ -1592,17 +1854,17 @@ export class AcpBusManager extends EventEmitter {
             || row?.lastLoadedAt
             || ''
         );
-        const hasCachedTimeline = (
-            Number(row?.messageCount || 0) > 0
-            || Number(row?.toolCallCount || 0) > 0
-        );
-        if (!hasCachedTimeline) {
-            return true;
-        }
         if (!Number.isFinite(upstreamUpdatedAt) || !Number.isFinite(lastReceivedAt)) {
             return false;
         }
         return (upstreamUpdatedAt - lastReceivedAt) > this.replayGapMs;
+    }
+
+    #shouldReplayOnAttach(row) {
+        return (
+            Number(row?.messageCount || 0) === 0
+            && Number(row?.toolCallCount || 0) === 0
+        );
     }
 
     async #attachHotSession(row, reason) {
@@ -1618,6 +1880,7 @@ export class AcpBusManager extends EventEmitter {
         const runtimeEntry = this.#getObserveRuntime(definition, row.cwd);
         const tabId = crypto.randomUUID();
         const attachedAt = this.now();
+        const hasReplayGap = this.#hasReplayGap(row);
         const replayHistory = this.#shouldReplayOnAttach(row)
             || !runtimeEntry.runtime.getSessionCapabilities?.().resume;
         const serialized = this.#decorateSerializedTab(
@@ -1642,12 +1905,24 @@ export class AcpBusManager extends EventEmitter {
             liveAt: attachedAt,
             preserveSnapshotContent: true
         });
+        let eventRecord = persisted.record;
+        if (hasReplayGap) {
+            eventRecord = this.store.markSessionForUpstreamSync(
+                persisted.record.sessionKey,
+                {
+                    status: persisted.record.status,
+                    busy: persisted.record.busy,
+                    errorMessage: persisted.record.errorMessage
+                }
+            ) || persisted.record;
+        }
         this.#emitEvent(
             'session_hot_attached',
-            persisted.record,
+            eventRecord,
             this.#buildSnapshotEventExtra(persisted, {
                 reason,
-                replayHistory
+                replayHistory,
+                requiresUpstreamSync: hasReplayGap
             })
         );
         return handle;

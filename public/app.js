@@ -6491,7 +6491,7 @@ class EditorManager {
             previousLayout,
             36
         );
-        const timeline = getAgentTimelineItems(agentTab);
+        const timeline = getAgentTranscriptTimelineItems(agentTab);
         const isNearLatestWindow = isAgentTranscriptWindowNearLatest(
             agentTab,
             timeline.length
@@ -13256,6 +13256,23 @@ function getAgentTimelineItems(agentTab) {
     });
 
     return items;
+}
+
+function isAgentTimelineActivePlan(entry) {
+    if (!entry || entry.type !== 'plan') {
+        return false;
+    }
+    const value = entry.value || {};
+    const status = normalizeStatusClass(value.status || '');
+    return value.active === true
+        || status === 'pending'
+        || status === 'running';
+}
+
+function getAgentTranscriptTimelineItems(agentTab) {
+    return getAgentTimelineItems(agentTab).filter(
+        (entry) => !isAgentTimelineActivePlan(entry)
+    );
 }
 
 function getAgentTimelineItemKey(entry, absoluteIndex = 0) {

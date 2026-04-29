@@ -816,7 +816,12 @@ public contract. Clients should use the bus-native endpoints below.
 
 ### 12.2 `GET /api/acp-bus/resume-sessions?agentId=...&cwd=...`
 
-Returns resumable ACP sessions for one agent and working directory scope.
+Returns resumable ACP sessions for one agent. The bus owns this request and
+serves only the local bus session index. It never contacts the upstream ACP
+provider on the request path. The background bus sync worker keeps this index
+fresh by scanning upstream all-session metadata when supported and by scanning
+the deduplicated cwd set from currently open terminal/workspace sessions after
+the all-session pass. The response is capped at 300 rows.
 
 Required query params:
 
@@ -836,7 +841,7 @@ Response:
     }
   ],
   "nextCursor": "",
-  "scope": "cwd"
+  "scope": "bus"
 }
 ```
 
@@ -844,7 +849,9 @@ Notes:
 
 - current implementation returns `nextCursor: ""`
 - session history pagination is not currently exposed to clients
-- `scope` is currently `"cwd"` unless the runtime supports broader listing
+- normal `scope` is `"bus"` and does not block on upstream ACP listing
+- if the bus index is empty, the response is an empty `"bus"` result
+- `/resume` never performs cwd or all upstream scans synchronously
 
 Errors:
 
@@ -1011,9 +1018,15 @@ Notes:
 - This endpoint is useful for diagnostics and future session browsers.
 - Continuity repair is backend-owned. Clients should treat `continuityState`
   as diagnostic metadata and continue reading timeline pages from the bus DB.
-- The current `/resume` picker still asks the upstream provider through
-  `/api/acp-bus/resume-sessions`; it is not
-  bus-first yet because global upstream listing support differs by provider.
+- The `/resume` picker is bus-first: the backend returns the local bus index
+  immediately when cached rows exist and returns at most 300 sessions.
+- The bus worker supplements the session index with cwd-scoped scans for the
+  deduplicated paths currently opened by terminal/workspace state after the
+  normal all-session metadata pass.
+- Continuity repair is also bus-owned. Attach/resume does not synchronously
+  replay stale history when the upstream gap is large; the session is marked
+  `resync_required` and the background worker repairs one stale session per
+  low-load poll.
 
 ### 13.3 `GET /api/acp-bus/sessions/:agentId/:sessionId`
 
@@ -1123,12 +1136,19 @@ Ordering contract:
 - `items` are returned in display order from oldest to newest.
 - `index` is a server-maintained, contiguous timeline index starting at `1`.
 - `itemKey` is the stable row identity within the session timeline.
+- Upstream ids, stream keys, tool ids, and any upstream `order`-like fields are
+  identity inputs only. They are not part of the client ordering contract.
+- Incremental writes preserve the first-observed bus order: existing `itemKey`
+  rows keep their index, and newly observed rows append after the current
+  maximum index in the order the bus observed them.
 - `minIndex` and `maxIndex` are page-independent timeline bounds for the
   session.
 - `firstIndex` and `lastIndex` describe the returned page.
 - `hasOlder` and `hasNewer` are the primary UI booleans for pagination controls.
+- Non-authoritative updates do not delete missing timeline rows.
 - If an authoritative replay shows that upstream removed timeline rows, the
-  server may reassign indexes by rebuilding the session timeline.
+  server may reassign indexes by rebuilding the session timeline and will mark
+  the event as requiring a full sync.
 - Clients should treat fetched pages as authoritative and dedupe by `itemKey`.
 
 Native client fixed-window example:

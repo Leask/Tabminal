@@ -409,12 +409,40 @@ const acpBusStore = new AcpBusStore({
     dbPath: config.acpBusDbPath || undefined,
     eventLimit: config.acpBusEventLimit
 });
+
+function listWorkspaceCwdsForAcpBus() {
+    const cwds = [];
+    const pushCwd = (value) => {
+        const cwd = String(value || '').trim();
+        if (cwd) {
+            cwds.push(cwd);
+        }
+    };
+    for (const session of terminalManager.listSessions()) {
+        if (session.managed || session.closed) {
+            continue;
+        }
+        pushCwd(session.cwd);
+        pushCwd(session.initialCwd);
+        const openAgentTabs = Array.isArray(
+            session.workspaceState?.openAgentTabs
+        )
+            ? session.workspaceState.openAgentTabs
+            : [];
+        for (const tab of openAgentTabs) {
+            pushCwd(tab?.cwd);
+        }
+    }
+    return cwds;
+}
+
 const acpBusManager = new AcpBusManager({
     acpManager,
     store: acpBusStore,
     loadOpenTabs: () => terminalManager.loadOpenAgentTabsFromWorkspace(),
     saveOpenTabs: (tabs) =>
         terminalManager.saveOpenAgentTabsToWorkspace(tabs),
+    listWorkspaceCwds: listWorkspaceCwdsForAcpBus,
     pollIntervalMs: config.acpBusPollIntervalMs,
     hotSessionLimit: config.acpBusHotSessionLimit,
     cacheSessionLimit: config.acpBusCacheSessionLimit,
@@ -810,7 +838,6 @@ router.put('/api/cluster', async (ctx) => {
 });
 
 router.get('/api/acp-bus/state', async (ctx) => {
-    await acpBusReadyPromise;
     ctx.body = await acpBusManager.listState();
 });
 
@@ -864,7 +891,7 @@ router.get('/api/acp-bus/resume-sessions', async (ctx) => {
     }
 
     try {
-        const result = await acpManager.listResumeSessions({
+        const result = await acpBusManager.listResumeSessions({
             agentId,
             cwd
         });
@@ -976,7 +1003,6 @@ router.post('/api/acp-bus/command', async (ctx) => {
 
     const type = String(command?.type || '').trim();
     const requestId = String(command?.requestId || '').trim();
-    await acpBusReadyPromise;
 
     try {
         switch (type) {
@@ -1369,16 +1395,16 @@ wss.on('connection', (socket, target) => {
         socket.on('close', () => {
             acpBusSockets.delete(socket);
         });
-        void acpBusReadyPromise
-            .then(async () => {
-                sendWebSocketJson(socket, {
-                    type: 'snapshot',
-                    state: await acpBusManager.listState(),
-                    sessions: acpBusManager.listSessions({
-                        limit: config.acpBusCacheSessionLimit
-                    })
-                });
-            })
+        void (async () => {
+            const state = await acpBusManager.listState();
+            sendWebSocketJson(socket, {
+                type: 'snapshot',
+                state,
+                sessions: acpBusManager.listSessions({
+                    limit: config.acpBusCacheSessionLimit
+                })
+            });
+        })()
             .catch((error) => {
                 sendWebSocketJson(socket, {
                     type: 'error',

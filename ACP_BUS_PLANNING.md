@@ -4,7 +4,7 @@
 
 Branch: `acp_bus`
 
-Last reviewed: 2026-04-17
+Last reviewed: 2026-04-28
 
 The ACP bus is now the primary backend path for ACP agent tabs. Existing web
 agent tabs keep the current per-tab workspace UX, but their transcript hydration
@@ -72,10 +72,18 @@ Timeline rules:
 
 - rows are stored per `agentId::sessionId`
 - rows are ordered by contiguous `index`, starting at `1`
+- `index` is owned by the bus store and is the only ordering field exposed to
+  clients
+- upstream ids, stream keys, tool ids, and `order`-like fields are identity
+  hints only; they must not be used as timeline sort keys
+- incremental updates preserve first-observed bus order: existing rows keep
+  their index and new rows append in observed order
+- missing rows in an incremental update are not treated as deleted
 - cursors are opaque and encode enough server state for before/after queries
 - if stored indexes are no longer contiguous, the store rebuilds indexes from
   current display order
-- authoritative full replays may replace timeline rows for a session
+- authoritative full replays may replace timeline rows for a session, rebuild
+  contiguous indexes, and force clients to refetch
 - live updates merge by stable item identity
 - observed snapshot writes advance `snapshot_version` when transcript or
   snapshot content changes
@@ -98,10 +106,43 @@ Timeline rules:
 Hot set defaults:
 
 ```text
-poll interval: 10000ms
+poll interval: 30000ms
 hot session limit: 10
 cached session retention: 1000
 ```
+
+### Upstream Sync Worker
+
+The bus worker runs every 30 seconds by default.
+
+Worker pipeline:
+
+1. Discover available ACP providers.
+2. For each provider, scan up to 300 upstream session metadata rows.
+3. Build a deduplicated cwd set from currently open terminal/workspace state.
+4. After the all-session pass, scan up to 300 cwd-scoped session rows for each
+   workspace cwd.
+5. Upsert all discovered metadata into `acp_bus_sessions`.
+6. Reconcile deletion only when upstream reports `scope = all`, using the union
+   of all-session and workspace-cwd scan results.
+7. Rebalance the hot set from metadata `updatedAt`.
+8. On non-startup polls, repair at most one stale session when CPU load is below
+   the configured threshold.
+
+Repair selection:
+
+- `resync_required` rows are first priority, even if currently hot/observed.
+- Otherwise, only present non-hot rows are eligible.
+- A normal row is stale only when local receive/load time is more than 10
+  minutes old and upstream `updatedAt` is newer than that local sync marker.
+- Repair uses authoritative replay and rewrites the structured timeline.
+
+Attach behavior:
+
+- attach/resume is lightweight and does not block UI on full replay
+- if attach sees an upstream/local gap greater than 10 minutes, it marks the row
+  `resync_required` and clears local receive/load markers
+- the next low-load worker pass performs the authoritative repair
 
 ### Server API Surface
 
@@ -220,16 +261,20 @@ Window behavior:
 
 The current resume flow is intentionally lightweight:
 
-1. User selects a history item from the slash menu.
-2. Frontend clears composer text and the command menu immediately.
-3. Frontend calls `POST /api/acp-bus/command` with `type = tab.resume`.
-4. Backend binds the current tab to the requested ACP session.
-5. Backend ensures the bus pin/attach path is active.
-6. Backend returns lightweight tab metadata and attach acknowledgement.
-7. Frontend reconciles through bus metadata and timeline APIs.
-8. Later bus events continue to invalidate and refresh visible state.
+1. Slash menu asks `GET /api/acp-bus/resume-sessions`.
+2. Backend returns cached bus session index immediately when rows exist.
+3. If the bus cache is empty, backend returns an empty bus result.
+4. User selects a history item from the slash menu.
+5. Frontend clears composer text and the command menu immediately.
+6. Frontend calls `POST /api/acp-bus/command` with `type = tab.resume`.
+7. Backend binds the current tab to the requested ACP session.
+8. Backend ensures the bus pin/attach path is active.
+9. Backend returns lightweight tab metadata and attach acknowledgement.
+10. Frontend reconciles through bus metadata and timeline APIs.
+11. Later bus events continue to invalidate and refresh visible state.
 
-Resume should not wait for a full transcript replay on the UI critical path.
+Resume picker and resume execution never wait for upstream history or
+session-list replay on the UI critical path.
 
 ## Active Limitations
 
@@ -240,18 +285,12 @@ classify the write safely. Clients still must treat `requiresFullSync = true`,
 removed rows, authoritative replacements, oversized deltas, and unknown local
 window state as signals to fetch authoritative metadata and timeline pages.
 
-### Resume Picker Source
-
-The `/resume` picker still asks the selected upstream provider for resumable
-sessions through `GET /api/acp-bus/resume-sessions`. The bus index is not
-currently the picker source because provider support for complete all-session
-listing is inconsistent.
-
 ### Restart Gaps
 
 If Tabminal is down while an upstream ACP session updates, the bus may miss the
-live update. The session should be treated as requiring an authoritative reload
-when the gap matters.
+live update. The worker catches the common case by comparing upstream `updatedAt`
+with local receive/load markers. Gaps greater than 10 minutes are repaired
+opportunistically; smaller gaps are accepted as live-stream continuity.
 
 ### No Global Notification Surface
 
@@ -285,33 +324,6 @@ Behavior model:
 
 Prerequisite: Phase 2C deltas or stronger event payloads, otherwise the UI must
 fetch too much state to classify events cheaply.
-
-### Phase 2F: Continuity Repair Policy
-
-Goal: keep continuity repair entirely inside the backend bus.
-
-Policy:
-
-- UI and native clients only read local bus state and timeline pages
-- frontend scrolling never talks directly to upstream ACP providers
-- manual attach/resume and hot-set restore attach compare upstream
-  `updatedAt` with the last local receive/load time
-- if that attach gap is greater than `10min`, the bus performs an
-  authoritative replay and rewrites the local structured timeline
-- if that attach gap is within `10min`, the bus accepts the local cache and
-  continues from the live stream
-- cold sessions are repaired opportunistically after non-startup metadata syncs
-- cold repair runs only when normalized 1-minute CPU load is below the bus
-  threshold
-- each low-load sync repairs at most one cold session: the present non-hot
-  session whose local sync is oldest and stale by more than `10min`
-
-User-visible behavior:
-
-- no explicit continuity warning UI
-- no user-triggered repair action in this phase
-- repair success publishes normal bus delta/full-sync events
-- repair failure is kept as internal bus event/state for diagnostics
 
 ### Phase 2G: External Consumers
 
