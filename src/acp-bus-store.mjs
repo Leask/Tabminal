@@ -3,13 +3,30 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-import { AsyncDatabaseSync } from './sqlite.mjs';
+import { dbio } from 'webjam';
 
 const BASE_DIR = path.join(os.homedir(), '.tabminal');
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
 const DEFAULT_EVENT_LIMIT = 2000;
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 const MAX_EVENT_DELTA_ITEMS = 50;
+const WORKER_SAFE_EXEC_ARGV = new Set([
+    '--experimental-sqlite'
+]);
+
+function getWorkerSafeExecArgv() {
+    return process.execArgv.filter((arg) => WORKER_SAFE_EXEC_ARGV.has(arg));
+}
+
+async function initWebjamSqlitePool(options) {
+    const originalExecArgv = process.execArgv;
+    process.execArgv = getWorkerSafeExecArgv();
+    try {
+        return await dbio.init(options);
+    } finally {
+        process.execArgv = originalExecArgv;
+    }
+}
 
 function parseJsonText(text, fallback) {
     if (typeof text !== 'string' || text.trim() === '') {
@@ -672,8 +689,11 @@ export class AcpBusStore {
             return;
         }
         await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
-        this.db = new AsyncDatabaseSync(this.dbPath);
-        await this.db.open();
+        this.db = await initWebjamSqlitePool({
+            provider: dbio.SQLITE,
+            path: this.dbPath,
+            silent: true
+        });
         await this.db.exec(`
             PRAGMA busy_timeout = ${this.busyTimeoutMs};
             PRAGMA journal_mode = WAL;
@@ -756,7 +776,7 @@ export class AcpBusStore {
         if (!this.db) {
             return;
         }
-        await this.db.close();
+        await dbio.end();
         this.db = null;
     }
 

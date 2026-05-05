@@ -2,7 +2,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import AnsiParser from 'node-ansiparser';
-import { alan } from 'utilitas';
+import { alan } from 'webjam';
 import { config } from './config.mjs';
 
 const execAsync = promisify(exec);

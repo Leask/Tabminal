@@ -365,6 +365,7 @@ describe('AcpBusManager', () => {
     it('does not promote local interest ahead of ACP updatedAt', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0,
             definitions: [{
                 id: 'codex',
                 label: 'Codex',
