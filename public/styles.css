@@ -3904,8 +3904,8 @@ kbd {
 }
 
 .tab-file-tree {
-    flex-grow: 1;
-    overflow: auto;
+    flex: 0 0 auto;
+    overflow: hidden;
     padding: 0;
     font-size: 12px;
     border-bottom: none;
@@ -3917,23 +3917,25 @@ kbd {
 }
 
 .tab-file-tree file-tree-container {
-    min-height: 100%;
+    height: 100%;
+    min-height: 0;
 }
 
 .tab-item:not(.active) .tab-file-tree {
-    max-height: 65px;
-    /* Approx 3 items */
+    height: 96px;
+    max-height: 96px;
     pointer-events: none;
     opacity: 0.6;
     overflow: hidden;
 }
 
 .tab-item.active .tab-file-tree {
-    max-height: 600px;
-    /* Approx 30 items */
+    height: min(42vh, 360px);
+    min-height: 240px;
+    max-height: 360px;
     pointer-events: auto;
     opacity: 1;
-    overflow: auto;
+    overflow: hidden;
 }
 
 .tab-item.editor-open .tab-file-tree {

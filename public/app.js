@@ -4217,10 +4217,21 @@ class EditorManager {
             :host {
                 --trees-bg-override: var(--bg-base, #002b36);
                 --trees-fg-override: var(--text-base, #839496);
-                --trees-muted-fg-override: var(--text-muted, #586e75);
+                --trees-fg-muted-override: var(--text-muted, #586e75);
                 --trees-border-color-override: var(--border-color, #073642);
                 --trees-selected-bg-override: rgba(38, 139, 210, 0.22);
                 --trees-hover-bg-override: rgba(88, 110, 117, 0.2);
+                --trees-font-size-override: 11px;
+                --trees-item-height: 22px;
+                --trees-icon-width-override: 13px;
+                --trees-level-gap-override: 5px;
+                --trees-item-padding-x-override: 4px;
+                --trees-item-margin-x-override: 1px;
+                --trees-item-row-gap-override: 3px;
+                --trees-padding-inline-override: 5px;
+                --trees-git-lane-width-override: 7px;
+                --trees-action-lane-width-override: 14px;
+                --trees-scrollbar-gutter-override: 4px;
                 color: var(--text-base, #839496);
                 font-family: 'Monaspace Neon', 'SF Mono Terminal', monospace;
                 font-size: 12px;
@@ -4232,7 +4243,7 @@ class EditorManager {
             }
             [data-file-tree-managed-slot='header'] {
                 border-bottom: 1px solid rgba(131, 148, 150, 0.12);
-                padding: 6px;
+                padding: 4px;
             }
         `;
     }
