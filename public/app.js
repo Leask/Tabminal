@@ -4241,37 +4241,12 @@ class EditorManager {
                 border-radius: 7px;
                 min-width: 100%;
             }
-            [data-file-tree-managed-slot='header'] {
-                border-bottom: 1px solid rgba(131, 148, 150, 0.12);
-                padding: 4px;
-            }
         `;
     }
 
-    createTreeHeader(session) {
-        const header = document.createElement('div');
-        header.className = 'pierre-file-tree-header';
-        header.style.cssText = [
-            'display:flex',
-            'align-items:center',
-            'justify-content:space-between',
-            'gap:6px'
-        ].join(';');
-
-        const title = document.createElement('span');
-        title.textContent = shortenPath(session.cwd || '~', 28);
-        title.title = session.cwd || '';
-        title.style.cssText = [
-            'min-width:0',
-            'overflow:hidden',
-            'text-overflow:ellipsis',
-            'white-space:nowrap',
-            'color:var(--text-muted,#586e75)'
-        ].join(';');
-        header.appendChild(title);
-
+    createTreeSearchActions(session) {
         const actions = document.createElement('span');
-        actions.style.cssText = 'display:inline-flex;gap:4px;flex:0 0 auto';
+        actions.className = 'pierre-file-tree-search-actions';
         actions.appendChild(this.createTreeActionButton(
             'New Folder',
             NEW_FOLDER_ICON_SVG,
@@ -4282,25 +4257,37 @@ class EditorManager {
             NEW_FILE_ICON_SVG,
             () => this.createTreeEntry(session, session.cwd, 'file')
         ));
-        header.appendChild(actions);
-        return header;
+        return actions;
+    }
+
+    mountTreeSearchActions(session, container) {
+        let actions = container.querySelector(
+            ':scope > .pierre-file-tree-search-actions'
+        );
+        if (!actions) {
+            actions = this.createTreeSearchActions(session);
+            container.appendChild(actions);
+        }
+        return actions;
     }
 
     createTreeActionButton(label, icon, handler, danger = false) {
         const button = document.createElement('button');
         const idleBorder = danger
             ? 'rgba(220, 50, 47, 0.5)'
-            : 'rgba(147, 161, 161, 0.5)';
+            : 'rgba(131, 148, 150, 0.34)';
         const idleBackground = danger
             ? 'rgba(220, 50, 47, 0.14)'
-            : 'rgba(38, 139, 210, 0.22)';
-        const idleColor = danger ? '#ff6b66' : '#d7f8ff';
+            : 'rgba(0, 43, 54, 0.72)';
+        const idleColor = danger
+            ? 'var(--text-error, #dc322f)'
+            : 'var(--text-muted, #839496)';
         const hoverBorder = danger
-            ? 'rgba(220, 50, 47, 0.82)'
-            : 'rgba(42, 161, 152, 0.85)';
+            ? 'rgba(220, 50, 47, 0.72)'
+            : 'rgba(131, 148, 150, 0.58)';
         const hoverBackground = danger
             ? 'rgba(220, 50, 47, 0.24)'
-            : 'rgba(42, 161, 152, 0.26)';
+            : 'rgba(7, 54, 66, 0.88)';
         button.type = 'button';
         button.title = label;
         button.setAttribute('aria-label', label);
@@ -4903,9 +4890,6 @@ class EditorManager {
                             context
                         ),
                         triggerMode: 'both'
-                    },
-                    header: {
-                        render: () => this.createTreeHeader(session)
                     }
                 },
                 density: 'compact',
@@ -4952,6 +4936,7 @@ class EditorManager {
                 unsafeCSS: this.buildFileTreeUnsafeCss()
             });
             treeState.tree.render({ containerWrapper: container });
+            this.mountTreeSearchActions(session, container);
             this.bindPierreTreeEvents(session);
         } else {
             treeState.suppressSelection = true;
@@ -4965,6 +4950,7 @@ class EditorManager {
             } finally {
                 treeState.suppressSelection = false;
             }
+            this.mountTreeSearchActions(session, container);
         }
 
         if (session.pendingTreeRenameFocusPath) {
