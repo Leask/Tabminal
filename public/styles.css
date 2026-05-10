@@ -3905,7 +3905,6 @@ kbd {
 
 .tab-file-tree {
     flex: 0 0 auto;
-    position: relative;
     overflow: hidden;
     padding: 0;
     font-size: 12px;
@@ -3920,16 +3919,6 @@ kbd {
 .tab-file-tree file-tree-container {
     height: 100%;
     min-height: 0;
-}
-
-.pierre-file-tree-search-actions {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    z-index: 2;
-    display: inline-flex;
-    gap: 4px;
-    pointer-events: auto;
 }
 
 .tab-item:not(.active) .tab-file-tree {
