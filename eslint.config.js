@@ -4,7 +4,8 @@ export default [
             'node_modules/**',
             '.history/**',
             'coverage/**',
-            'public/icons/**'
+            'public/icons/**',
+            'public/vendor/**'
         ]
     },
     {
