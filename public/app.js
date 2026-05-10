@@ -4288,19 +4288,6 @@ class EditorManager {
 
     createTreeActionButton(label, icon, handler, danger = false) {
         const button = document.createElement('button');
-        const idleBorder = danger
-            ? 'rgba(220, 50, 47, 0.5)'
-            : 'rgba(147, 161, 161, 0.5)';
-        const idleBackground = danger
-            ? 'rgba(220, 50, 47, 0.14)'
-            : 'rgba(38, 139, 210, 0.22)';
-        const idleColor = danger ? '#ff6b66' : '#d7f8ff';
-        const hoverBorder = danger
-            ? 'rgba(220, 50, 47, 0.82)'
-            : 'rgba(42, 161, 152, 0.85)';
-        const hoverBackground = danger
-            ? 'rgba(220, 50, 47, 0.24)'
-            : 'rgba(42, 161, 152, 0.26)';
         button.type = 'button';
         button.title = label;
         button.setAttribute('aria-label', label);
@@ -4313,19 +4300,11 @@ class EditorManager {
             'height:22px',
             'padding:0',
             'border-radius:7px',
-            `border:1px solid ${idleBorder}`,
-            `background:${idleBackground}`,
-            `color:${idleColor}`,
+            `border:1px solid ${danger ? 'rgba(220,50,47,.36)' : 'rgba(38,139,210,.32)'}`,
+            `background:${danger ? 'rgba(220,50,47,.12)' : 'rgba(38,139,210,.12)'}`,
+            `color:${danger ? '#dc322f' : 'var(--text-highlight,#93a1a1)'}`,
             'cursor:pointer'
         ].join(';');
-        button.addEventListener('mouseenter', () => {
-            button.style.borderColor = hoverBorder;
-            button.style.background = hoverBackground;
-        });
-        button.addEventListener('mouseleave', () => {
-            button.style.borderColor = idleBorder;
-            button.style.background = idleBackground;
-        });
         button.addEventListener('mousedown', (event) => {
             event.preventDefault();
             event.stopPropagation();
