@@ -719,6 +719,7 @@ describe('AcpBusManager', () => {
     it('marks attach gaps for worker repair instead of immediate replay', async () => {
         await withBusManager('acp-bus-manager-', {
             hotSessionLimit: 1,
+            getCpuLoadRatio: () => 0,
             definitions: [{
                 id: 'codex',
                 label: 'Codex',

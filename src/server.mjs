@@ -27,11 +27,9 @@ import {
     webjam
 } from 'webjam';
 import {
+    createTabminalRouter,
     setTabminalHttpHandler
 } from './controllers/tabminal.mjs';
-import {
-    createRestApiRouter
-} from './controllers/rest/index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -386,7 +384,7 @@ async function startTabminal(webRuntime, actualPort) {
         acpBusReadyPromise
     } = await createRuntimeManagers();
 
-    const router = await createRestApiRouter({
+    const router = await createTabminalRouter({
         terminalManager,
         acpManager,
         acpBusManager,
