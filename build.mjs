@@ -3,12 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_ICONS_DIR = path.join(__dirname, 'public', 'icons');
-const PUBLIC_VENDOR_DIR = path.join(__dirname, 'public', 'vendor');
 
 // Fallback to PKief's repo which is often stable for raw access, or use material-extensions
 const BASE_URL = 'https://raw.githubusercontent.com/PKief/vscode-material-icon-theme/main/icons';
@@ -153,20 +151,6 @@ async function main() {
         }
     }
     console.log('✅ Fonts copied.');
-
-    console.log('📦 Bundling browser vendor modules...');
-    await fsPromises.mkdir(PUBLIC_VENDOR_DIR, { recursive: true });
-    await build({
-        bundle: true,
-        entryPoints: [path.join(__dirname, 'src', 'browser', 'pierre-ui.mjs')],
-        format: 'esm',
-        logLevel: 'warning',
-        outfile: path.join(PUBLIC_VENDOR_DIR, 'pierre-ui.mjs'),
-        platform: 'browser',
-        sourcemap: false,
-        target: ['es2022']
-    });
-    console.log('✅ Browser vendor bundle generated.');
 }
 
 main().catch(console.error);

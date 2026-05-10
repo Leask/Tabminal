@@ -1380,21 +1380,7 @@ async function main() {
         const selectedCommandName = await evaluate(
             toExpression(`
                 () => {
-                    const options = Array.from(document.querySelectorAll(
-                        '.agent-command-option'
-                    ));
-                    const preferredName = ${JSON.stringify(
-                        expectDiffEditor
-                        || expectTerminalSection
-                        || expectTool
-                            ? '/demo'
-                            : ''
-                    )};
-                    const option = options.find((candidate) => (
-                        candidate.querySelector(
-                            '.agent-command-option-name'
-                        )?.textContent?.trim() === preferredName
-                    )) || options[0];
+                    const option = document.querySelector('.agent-command-option');
                     const name = option?.querySelector(
                         '.agent-command-option-name'
                     )?.textContent?.trim() || '';
@@ -2436,15 +2422,10 @@ async function main() {
                         const diff = document.querySelector(
                             '.agent-tool-call-editor.diff'
                         );
-                        if (!diff) return false;
-                        const pierre = diff.querySelector(
-                            'file-diff-container, diffs-container'
+                        const lineNumbers = document.querySelector(
+                            '.agent-tool-call-editor .line-numbers'
                         );
-                        if (pierre) return true;
-                        const lineNumbers = diff.querySelector(
-                            '.line-numbers'
-                        );
-                        return !!lineNumbers;
+                        return !!(diff && lineNumbers);
                     }
                 `)
             );

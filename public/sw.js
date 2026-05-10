@@ -21,8 +21,7 @@ const VERSIONED_APP_ASSETS = [
     versioned('/app.js'),
     versioned('/modules/notifications.js'),
     versioned('/modules/session-meta.js'),
-    versioned('/modules/url-auth.js'),
-    versioned('/vendor/pierre-ui.mjs')
+    versioned('/modules/url-auth.js')
 ];
 
 async function networkFirst(request) {
@@ -113,7 +112,6 @@ self.addEventListener('fetch', event => {
         || url.pathname === '/styles.css'
         || url.pathname === '/sw.js'
         || url.pathname.startsWith('/modules/')
-        || url.pathname.startsWith('/vendor/')
     );
     const isVersionedAppShell = (
         isAppShell

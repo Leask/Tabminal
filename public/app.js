@@ -243,7 +243,6 @@ let primaryServerBootId = '';
 let runtimeReloadScheduled = false;
 let pdfJsLibPromise = null;
 let markdownPreviewBundlePromise = null;
-let pierreUiBundlePromise = null;
 // #endregion
 
 function makeFileWorkspaceTabKey(filePath) {
@@ -329,15 +328,6 @@ function ensureExternalStylesheet(id, href) {
     link.rel = 'stylesheet';
     link.href = href;
     document.head.appendChild(link);
-}
-
-async function loadPierreUiBundle() {
-    if (!pierreUiBundlePromise) {
-        pierreUiBundlePromise = import(
-            `./vendor/pierre-ui.mjs${LOCAL_MODULE_VERSION}`
-        );
-    }
-    return pierreUiBundlePromise;
 }
 
 async function loadMarkdownPreviewBundle() {
@@ -638,77 +628,6 @@ function uniqueStringList(values) {
             (value) => typeof value === 'string' && value.length > 0
         )
     ));
-}
-
-function trimTrailingSlashes(value = '') {
-    return String(value || '').replace(/\/+$/, '');
-}
-
-function normalizeComparableFsPath(value = '') {
-    return trimTrailingSlashes(value)
-        .replace(/\\/g, '/')
-        .replace(/^\/private\/tmp(?=\/|$)/, '/tmp');
-}
-
-function normalizeTreeRelativePath(value = '') {
-    return String(value || '')
-        .replace(/\\/g, '/')
-        .replace(/^\/+/, '')
-        .replace(/\/+$/, '');
-}
-
-function normalizeTreeLookupPath(value = '') {
-    return normalizeTreeRelativePath(value);
-}
-
-function toTreeDirectoryPath(value = '') {
-    const normalized = normalizeTreeRelativePath(value);
-    return normalized ? `${normalized}/` : '';
-}
-
-function filePathToTreePath(rootPath, filePath, isDirectory = false) {
-    const root = trimTrailingSlashes(rootPath);
-    const target = trimTrailingSlashes(filePath);
-    if (!target) {
-        return '';
-    }
-
-    const comparableRoot = normalizeComparableFsPath(root);
-    const comparableTarget = normalizeComparableFsPath(target);
-    let relative = target;
-    if (comparableRoot && comparableTarget === comparableRoot) {
-        relative = '';
-    } else if (
-        comparableRoot
-        && comparableTarget.startsWith(`${comparableRoot}/`)
-    ) {
-        relative = comparableTarget.slice(comparableRoot.length + 1);
-    } else if (target.startsWith('/')) {
-        return null;
-    }
-    relative = normalizeTreeRelativePath(relative);
-    if (!relative) {
-        return '';
-    }
-    return isDirectory ? `${relative}/` : relative;
-}
-
-function treePathToFilePath(rootPath, treePath) {
-    const root = trimTrailingSlashes(rootPath);
-    const relative = normalizeTreeRelativePath(treePath);
-    if (!relative) {
-        return root;
-    }
-    return root ? `${root}/${relative}` : relative;
-}
-
-function treeParentPath(treePath) {
-    const normalized = normalizeTreeRelativePath(treePath);
-    const separatorIndex = normalized.lastIndexOf('/');
-    if (separatorIndex === -1) {
-        return '';
-    }
-    return normalized.slice(0, separatorIndex);
 }
 
 function normalizeWorkspaceAgentTabs(values, fallback = []) {
@@ -3688,26 +3607,12 @@ class EditorManager {
     focusTreePath(session, path) {
         if (!session?.fileTreeElement || !path) return;
         requestAnimationFrame(() => {
-            const treeState = this.getSessionTreeState(session);
-            const entry = this.findTreeEntryByFilePath(session, path);
-            const treePath = entry?.treePath
-                || this.getTreePathForFile(session, path, !!entry?.isDirectory);
-            const tree = treeState.tree;
-            const item = treePath ? tree?.getItem?.(treePath) : null;
-            if (item) {
-                treeState.suppressSelection = true;
-                try {
-                    item.select();
-                    item.focus();
-                } finally {
-                    treeState.suppressSelection = false;
-                }
-                const container = tree.getFileTreeContainer?.();
-                const root = container?.shadowRoot || container;
-                const row = root?.querySelector(
-                    `[data-item-path="${CSS.escape(treePath)}"]`
-                );
-                row?.scrollIntoView({ block: 'nearest' });
+            const item = Array.from(
+                session.fileTreeElement.querySelectorAll('li')
+            ).find((candidate) => candidate.dataset.path === path);
+            const row = item?.querySelector('.file-tree-item');
+            if (row) {
+                row.scrollIntoView({ block: 'nearest' });
                 session.fileTreeElement.focus({ preventScroll: true });
             }
         });
@@ -4083,7 +3988,7 @@ class EditorManager {
             if (!session.fileTreeElement) {
                 continue;
             }
-            await this.renderTreeFromSnapshots(
+            this.renderTreeFromSnapshots(
                 session.cwd,
                 session.fileTreeElement,
                 session,
@@ -4146,421 +4051,129 @@ class EditorManager {
         }
     }
 
-    getSessionTreeState(session) {
-        if (!session.pierreFileTreeState) {
-            session.pierreFileTreeState = {
-                tree: null,
-                entries: new Map(),
-                creatableDirs: new Map(),
-                suppressSelection: false,
-                bound: false
-            };
-        }
-        return session.pierreFileTreeState;
-    }
-
-    disposeSessionTree(session) {
-        const treeState = session?.pierreFileTreeState;
-        if (session) {
-            session.fileTreeRenderToken = (session.fileTreeRenderToken || 0) + 1;
-        }
-        if (!treeState) {
-            session?.fileTreeElement?.replaceChildren();
-            return;
-        }
-        try {
-            treeState.tree?.cleanUp?.();
-        } catch (error) {
-            console.warn('Failed to dispose file tree:', error);
-        }
-        treeState.tree = null;
-        treeState.entries = new Map();
-        treeState.creatableDirs = new Map();
-        treeState.bound = false;
-        session.fileTreeElement?.replaceChildren();
-    }
-
-    getTreeEntry(session, treePath) {
-        const key = normalizeTreeLookupPath(treePath);
-        return this.getSessionTreeState(session).entries.get(key) || null;
-    }
-
-    getTreeSelectedRelativePath(session) {
-        const tree = this.getSessionTreeState(session).tree;
-        return normalizeTreeLookupPath(tree?.getSelectedPaths?.()[0] || '');
-    }
-
-    getTreeSelectedFilePath(session) {
-        const relativePath = this.getTreeSelectedRelativePath(session);
-        if (!relativePath) {
-            return '';
-        }
-        const entry = this.getTreeEntry(session, relativePath);
-        return entry?.path || treePathToFilePath(session.cwd, relativePath);
-    }
-
-    getTreePathForFile(session, filePath, isDirectory = false) {
-        const direct = filePathToTreePath(session.cwd, filePath, isDirectory);
-        if (direct !== null || !filePath) {
-            return direct;
-        }
-        if (String(filePath || '').startsWith('/')) {
-            return '';
-        }
-        return isDirectory
-            ? toTreeDirectoryPath(filePath)
-            : normalizeTreeRelativePath(filePath);
-    }
-
-    buildFileTreeUnsafeCss() {
-        return `
-            :host {
-                --trees-bg-override: var(--bg-base, #002b36);
-                --trees-fg-override: var(--text-base, #839496);
-                --trees-muted-fg-override: var(--text-muted, #586e75);
-                --trees-border-color-override: var(--border-color, #073642);
-                --trees-selected-bg-override: rgba(38, 139, 210, 0.22);
-                --trees-hover-bg-override: rgba(88, 110, 117, 0.2);
-                color: var(--text-base, #839496);
-                font-family: 'Monaspace Neon', 'SF Mono Terminal', monospace;
-                font-size: 12px;
-                height: 100%;
-            }
-            button[data-type='item'] {
-                border-radius: 7px;
-                min-width: 100%;
-            }
-            [data-file-tree-managed-slot='header'] {
-                border-bottom: 1px solid rgba(131, 148, 150, 0.12);
-                padding: 6px;
-            }
-        `;
-    }
-
-    createTreeHeader(session) {
-        const header = document.createElement('div');
-        header.className = 'pierre-file-tree-header';
-        header.style.cssText = [
-            'display:flex',
-            'align-items:center',
-            'justify-content:space-between',
-            'gap:6px'
-        ].join(';');
-
-        const title = document.createElement('span');
-        title.textContent = shortenPath(session.cwd || '~', 28);
-        title.title = session.cwd || '';
-        title.style.cssText = [
-            'min-width:0',
-            'overflow:hidden',
-            'text-overflow:ellipsis',
-            'white-space:nowrap',
-            'color:var(--text-muted,#586e75)'
-        ].join(';');
-        header.appendChild(title);
-
-        const actions = document.createElement('span');
-        actions.style.cssText = 'display:inline-flex;gap:4px;flex:0 0 auto';
-        actions.appendChild(this.createTreeActionButton(
-            'New Folder',
-            NEW_FOLDER_ICON_SVG,
-            () => this.createTreeEntry(session, session.cwd, 'directory')
-        ));
-        actions.appendChild(this.createTreeActionButton(
-            'New File',
-            NEW_FILE_ICON_SVG,
-            () => this.createTreeEntry(session, session.cwd, 'file')
-        ));
-        header.appendChild(actions);
-        return header;
-    }
-
-    createTreeActionButton(label, icon, handler, danger = false) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.title = label;
-        button.setAttribute('aria-label', label);
-        button.innerHTML = icon;
-        button.style.cssText = [
-            'display:inline-flex',
-            'align-items:center',
-            'justify-content:center',
-            'width:22px',
-            'height:22px',
-            'padding:0',
-            'border-radius:7px',
-            `border:1px solid ${danger ? 'rgba(220,50,47,.36)' : 'rgba(38,139,210,.32)'}`,
-            `background:${danger ? 'rgba(220,50,47,.12)' : 'rgba(38,139,210,.12)'}`,
-            `color:${danger ? '#dc322f' : 'var(--text-highlight,#93a1a1)'}`,
-            'cursor:pointer'
-        ].join(';');
-        button.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-        });
-        button.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            handler();
-        });
-        return button;
-    }
-
-    createTreeContextMenu(session, item, context) {
-        const entry = this.getTreeEntry(session, item.path);
-        const isDirectory = item.kind === 'directory';
-        const itemFilePath = entry?.path
-            || treePathToFilePath(session.cwd, item.path);
-        const parentPath = isDirectory
-            ? itemFilePath
-            : treePathToFilePath(session.cwd, treeParentPath(item.path));
-
-        const menu = document.createElement('div');
-        menu.setAttribute('role', 'menu');
-        menu.style.cssText = [
-            'display:flex',
-            'flex-direction:column',
-            'gap:3px',
-            'min-width:132px',
-            'padding:6px',
-            'border:1px solid rgba(131,148,150,.24)',
-            'border-radius:10px',
-            'background:rgba(0,43,54,.98)',
-            'box-shadow:0 10px 28px rgba(0,0,0,.34)',
-            'font:12px "Monaspace Neon",monospace',
-            'color:var(--text-base,#839496)',
-            'z-index:10000'
-        ].join(';');
-
-        const addMenuButton = (label, icon, onClick, danger = false) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.setAttribute('role', 'menuitem');
-            button.innerHTML = `<span>${icon}</span><span>${label}</span>`;
-            button.style.cssText = [
-                'display:flex',
-                'align-items:center',
-                'gap:8px',
-                'width:100%',
-                'padding:6px 8px',
-                'border:0',
-                'border-radius:7px',
-                'background:transparent',
-                `color:${danger ? '#dc322f' : 'inherit'}`,
-                'cursor:pointer',
-                'font:inherit',
-                'text-align:left'
-            ].join(';');
-            button.addEventListener('mouseenter', () => {
-                button.style.background = danger
-                    ? 'rgba(220,50,47,.12)'
-                    : 'rgba(38,139,210,.14)';
-            });
-            button.addEventListener('mouseleave', () => {
-                button.style.background = 'transparent';
-            });
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                context.close({ restoreFocus: false });
-                onClick();
-            });
-            menu.appendChild(button);
-        };
-
-        const creatable = this.getSessionTreeState(session)
-            .creatableDirs.get(parentPath) !== false;
-        if (creatable) {
-            addMenuButton('New Folder', NEW_FOLDER_ICON_SVG, () => {
-                void this.createTreeEntry(session, parentPath, 'directory');
-            });
-            addMenuButton('New File', NEW_FILE_ICON_SVG, () => {
-                void this.createTreeEntry(session, parentPath, 'file');
-            });
-        }
-        if (entry?.renameable) {
-            addMenuButton('Rename', RENAME_ICON_SVG, () => {
-                this.beginTreeRename(session, entry);
-            });
-        }
-        if (entry?.deleteable) {
-            addMenuButton('Delete', DELETE_ICON_SVG, () => {
-                void this.deleteTreeEntry(session, entry);
-            }, true);
-        }
-        if (menu.childElementCount === 0) {
-            const empty = document.createElement('div');
-            empty.textContent = 'No actions';
-            empty.style.cssText = 'padding:6px 8px;color:var(--text-muted)';
-            menu.appendChild(empty);
-        }
-        return menu;
-    }
-
-    bindPierreTreeEvents(session) {
-        const treeState = this.getSessionTreeState(session);
-        if (treeState.bound || !session.fileTreeElement) {
-            return;
-        }
-        treeState.bound = true;
-        const scheduleExpansionSync = (treePath) => {
-            if (!treePath) {
-                return;
-            }
-            requestAnimationFrame(() => {
-                this.syncTreeExpansionState(session, treePath);
-            });
-        };
-        session.fileTreeElement.addEventListener('click', (event) => {
-            const target = event.composedPath().find(
-                (node) => node instanceof HTMLElement
-                    && node.dataset?.itemPath
-            );
-            if (target instanceof HTMLElement) {
-                scheduleExpansionSync(target.dataset.itemPath || '');
-            }
-        });
-        session.fileTreeElement.addEventListener('keydown', (event) => {
-            if (!['ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(event.key)) {
-                return;
-            }
-            const focused = treeState.tree?.getFocusedPath?.() || '';
-            scheduleExpansionSync(focused);
-        });
-    }
-
-    syncTreeExpansionState(session, treePath) {
-        const tree = this.getSessionTreeState(session).tree;
-        const item = tree?.getItem?.(treePath);
-        if (!item || !item.isDirectory?.()) {
-            return;
-        }
-        const absolutePath = treePathToFilePath(session.cwd, treePath);
-        const expanded = !!item.isExpanded?.();
-        const current = new Set(session.sharedWorkspaceState.expandedPaths);
-        const changed = expanded
-            ? !current.has(absolutePath)
-            : current.has(absolutePath);
-        if (!changed) {
-            return;
-        }
-        if (expanded) {
-            current.add(absolutePath);
-        } else {
-            current.delete(absolutePath);
-        }
-        session.sharedWorkspaceState.expandedPaths = Array.from(current);
-        session.saveState({ touchWorkspace: true });
-        void session.server.fetch('/api/memory/expand', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                path: absolutePath,
-                expanded
-            })
-        });
-        this.requestSessionTreeRefresh(session, { force: true });
-        this.updateTreeAutoRefresh();
-    }
-
     syncSelectedTreePath(session) {
-        const tree = this.getSessionTreeState(session).tree;
-        if (!tree) {
-            return;
-        }
+        if (!session?.fileTreeElement) return;
         const selectedPath = session.selectedTreePath || '';
-        const entry = selectedPath
-            ? this.findTreeEntryByFilePath(session, selectedPath)
-            : null;
-        const treePath = entry?.treePath
-            || this.getTreePathForFile(session, selectedPath, !!entry?.isDirectory);
-        const item = treePath ? tree.getItem(treePath) : null;
-        const treeState = this.getSessionTreeState(session);
-        treeState.suppressSelection = true;
-        try {
-            if (item) {
-                item.select();
-            }
-        } finally {
-            treeState.suppressSelection = false;
-        }
-    }
-
-    findTreeEntryByFilePath(session, filePath) {
-        for (const entry of this.getSessionTreeState(session).entries.values()) {
-            if (entry.path === filePath) {
-                return entry;
-            }
-        }
-        return null;
+        Array.from(
+            session.fileTreeElement.querySelectorAll('.file-tree-item')
+        ).forEach((row) => {
+            const rowPath = row.parentElement?.dataset.path || '';
+            row.classList.toggle(
+                'selected',
+                selectedPath.length > 0 && rowPath === selectedPath
+            );
+        });
     }
 
     getVisibleTreeRows(session) {
-        const container = this.getSessionTreeState(session)
-            .tree?.getFileTreeContainer?.();
-        const root = container?.shadowRoot || container;
-        if (!root) {
-            return [];
-        }
-        return Array.from(root.querySelectorAll('[data-type="item"]'))
-            .filter((row) => row instanceof HTMLElement);
+        if (!session?.fileTreeElement) return [];
+        return Array.from(
+            session.fileTreeElement.querySelectorAll('li > .file-tree-item')
+        ).filter((row) => row instanceof HTMLElement);
     }
 
     getDomSelectedTreePath(session) {
-        return this.getTreeSelectedFilePath(session);
+        return session?.fileTreeElement?.querySelector(
+            '.file-tree-item.selected'
+        )?.parentElement?.dataset.path || '';
     }
 
     moveTreeSelection(session, delta) {
-        const tree = this.getSessionTreeState(session).tree;
-        if (!tree || !delta) {
-            return false;
-        }
+        if (!session || !delta) return false;
         const rows = this.getVisibleTreeRows(session);
-        if (rows.length === 0) {
-            return false;
-        }
-        const focusedPath = tree.getFocusedPath?.()
-            || tree.getSelectedPaths?.()[0]
+        if (rows.length === 0) return false;
+
+        const currentPath = this.getDomSelectedTreePath(session)
+            || session.selectedTreePath
+            || session.editorState.activeFilePath
             || '';
-        const currentIndex = Math.max(
-            0,
-            rows.findIndex((row) => row.dataset.itemPath === focusedPath)
+        let currentIndex = rows.findIndex(
+            (row) => row.parentElement?.dataset.path === currentPath
         );
+        if (currentIndex === -1) {
+            currentIndex = delta > 0 ? -1 : rows.length;
+        }
+
         const nextIndex = Math.max(
             0,
             Math.min(rows.length - 1, currentIndex + delta)
         );
-        const nextPath = rows[nextIndex]?.dataset.itemPath || '';
-        if (!nextPath) {
-            return false;
-        }
-        tree.focusPath(nextPath);
-        rows[nextIndex].scrollIntoView({ block: 'nearest' });
+        const nextRow = rows[nextIndex];
+        const nextPath = nextRow?.parentElement?.dataset.path || '';
+        if (!nextPath) return false;
+
+        this.setSelectedTreePath(session, nextPath, { preserveFocus: true });
+        nextRow.scrollIntoView({ block: 'nearest' });
         session.fileTreeElement?.focus({ preventScroll: true });
         return true;
     }
 
     beginSelectedTreeRename(session) {
-        const selectedPath = this.getTreeSelectedFilePath(session)
+        if (!session) return false;
+        const selectedPath = this.getDomSelectedTreePath(session)
             || session.selectedTreePath
             || '';
-        const entry = this.findTreeEntryByFilePath(session, selectedPath);
-        if (!entry?.renameable) {
+        if (!selectedPath) return false;
+
+        const item = session.fileTreeElement?.querySelector(
+            `li[data-path="${CSS.escape(selectedPath)}"]`
+        );
+        const row = item?.querySelector('.file-tree-item');
+        const nameEl = row?.querySelector('.file-tree-name');
+        if (
+            !item
+            || !row
+            || !nameEl
+            || item.dataset.renameable !== '1'
+        ) {
             return false;
         }
-        this.beginTreeRename(session, entry);
+
+        const renameButton = row.querySelector('.file-tree-rename-btn');
+        if (
+            renameButton instanceof HTMLButtonElement
+            && !renameButton.disabled
+        ) {
+            renameButton.click();
+            return true;
+        }
+
+        this.beginTreeRename(session, {
+            path: selectedPath,
+            name: nameEl.textContent || '',
+            isDirectory: item.dataset.isDirectory === '1',
+            renameable: true
+        });
         return true;
     }
 
     async deleteSelectedTreeEntry(session) {
-        const selectedPath = this.getTreeSelectedFilePath(session)
+        if (!session) return false;
+        const selectedPath = this.getDomSelectedTreePath(session)
             || session.selectedTreePath
             || '';
-        const entry = this.findTreeEntryByFilePath(session, selectedPath);
-        if (!entry?.deleteable) {
+        if (!selectedPath) return false;
+
+        const item = session.fileTreeElement?.querySelector(
+            `li[data-path="${CSS.escape(selectedPath)}"]`
+        );
+        const row = item?.querySelector('.file-tree-item');
+        const nameEl = row?.querySelector('.file-tree-name');
+        if (
+            !item
+            || !row
+            || !nameEl
+            || item.dataset.deleteable !== '1'
+        ) {
             return false;
         }
-        await this.deleteTreeEntry(session, entry);
+
+        await this.deleteTreeEntry(session, {
+            path: selectedPath,
+            name: nameEl.textContent || '',
+            isDirectory: item.dataset.isDirectory === '1',
+            deleteable: true
+        });
         return true;
     }
 
@@ -4568,6 +4181,7 @@ class EditorManager {
         if (!session || typeof parentPath !== 'string' || !parentPath) {
             return;
         }
+
         try {
             const response = await session.server.fetch('/api/fs/create', {
                 method: 'POST',
@@ -4580,28 +4194,17 @@ class EditorManager {
             if (!response.ok) {
                 await throwResponseError(response, 'Failed to create path');
             }
+
             const payload = await response.json();
-            const isDirectory = !!payload.isDirectory;
-            const createdEntry = {
-                path: payload.path,
-                name: payload.name,
-                isDirectory,
-                renameable: true,
-                deleteable: true,
-                treePath: this.getTreePathForFile(
-                    session,
-                    payload.path,
-                    isDirectory
-                )
-            };
             if (
                 parentPath !== '.'
                 && !session.sharedWorkspaceState.expandedPaths.includes(parentPath)
             ) {
-                session.sharedWorkspaceState.expandedPaths = uniqueStringList([
-                    ...session.sharedWorkspaceState.expandedPaths,
-                    parentPath
-                ]);
+                session.sharedWorkspaceState.expandedPaths =
+                    uniqueStringList([
+                        ...session.sharedWorkspaceState.expandedPaths,
+                        parentPath
+                    ]);
                 session.saveState({ touchWorkspace: true });
                 void session.server.fetch('/api/memory/expand', {
                     method: 'POST',
@@ -4612,13 +4215,14 @@ class EditorManager {
                     })
                 });
             }
-            const tree = this.getSessionTreeState(session).tree;
-            if (tree && createdEntry.treePath) {
-                tree.add(createdEntry.treePath);
-            }
-            this.beginTreeRename(session, createdEntry);
-            this.requestSessionTreeRefresh(session, { force: true });
-        } catch (error) {
+
+            this.beginTreeRename(session, {
+                path: payload.path,
+                name: payload.name,
+                isDirectory: !!payload.isDirectory,
+                renameable: true
+            });
+        } catch (_error) {
             alert(error.message || 'Failed to create path', {
                 type: 'error',
                 title: 'Files'
@@ -4627,70 +4231,23 @@ class EditorManager {
     }
 
     cancelTreeRename(session) {
+        if (!session || !session.treeEditingPath) return;
         session.treeEditingPath = '';
         session.treeRenameSubmitting = false;
         session.pendingTreeRenameFocusPath = '';
+        if (this.isSessionTreeVisible(session)) {
+            this.requestSessionTreeRefresh(session);
+        }
     }
 
     beginTreeRename(session, file) {
-        if (!session || !file?.renameable) {
-            return;
-        }
-        const tree = this.getSessionTreeState(session).tree;
-        const treePath = file.treePath
-            || this.getTreePathForFile(session, file.path, file.isDirectory);
-        if (!tree || !treePath) {
-            session.pendingTreeRenameFocusPath = file.path;
-            this.requestSessionTreeRefresh(session, { force: true });
-            return;
-        }
+        if (!session || !file?.renameable) return;
         session.selectedTreePath = file.path;
         session.pendingTreeFocusPath = '';
-        session.treeEditingPath = '';
+        session.treeEditingPath = file.path;
         session.treeRenameSubmitting = false;
-        tree.startRenaming(treePath);
-    }
-
-    async handlePierreTreeRename(session, event) {
-        const oldPath = treePathToFilePath(session.cwd, event.sourcePath);
-        const newPath = treePathToFilePath(session.cwd, event.destinationPath);
-        const oldEntry = this.findTreeEntryByFilePath(session, oldPath);
-        session.treeRenameSubmitting = true;
-        try {
-            const response = await session.server.fetch('/api/fs/rename', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    path: oldPath,
-                    newName: event.destinationPath.split('/').pop()
-                })
-            });
-            if (!response.ok) {
-                await throwResponseError(response, 'Failed to rename path');
-            }
-            const payload = await response.json();
-            session.treeRenameSubmitting = false;
-            session.selectedTreePath = payload.newPath || newPath;
-            session.pendingTreeFocusPath = payload.newPath || newPath;
-            this.handleRenamedPaths(
-                session.server,
-                oldPath,
-                payload.newPath || newPath,
-                !!event.isFolder
-            );
-            this.requestSessionTreeRefresh(session, { force: true });
-            this.focusTreePath(session, session.pendingTreeFocusPath);
-        } catch (error) {
-            session.treeRenameSubmitting = false;
-            alert(error.message || 'Failed to rename path', {
-                type: 'error',
-                title: 'Files'
-            });
-            if (oldEntry) {
-                session.selectedTreePath = oldEntry.path;
-            }
-            this.requestSessionTreeRefresh(session, { force: true });
-        }
+        session.pendingTreeRenameFocusPath = file.path;
+        this.requestSessionTreeRefresh(session, { force: true });
     }
 
     async deleteTreeEntry(session, file) {
@@ -4730,24 +4287,14 @@ class EditorManager {
             session.pendingTreeFocusPath = '';
             session.pendingTreeRenameFocusPath = '';
             session.treeEditingPath = '';
-            const tree = this.getSessionTreeState(session).tree;
-            if (tree && file.treePath) {
-                try {
-                    tree.remove(file.treePath, file.isDirectory
-                        ? { recursive: true }
-                        : undefined);
-                } catch {
-                    // A follow-up refresh will reconcile the canonical tree.
-                }
-            }
             this.handleDeletedPaths(
                 session.server,
                 payload.path || file.path,
                 !!payload.isDirectory
             );
-            this.requestSessionTreeRefresh(session, { force: true });
+            this.requestSessionTreeRefresh(session);
             session.fileTreeElement?.focus({ preventScroll: true });
-        } catch (error) {
+        } catch (_error) {
             alert(error.message || 'Failed to delete path', {
                 type: 'error',
                 title: 'Files'
@@ -4755,199 +4302,464 @@ class EditorManager {
         }
     }
 
-    async commitTreeRename(_session, _file, _nextName) {
-        // Pierre FileTree owns the inline rename editor and calls
-        // handlePierreTreeRename when the user commits.
-    }
-
-    collectTreeSnapshot(session, directorySnapshots) {
-        const entries = new Map();
-        const creatableDirs = new Map();
-        const treePaths = new Set();
-        for (const dirPath of this.getSessionTreeRefreshPaths(session)) {
-            const listing = directorySnapshots.get(
-                this.getTreeRefreshRequestKey(session.server, dirPath)
-            );
-            if (!listing) {
-                continue;
-            }
-            creatableDirs.set(dirPath, listing.creatable !== false);
-            const dirTreePath = this.getTreePathForFile(session, dirPath, true);
-            if (dirTreePath) {
-                treePaths.add(dirTreePath);
-            }
-            for (const file of listing.files) {
-                const treePath = this.getTreePathForFile(
-                    session,
-                    file.path,
-                    !!file.isDirectory
-                );
-                if (!treePath) {
-                    continue;
-                }
-                treePaths.add(treePath);
-                entries.set(normalizeTreeLookupPath(treePath), {
-                    ...file,
-                    treePath
-                });
-            }
-        }
-        return {
-            creatableDirs,
-            entries,
-            paths: Array.from(treePaths).sort((left, right) => (
-                left.localeCompare(right)
-            ))
-        };
-    }
-
-    getExpandedTreePaths(session) {
-        return uniqueStringList(session.sharedWorkspaceState.expandedPaths)
-            .map((filePath) => this.getTreePathForFile(session, filePath, true))
-            .filter(Boolean);
-    }
-
-    async renderTreeFromSnapshots(
-        dirPath,
-        container,
-        session,
-        directorySnapshots,
-        renderToken = session?.fileTreeRenderToken || 0
-    ) {
-        if (!directorySnapshots.has(
-            this.getTreeRefreshRequestKey(session.server, dirPath)
-        )) {
+    async commitTreeRename(session, file, nextName) {
+        if (!session || !file || typeof nextName !== 'string') {
             return;
         }
-        if ((session.fileTreeRenderToken || 0) !== renderToken) {
+        if (nextName.length === 0) {
+            return;
+        }
+        if (nextName === file.name) {
+            this.cancelTreeRename(session);
+            this.focusTreePath(session, file.path);
             return;
         }
 
-        const { FileTree } = await loadPierreUiBundle();
-        if ((session.fileTreeRenderToken || 0) !== renderToken) {
-            return;
-        }
-
-        const treeState = this.getSessionTreeState(session);
-        const mountedContainer = treeState.tree?.getFileTreeContainer?.();
-        if (
-            treeState.tree
-            && (
-                !mountedContainer
-                || mountedContainer.parentElement !== container
-            )
-        ) {
-            treeState.tree.cleanUp?.();
-            treeState.tree = null;
-            treeState.bound = false;
-            container.replaceChildren();
-        }
-
-        const snapshot = this.collectTreeSnapshot(session, directorySnapshots);
-        treeState.entries = snapshot.entries;
-        treeState.creatableDirs = snapshot.creatableDirs;
-        const expandedPaths = this.getExpandedTreePaths(session);
-        const selectedEntry = this.findTreeEntryByFilePath(
-            session,
-            session.selectedTreePath || session.editorState.activeFilePath || ''
-        );
-        const selectedTreePath = selectedEntry?.treePath
-            || this.getTreePathForFile(
-                session,
-                session.selectedTreePath || session.editorState.activeFilePath || '',
-                !!selectedEntry?.isDirectory
-            );
-
-        if (!treeState.tree) {
-            container.replaceChildren();
-            treeState.tree = new FileTree({
-                composition: {
-                    contextMenu: {
-                        buttonVisibility: 'when-needed',
-                        enabled: true,
-                        render: (item, context) => this.createTreeContextMenu(
-                            session,
-                            item,
-                            context
-                        ),
-                        triggerMode: 'both'
-                    },
-                    header: {
-                        render: () => this.createTreeHeader(session)
-                    }
-                },
-                density: 'compact',
-                flattenEmptyDirectories: true,
-                initialExpandedPaths: expandedPaths,
-                initialSelectedPaths: selectedTreePath ? [selectedTreePath] : [],
-                onSelectionChange: (paths) => {
-                    if (treeState.suppressSelection) {
-                        return;
-                    }
-                    const treePath = paths[0] || '';
-                    const entry = this.getTreeEntry(session, treePath);
-                    const filePath = entry?.path
-                        || treePathToFilePath(session.cwd, treePath);
-                    session.selectedTreePath = filePath;
-                    if (!entry || entry.isDirectory) {
-                        return;
-                    }
-                    void this.openFile(entry.path, session, {
-                        focusEditor: false
-                    }).then(() => {
-                        this.focusTreePath(session, entry.path);
-                    });
-                },
-                paths: snapshot.paths,
-                renaming: {
-                    canRename: (item) => {
-                        const entry = this.getTreeEntry(session, item.path);
-                        return entry?.renameable !== false;
-                    },
-                    onError: (message) => {
-                        alert(message || 'Unable to rename path', {
-                            title: 'Files',
-                            type: 'error'
-                        });
-                    },
-                    onRename: (event) => {
-                        void this.handlePierreTreeRename(session, event);
-                    }
-                },
-                search: true,
-                searchBlurBehavior: 'retain',
-                stickyFolders: true,
-                unsafeCSS: this.buildFileTreeUnsafeCss()
+        session.treeRenameSubmitting = true;
+        try {
+            const response = await session.server.fetch('/api/fs/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: file.path,
+                    newName: nextName
+                })
             });
-            treeState.tree.render({ containerWrapper: container });
-            this.bindPierreTreeEvents(session);
-        } else {
-            treeState.suppressSelection = true;
-            try {
-                treeState.tree.resetPaths(snapshot.paths, {
-                    initialExpandedPaths: expandedPaths
-                });
-                if (selectedTreePath && treeState.tree.getItem(selectedTreePath)) {
-                    treeState.tree.getItem(selectedTreePath).select();
+            if (!response.ok) {
+                if (response.status === 409) {
+                    let message = 'A file or folder with that name already exists.';
+                    try {
+                        const payload = await response.json();
+                        if (payload?.error) {
+                            message = payload.error;
+                        }
+                    } catch {
+                        // Ignore invalid JSON error bodies.
+                    }
+                    await showConfirmModal({
+                        title: 'Rename Failed',
+                        message,
+                        confirmLabel: 'OK',
+                        hideCancel: true
+                    });
+                    session.treeRenameSubmitting = false;
+                    requestAnimationFrame(() => {
+                        const renameInput = session.fileTreeElement?.querySelector(
+                            '.file-tree-rename-input'
+                        );
+                        if (renameInput instanceof HTMLInputElement) {
+                            renameInput.focus({ preventScroll: true });
+                            renameInput.setSelectionRange(
+                                0,
+                                renameInput.value.length
+                            );
+                        }
+                    });
+                    return;
                 }
-            } finally {
-                treeState.suppressSelection = false;
+                await throwResponseError(response, 'Failed to rename path');
+            }
+            const payload = await response.json();
+            session.treeEditingPath = '';
+            session.treeRenameSubmitting = false;
+            session.pendingTreeRenameFocusPath = '';
+            session.selectedTreePath = payload.newPath || file.path;
+            session.pendingTreeFocusPath = payload.newPath || file.path;
+            this.handleRenamedPaths(
+                session.server,
+                file.path,
+                payload.newPath || file.path,
+                !!payload.isDirectory
+            );
+            this.requestSessionTreeRefresh(session);
+            this.focusTreePath(session, session.pendingTreeFocusPath);
+        } catch (error) {
+            session.treeRenameSubmitting = false;
+            this.cancelTreeRename(session);
+            alert(error.message || 'Failed to rename path', {
+                type: 'error',
+                title: 'Files'
+            });
+        }
+    }
+
+    ensureTreeList(container) {
+        const existing = Array.from(container.children).find(
+            (child) => child.tagName === 'UL'
+        );
+        if (existing) return existing;
+        const list = document.createElement('ul');
+        container.appendChild(list);
+        return list;
+    }
+
+    getTreeChildList(item) {
+        return Array.from(item.children).find((child) => child.tagName === 'UL')
+            || null;
+    }
+
+    getTreeItemExpanded(filePath, session) {
+        return session.sharedWorkspaceState.expandedPaths.includes(filePath);
+    }
+
+    updateTreeCreateRow(list, dirPath, creatable, session) {
+        let row = Array.from(list.children).find(
+            (child) => child.classList?.contains('file-tree-create-entry')
+        );
+
+        if (!creatable) {
+            row?.remove();
+            return;
+        }
+
+        if (!row) {
+            row = document.createElement('li');
+            row.className = 'file-tree-create-entry';
+
+            const actions = document.createElement('div');
+            actions.className = 'file-tree-create-actions';
+
+            const newFolderButton = document.createElement('button');
+            newFolderButton.type = 'button';
+            newFolderButton.className = 'file-tree-new-folder-btn';
+            newFolderButton.title = 'New Folder';
+            newFolderButton.innerHTML = NEW_FOLDER_ICON_SVG;
+            actions.appendChild(newFolderButton);
+
+            const newFileButton = document.createElement('button');
+            newFileButton.type = 'button';
+            newFileButton.className = 'file-tree-new-file-btn';
+            newFileButton.title = 'New File';
+            newFileButton.innerHTML = NEW_FILE_ICON_SVG;
+            actions.appendChild(newFileButton);
+
+            row.appendChild(actions);
+        }
+
+        const newFolderButton = row.querySelector('.file-tree-new-folder-btn');
+        const newFileButton = row.querySelector('.file-tree-new-file-btn');
+
+        if (newFolderButton instanceof HTMLButtonElement) {
+            newFolderButton.setAttribute(
+                'aria-label',
+                `New folder in ${dirPath}`
+            );
+            newFolderButton.onmousedown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            newFolderButton.onclick = (event) => {
+                event.stopPropagation();
+                void this.createTreeEntry(session, dirPath, 'directory');
+            };
+        }
+
+        if (newFileButton instanceof HTMLButtonElement) {
+            newFileButton.setAttribute('aria-label', `New file in ${dirPath}`);
+            newFileButton.onmousedown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            newFileButton.onclick = (event) => {
+                event.stopPropagation();
+                void this.createTreeEntry(session, dirPath, 'file');
+            };
+        }
+
+        list.appendChild(row);
+    }
+
+    updateTreeItem(li, file, session) {
+        li.dataset.path = file.path;
+        li.dataset.isDirectory = file.isDirectory ? '1' : '0';
+        li.dataset.renameable = file.renameable ? '1' : '0';
+        li.dataset.deleteable = file.deleteable ? '1' : '0';
+
+        let row = Array.from(li.children).find(
+            (child) => child.classList?.contains('file-tree-item')
+        );
+        if (!row) {
+            row = document.createElement('div');
+            row.className = 'file-tree-item';
+            li.prepend(row);
+        }
+        row.tabIndex = -1;
+
+        let icon = row.querySelector('.icon');
+        if (!icon) {
+            icon = document.createElement('span');
+            icon.className = 'icon';
+            row.appendChild(icon);
+        }
+
+        let renameButton = row.querySelector('.file-tree-rename-btn');
+        if (!renameButton) {
+            renameButton = document.createElement('button');
+            renameButton.type = 'button';
+            renameButton.className = 'file-tree-rename-btn';
+            renameButton.title = 'Rename';
+            renameButton.setAttribute('aria-label', `Rename ${file.name}`);
+            renameButton.innerHTML = RENAME_ICON_SVG;
+            row.appendChild(renameButton);
+        }
+
+        let deleteButton = row.querySelector('.file-tree-delete-btn');
+        if (!deleteButton) {
+            deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'file-tree-delete-btn';
+            deleteButton.title = 'Delete';
+            deleteButton.setAttribute('aria-label', `Delete ${file.name}`);
+            deleteButton.innerHTML = DELETE_ICON_SVG;
+            row.appendChild(deleteButton);
+        }
+
+        let name = row.querySelector('.file-tree-name');
+        if (!name) {
+            name = document.createElement('span');
+            name.className = 'file-tree-name';
+            row.appendChild(name);
+        }
+
+        let renameInput = row.querySelector('.file-tree-rename-input');
+        const isEditing = session.treeEditingPath === file.path;
+        if (isEditing && !renameInput) {
+            renameInput = document.createElement('input');
+            renameInput.type = 'text';
+            renameInput.className = 'file-tree-rename-input';
+            row.appendChild(renameInput);
+        } else if (!isEditing && renameInput) {
+            renameInput.remove();
+            renameInput = null;
+        }
+
+        row.className = 'file-tree-item';
+        if (file.isDirectory) {
+            row.classList.add('is-dir');
+        }
+        row.classList.toggle(
+            'active',
+            !file.isDirectory
+            && session.editorState.activeFilePath === file.path
+        );
+        row.classList.toggle(
+            'selected',
+            session.selectedTreePath === file.path
+        );
+        row.classList.toggle('editing', isEditing);
+
+        const isExpanded = file.isDirectory
+            && this.getTreeItemExpanded(file.path, session);
+        li.classList.toggle('expanded', isExpanded);
+        icon.innerHTML = this.getIcon(file.name, file.isDirectory, isExpanded);
+        name.textContent = file.name;
+        name.style.display = isEditing ? 'none' : '';
+        renameButton.style.display = isEditing ? 'none' : '';
+        deleteButton.style.display = isEditing ? 'none' : '';
+        renameButton.hidden = !file.renameable;
+        renameButton.disabled = !file.renameable;
+        renameButton.title = `Rename ${file.name}`;
+        renameButton.setAttribute('aria-label', `Rename ${file.name}`);
+        renameButton.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        renameButton.onclick = (event) => {
+            event.stopPropagation();
+            this.beginTreeRename(session, file);
+        };
+
+        deleteButton.hidden = !file.deleteable;
+        deleteButton.disabled = !file.deleteable;
+        deleteButton.title = `Delete ${file.name}`;
+        deleteButton.setAttribute('aria-label', `Delete ${file.name}`);
+        deleteButton.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        deleteButton.onclick = (event) => {
+            event.stopPropagation();
+            void this.deleteTreeEntry(session, file);
+        };
+
+        if (renameInput) {
+            if (document.activeElement !== renameInput) {
+                renameInput.value = file.name;
+            }
+            renameInput.onkeydown = async (event) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.cancelTreeRename(session);
+                    this.focusTreePath(session, file.path);
+                    return;
+                }
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await this.commitTreeRename(
+                        session,
+                        file,
+                        renameInput.value
+                    );
+                }
+            };
+            renameInput.onmousedown = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onclick = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onfocus = (event) => {
+                event.stopPropagation();
+            };
+            renameInput.onblur = () => {
+                if (!session.treeRenameSubmitting) {
+                    this.cancelTreeRename(session);
+                }
+            };
+
+            if (session.pendingTreeRenameFocusPath === file.path) {
+                session.pendingTreeRenameFocusPath = '';
+                requestAnimationFrame(() => {
+                    renameInput.focus({ preventScroll: true });
+                    renameInput.setSelectionRange(
+                        0,
+                        renameInput.value.length
+                    );
+                });
             }
         }
 
-        if (session.pendingTreeRenameFocusPath) {
-            const pendingEntry = this.findTreeEntryByFilePath(
-                session,
-                session.pendingTreeRenameFocusPath
-            );
-            session.pendingTreeRenameFocusPath = '';
-            if (pendingEntry?.treePath) {
-                treeState.tree.startRenaming(pendingEntry.treePath);
+        row.onclick = async (e) => {
+            e.stopPropagation();
+            if (e.target.closest('.file-tree-rename-btn')) {
+                return;
             }
-        } else if (session.pendingTreeFocusPath) {
-            this.focusTreePath(session, session.pendingTreeFocusPath);
-            session.pendingTreeFocusPath = '';
+            if (e.target.closest('.file-tree-delete-btn')) {
+                return;
+            }
+            if (e.target.closest('.file-tree-rename-input')) {
+                return;
+            }
+            this.setSelectedTreePath(session, file.path, {
+                preserveFocus: true
+            });
+            session.fileTreeElement?.focus({ preventScroll: true });
+            if (file.isDirectory) {
+                if (li.classList.contains('expanded')) {
+                    li.classList.remove('expanded');
+                    session.sharedWorkspaceState.expandedPaths =
+                        session.sharedWorkspaceState.expandedPaths
+                            .filter((path) => path !== file.path);
+                    session.saveState({ touchWorkspace: true });
+                    void session.server.fetch('/api/memory/expand', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            path: file.path,
+                            expanded: false
+                        })
+                    });
+                    icon.innerHTML = this.getIcon(file.name, true, false);
+                    const childUl = this.getTreeChildList(li);
+                    if (childUl) {
+                        childUl.remove();
+                    }
+                    this.updateTreeAutoRefresh();
+                    return;
+                }
+
+                li.classList.add('expanded');
+                session.sharedWorkspaceState.expandedPaths =
+                    uniqueStringList([
+                        ...session.sharedWorkspaceState.expandedPaths,
+                        file.path
+                    ]);
+                session.saveState({ touchWorkspace: true });
+                void session.server.fetch('/api/memory/expand', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: file.path,
+                        expanded: true
+                    })
+                });
+
+                icon.innerHTML = this.getIcon(file.name, true, true);
+                this.requestSessionTreeRefresh(session);
+                this.updateTreeAutoRefresh();
+                session.fileTreeElement?.focus({ preventScroll: true });
+                return;
+            }
+
+            await this.openFile(file.path, session, {
+                focusEditor: false
+            });
+            this.focusTreePath(session, file.path);
+            session.pendingTreeFocusPath = file.path;
+            this.requestSessionTreeRefresh(session);
+        };
+
+        row.onmousedown = (event) => {
+            if (
+                event.target.closest('.file-tree-rename-btn')
+                || event.target.closest('.file-tree-delete-btn')
+                || event.target.closest('.file-tree-rename-input')
+            ) {
+                return;
+            }
+            event.preventDefault();
+            session.fileTreeElement?.focus({ preventScroll: true });
+        };
+
+        row.onkeydown = null;
+
+        if (!isExpanded) {
+            const childUl = this.getTreeChildList(li);
+            if (childUl) {
+                childUl.remove();
+            }
         }
+
+        if (session.pendingTreeFocusPath === file.path) {
+            session.pendingTreeFocusPath = '';
+            requestAnimationFrame(() => {
+                row.scrollIntoView({ block: 'nearest' });
+                session.fileTreeElement?.focus({ preventScroll: true });
+            });
+        }
+    }
+
+    reconcileTreeList(list, dirPath, files, creatable, session) {
+        const existingItems = new Map();
+        Array.from(list.children).forEach((child) => {
+            if (child.tagName === 'LI' && child.dataset.path) {
+                existingItems.set(child.dataset.path, child);
+            }
+        });
+
+        const orderedItems = [];
+        for (const file of files) {
+            let li = existingItems.get(file.path) || null;
+            if (!li) {
+                li = document.createElement('li');
+            } else {
+                existingItems.delete(file.path);
+            }
+            this.updateTreeItem(li, file, session);
+            orderedItems.push(li);
+        }
+
+        for (const li of existingItems.values()) {
+            li.remove();
+        }
+
+        for (const li of orderedItems) {
+            list.appendChild(li);
+        }
+
+        this.updateTreeCreateRow(list, dirPath, creatable, session);
     }
 
     initMonaco() {
@@ -5694,9 +5506,15 @@ class EditorManager {
         }
         
         if (state.isVisible) {
-            this.refreshSessionTree(session);
+            // Only render if empty (first open)
+            if (
+                session.fileTreeElement
+                && session.fileTreeElement.children.length === 0
+            ) {
+                this.refreshSessionTree(session);
+            }
         } else if (session.fileTreeElement) {
-            this.disposeSessionTree(session);
+            session.fileTreeElement.innerHTML = '';
         }
 
         if (isCurrentSession) {
@@ -5783,6 +5601,56 @@ class EditorManager {
             }
         }
         this.schedulePdfPreviewRelayout();
+    }
+
+    renderTreeFromSnapshots(
+        dirPath,
+        container,
+        session,
+        directorySnapshots,
+        renderToken = session?.fileTreeRenderToken || 0
+    ) {
+        const listing = directorySnapshots.get(
+            this.getTreeRefreshRequestKey(session.server, dirPath)
+        );
+        if (!listing) {
+            return;
+        }
+        if ((session.fileTreeRenderToken || 0) !== renderToken) {
+            return;
+        }
+
+        const list = this.ensureTreeList(container);
+        this.reconcileTreeList(
+            list,
+            dirPath,
+            listing.files,
+            listing.creatable,
+            session
+        );
+        if ((session.fileTreeRenderToken || 0) !== renderToken) {
+            return;
+        }
+
+        for (const file of listing.files) {
+            if (
+                file.isDirectory
+                && this.getTreeItemExpanded(file.path, session)
+            ) {
+                const item = Array.from(list.children).find(
+                    (child) => child.dataset.path === file.path
+                );
+                if (item) {
+                    this.renderTreeFromSnapshots(
+                        file.path,
+                        item,
+                        session,
+                        directorySnapshots,
+                        renderToken
+                    );
+                }
+            }
+        }
     }
 
     async openFile(
@@ -7596,6 +7464,7 @@ class EditorManager {
     buildAgentSectionBody(details, section) {
         if (
             section?.kind === 'diff'
+            && this.monacoInstance
             && typeof section.newText === 'string'
         ) {
             return this.buildAgentDiffSectionBody(details, section);
@@ -7832,69 +7701,66 @@ class EditorManager {
         const host = document.createElement('div');
         host.className = 'agent-tool-call-diff-host';
         const diffNode = document.createElement('div');
-        diffNode.className = 'agent-tool-call-editor diff pierre-diff';
+        diffNode.className = 'agent-tool-call-editor diff';
         diffNode.style.height = `${estimateAgentDiffEditorHeight(
             section.oldText || '',
             section.newText || ''
         )}px`;
-        diffNode.textContent = 'Rendering diff...';
         host.appendChild(diffNode);
 
         const basePath = normalizeAgentEditorPath(
             section.path || '/snippet.txt'
         );
-        let diffView = null;
-        let disposed = false;
-        this.trackAgentTimelineDisposable(host, {
-            dispose() {
-                disposed = true;
-                diffView?.cleanUp?.();
+        const originalModel = this.monacoInstance.editor.createModel(
+            section.oldText || '',
+            undefined,
+            this.monacoInstance.Uri.from({
+                scheme: 'agent-diff',
+                path: basePath,
+                query: 'original'
+            })
+        );
+        const modifiedModel = this.monacoInstance.editor.createModel(
+            section.newText || '',
+            undefined,
+            this.monacoInstance.Uri.from({
+                scheme: 'agent-diff',
+                path: basePath,
+                query: 'modified'
+            })
+        );
+        const diffEditor = this.monacoInstance.editor.createDiffEditor(
+            diffNode,
+            {
+                readOnly: true,
+                theme: 'solarized-dark',
+                automaticLayout: true,
+                scrollBeyondLastLine: false,
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                glyphMargin: false,
+                renderSideBySide: false,
+                originalEditable: false,
+                diffWordWrap: 'off',
+                fontSize: IS_MOBILE ? 14 : 12,
+                fontFamily: "'Monaspace Neon', \"SF Mono Terminal\", "
+                    + '"SFMono-Regular", "SF Mono", '
+                    + '"JetBrains Mono", Menlo, Consolas, monospace'
             }
+        );
+        diffEditor.setModel({
+            original: originalModel,
+            modified: modifiedModel
         });
-        void loadPierreUiBundle().then(({ FileDiff }) => {
-            if (disposed || !host.isConnected) {
-                return;
+        this.trackAgentTimelineDisposable(host, diffEditor);
+        this.trackAgentTimelineDisposable(host, originalModel);
+        this.trackAgentTimelineDisposable(host, modifiedModel);
+        details.addEventListener('toggle', () => {
+            if (details.open) {
+                requestAnimationFrame(() => {
+                    diffEditor.layout();
+                });
             }
-            diffNode.textContent = '';
-            diffView = new FileDiff({
-                diffIndicators: 'bars',
-                diffStyle: 'unified',
-                disableBackground: false,
-                hunkSeparators: 'line-info-basic',
-                lineDiffType: 'word',
-                overflow: 'scroll',
-                theme: 'github-dark',
-                themeType: 'dark',
-                unsafeCSS: `
-                    :host {
-                        --diffs-bg-color: rgba(0, 43, 54, 0.34);
-                        color: var(--text-base, #839496);
-                        font-family: 'Monaspace Neon', 'SF Mono Terminal',
-                            monospace;
-                        font-size: ${IS_MOBILE ? 14 : 12}px;
-                    }
-                    pre {
-                        border-radius: 6px;
-                        margin: 0;
-                    }
-                `
-            });
-            diffView.render({
-                containerWrapper: diffNode,
-                newFile: {
-                    cacheKey: `${basePath}:new:${section.newText?.length || 0}`,
-                    contents: section.newText || '',
-                    name: basePath
-                },
-                oldFile: {
-                    cacheKey: `${basePath}:old:${section.oldText?.length || 0}`,
-                    contents: section.oldText || '',
-                    name: basePath
-                }
-            });
-        }).catch((error) => {
-            console.error('Failed to render Pierre diff:', error);
-            diffNode.textContent = 'Failed to render diff.';
         });
         return host;
     }
@@ -9851,7 +9717,7 @@ class Session {
                     if (this.editorState.isVisible) {
                         editorManager.requestSessionTreeRefresh(this);
                     } else {
-                        editorManager.disposeSessionTree(this);
+                        this.fileTreeElement.innerHTML = '';
                     }
                 }
                 editorManager.updateTreeAutoRefresh();
@@ -10373,7 +10239,6 @@ class Session {
         clearTimeout(this.retryTimer);
         this.socket?.close();
         this.unbindTerminalControlClaim();
-        editorManager?.disposeSessionTree?.(this);
         this.disposeTerminalAddons();
 
         try {
@@ -17196,23 +17061,18 @@ function createTabElement(session) {
     const fileTree = document.createElement('div');
     fileTree.className = 'tab-file-tree';
     fileTree.tabIndex = 0;
-    if (
-        session.fileTreeElement
-        && session.fileTreeElement !== fileTree
-    ) {
-        editorManager?.disposeSessionTree?.(session);
-    }
     session.fileTreeElement = fileTree;
     fileTree.addEventListener('mousedown', (event) => {
-        const interactive = event.composedPath().some((node) => (
-            node instanceof HTMLInputElement
-            || node instanceof HTMLTextAreaElement
-            || node instanceof HTMLButtonElement
-        ));
-        if (interactive) {
+        if (
+            event.target.closest('.file-tree-rename-input')
+            || event.target.closest('.file-tree-rename-btn')
+        ) {
             return;
         }
-        fileTree.focus({ preventScroll: true });
+        if (event.target.closest('.file-tree-item')) {
+            event.preventDefault();
+            fileTree.focus({ preventScroll: true });
+        }
     });
     fileTree.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && session.treeEditingPath) {
@@ -17237,6 +17097,20 @@ function createTabElement(session) {
             void editorManager.deleteSelectedTreeEntry(session);
             return;
         }
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            event.stopPropagation();
+            editorManager.moveTreeSelection(session, 1);
+            editorManager.keepTreeFocus(session);
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            event.stopPropagation();
+            editorManager.moveTreeSelection(session, -1);
+            editorManager.keepTreeFocus(session);
+            return;
+        }
         if (event.key !== 'Enter' || session.treeEditingPath) {
             return;
         }
@@ -17247,10 +17121,10 @@ function createTabElement(session) {
         event.stopPropagation();
     });
     
-    tab.appendChild(fileTree);
     if (session.editorState && session.editorState.isVisible) {
         editorManager.refreshSessionTree(session);
     }
+    tab.appendChild(fileTree);
     
     const previewContainer = document.createElement('div');
     previewContainer.className = 'preview-container';
@@ -17335,13 +17209,7 @@ function createTabElement(session) {
     tab.addEventListener('touchend', (e) => {
         if (isScrolling) return;
         // Allow buttons to handle their own events
-        const interactive = e.composedPath().some((node) => (
-            node instanceof HTMLButtonElement
-            || node instanceof HTMLInputElement
-            || node instanceof HTMLTextAreaElement
-            || node?.tagName === 'FILE-TREE-CONTAINER'
-        ));
-        if (interactive) return;
+        if (e.target.closest('button') || e.target.closest('.file-tree-item')) return;
         
         if (e.cancelable) e.preventDefault(); // Prevent mouse emulation (hover/click)
         switchToSession(session.key);

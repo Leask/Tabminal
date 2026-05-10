@@ -35,8 +35,6 @@
     "@agentclientprotocol/sdk": "^0.16.1",
     "@fontsource/monaspace-neon": "^5.2.5",
     "@mozilla/readability": "^0.6.0",
-    "@pierre/diffs": "^1.1.21",
-    "@pierre/trees": "^1.0.0-beta.3",
     "jsdom": "^29.0.1",
     "node-ansiparser": "^2.2.1",
     "node-pty": "^1.1.0",
@@ -55,7 +53,6 @@
   },
   "homepage": "https://github.com/leask/tabminal#readme",
   "devDependencies": {
-    "esbuild": "^0.28.0",
     "eslint": "^10.1.0"
   }
 }
