@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,7 +17,8 @@ import {
     finalizeRestoreCaptureMessages,
     getNextSyntheticStreamTurn,
     normalizeAgentTranscriptMessages,
-    mergeAgentMessageText
+    mergeAgentMessageText,
+    terminateChildProcessTree
 } from '../src/acp-manager.mjs';
 
 class FakeRuntime extends EventEmitter {
@@ -562,7 +564,98 @@ async function waitForValue(fn, timeoutMs = 5000, stepMs = 25) {
     throw new Error('Timed out waiting for condition');
 }
 
+async function waitForFileText(filePath, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+        try {
+            const text = await fs.readFile(filePath, 'utf8');
+            if (text.trim()) {
+                return text.trim();
+            }
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+function isPidAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) {
+        return false;
+    }
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error?.code !== 'ESRCH';
+    }
+}
+
+async function waitForPidGone(pid, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+        if (!isPidAlive(pid)) {
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return !isPidAlive(pid);
+}
+
 describe('AcpManager', () => {
+    it('terminates detached runtime process groups', async () => {
+        if (process.platform === 'win32') {
+            return;
+        }
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'acp-tree-'));
+        const scriptPath = path.join(dir, 'tree.mjs');
+        const pidPath = path.join(dir, 'grandchild.pid');
+        await fs.writeFile(scriptPath, `
+            import fs from 'node:fs';
+            import { spawn } from 'node:child_process';
+
+            const child = spawn(
+                process.execPath,
+                [
+                    '-e',
+                    "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"
+                ],
+                { stdio: 'ignore' }
+            );
+            fs.writeFileSync(process.argv[2], String(child.pid));
+            process.on('SIGTERM', () => {});
+            setInterval(() => {}, 1000);
+        `);
+        const child = spawn(process.execPath, [scriptPath, pidPath], {
+            detached: true,
+            stdio: 'ignore'
+        });
+        child.tabminalProcessGroupPid = child.pid;
+        try {
+            const grandchildPid = Number(await waitForFileText(pidPath));
+            assert.equal(isPidAlive(child.pid), true);
+            assert.equal(isPidAlive(grandchildPid), true);
+
+            const exited = await terminateChildProcessTree(child, {
+                label: 'test runtime process tree',
+                gracefulTimeoutMs: 100,
+                killTimeoutMs: 1500,
+                silent: true
+            });
+
+            assert.equal(exited, true);
+            assert.equal(await waitForPidGone(child.pid), true);
+            assert.equal(await waitForPidGone(grandchildPid), true);
+        } finally {
+            await terminateChildProcessTree(child, {
+                label: 'test runtime process tree cleanup',
+                gracefulTimeoutMs: 50,
+                killTimeoutMs: 500,
+                silent: true
+            }).catch(() => {});
+            await fs.rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('uses the platform-specific Codex ACP package on supported platforms', async () => {
         const manager = new AcpManager();
         try {

@@ -1245,7 +1245,7 @@ export class AcpBusManager extends EventEmitter {
         const candidate = (await this.store.listColdRepairCandidates(1, {
             minAgeMs: this.replayGapMs,
             now: this.now(),
-            includeSnapshot: true
+            includeSnapshot: false
         })).find((row) => (
             row.continuityState === 'resync_required'
             || !this.observedSessions.has(row.sessionKey)
@@ -1546,6 +1546,7 @@ export class AcpBusManager extends EventEmitter {
             (entry) => entry.id === meta.agentId
         );
         const getSnapshotArray = (key) => {
+            if (Array.isArray(liveSnapshot?.[key])) return liveSnapshot[key];
             if (Array.isArray(snapshot?.[key])) return snapshot[key];
             if (Array.isArray(source?.[key])) return source[key];
             return [];
@@ -1554,7 +1555,8 @@ export class AcpBusManager extends EventEmitter {
             const status = String(value || '').toLowerCase();
             return status === 'pending'
                 || status === 'running'
-                || status === 'in_progress';
+                || status === 'in_progress'
+                || status === 'active';
         };
         const activeToolCalls = getSnapshotArray('toolCalls').filter(
             (entry) => isActiveStatus(entry?.status)
@@ -1734,7 +1736,7 @@ export class AcpBusManager extends EventEmitter {
             this.hotSessionLimit,
             {
                 presentOnly: true,
-                includeSnapshot: true
+                includeSnapshot: false
             }
         );
         const hotKeys = hotRows.map((row) => row.sessionKey);
@@ -1748,7 +1750,7 @@ export class AcpBusManager extends EventEmitter {
             let row = hotRows.find((entry) => entry.sessionKey === sessionKey);
             if (!row) {
                 row = await this.store.getSession(sessionKey, {
-                    includeSnapshot: true
+                    includeSnapshot: false
                 });
             }
             if (!row) continue;
@@ -2051,7 +2053,8 @@ export class AcpBusManager extends EventEmitter {
             const status = String(value || '').toLowerCase();
             return status === 'pending'
                 || status === 'running'
-                || status === 'in_progress';
+                || status === 'in_progress'
+                || status === 'active';
         };
         const arrayValue = (key) => Array.isArray(snapshot[key])
             ? cloneSerializable(snapshot[key], [])

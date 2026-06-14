@@ -16,6 +16,9 @@ const DEFAULT_TERMINAL_OUTPUT_LIMIT = 256 * 1024;
 const DEFAULT_AVAILABILITY_OVERRIDE_TTL_MS = 30 * 1000;
 const DEFAULT_PROBE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_TRANSCRIPT_PERSIST_DELAY_MS = 250;
+const DEFAULT_PROCESS_TREE_TERM_TIMEOUT_MS = 3000;
+const DEFAULT_PROCESS_TREE_KILL_TIMEOUT_MS = 2000;
+const PROCESS_TREE_WAIT_STEP_MS = 50;
 const ALL_SESSION_AGENT_IDS = new Set([
     'claude',
     'codex',
@@ -48,6 +51,138 @@ const AGENT_CONFIG_ENV_KEYS = {
         'GITHUB_TOKEN'
     ]
 };
+
+function sleep(ms) {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+}
+
+function isProcessGoneError(error) {
+    return error?.code === 'ESRCH';
+}
+
+function isChildProcessExited(child) {
+    return !child
+        || child.exitCode !== null
+        || child.signalCode !== null;
+}
+
+function getChildProcessGroupPid(child) {
+    const pid = Number(child?.tabminalProcessGroupPid);
+    if (
+        process.platform === 'win32'
+        || !Number.isInteger(pid)
+        || pid <= 0
+    ) {
+        return null;
+    }
+    return pid;
+}
+
+function isProcessGroupAlive(pgid) {
+    if (!Number.isInteger(pgid) || pgid <= 0) {
+        return false;
+    }
+    try {
+        process.kill(-pgid, 0);
+        return true;
+    } catch (error) {
+        if (isProcessGoneError(error)) {
+            return false;
+        }
+        return true;
+    }
+}
+
+function spawnChildProcessGroup(command, args = [], options = {}) {
+    const child = spawn(command, args, {
+        ...options,
+        detached: process.platform !== 'win32'
+    });
+    if (process.platform !== 'win32' && Number.isInteger(child.pid)) {
+        child.tabminalProcessGroupPid = child.pid;
+    }
+    return child;
+}
+
+function signalChildProcessTree(child, signal) {
+    const pgid = getChildProcessGroupPid(child);
+    if (pgid) {
+        try {
+            process.kill(-pgid, signal);
+            return true;
+        } catch (error) {
+            if (!isProcessGoneError(error)) {
+                console.warn(
+                    `[ACP] Failed to send ${signal} to process group `
+                    + `${pgid}: ${error?.message || error}`
+                );
+            }
+        }
+    }
+    try {
+        return !!child?.kill?.(signal);
+    } catch (error) {
+        if (!isProcessGoneError(error)) {
+            console.warn(
+                `[ACP] Failed to send ${signal} to child process: `
+                + `${error?.message || error}`
+            );
+        }
+    }
+    return false;
+}
+
+async function waitForChildProcessTreeExit(child, timeoutMs) {
+    const pgid = getChildProcessGroupPid(child);
+    const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs || 0));
+    while (Date.now() <= deadline) {
+        if (pgid) {
+            if (!isProcessGroupAlive(pgid)) {
+                return true;
+            }
+        } else if (isChildProcessExited(child)) {
+            return true;
+        }
+        await sleep(PROCESS_TREE_WAIT_STEP_MS);
+    }
+    if (pgid) {
+        return !isProcessGroupAlive(pgid);
+    }
+    return isChildProcessExited(child);
+}
+
+export async function terminateChildProcessTree(child, options = {}) {
+    if (!child) {
+        return true;
+    }
+    const gracefulTimeoutMs = Number.isFinite(options.gracefulTimeoutMs)
+        ? Math.max(0, Math.floor(options.gracefulTimeoutMs))
+        : DEFAULT_PROCESS_TREE_TERM_TIMEOUT_MS;
+    const killTimeoutMs = Number.isFinite(options.killTimeoutMs)
+        ? Math.max(0, Math.floor(options.killTimeoutMs))
+        : DEFAULT_PROCESS_TREE_KILL_TIMEOUT_MS;
+    const label = options.label || 'child process';
+    const silent = options.silent === true;
+
+    signalChildProcessTree(child, 'SIGTERM');
+    if (await waitForChildProcessTreeExit(child, gracefulTimeoutMs)) {
+        return true;
+    }
+
+    if (!silent) {
+        console.warn(
+            `[ACP] ${label} did not exit after SIGTERM; sending SIGKILL.`
+        );
+    }
+    signalChildProcessTree(child, 'SIGKILL');
+    const exited = await waitForChildProcessTreeExit(child, killTimeoutMs);
+    if (!exited && !silent) {
+        console.warn(`[ACP] ${label} still appears to be alive after SIGKILL.`);
+    }
+    return exited;
+}
 
 function getAllowedAgentEnvKeys(agentId) {
     return AGENT_CONFIG_ENV_KEYS[agentId] || [];
@@ -1909,7 +2044,7 @@ class LocalExecTerminal extends EventEmitter {
         const spawnRequest = buildTerminalSpawnRequest(request);
         this.command = formatTerminalDisplayCommand(request, spawnRequest);
 
-        this.child = spawn(spawnRequest.command, spawnRequest.args, {
+        this.child = spawnChildProcessGroup(spawnRequest.command, spawnRequest.args, {
             cwd: request.cwd || process.cwd(),
             env,
             stdio: ['ignore', 'pipe', 'pipe']
@@ -1991,14 +2126,16 @@ class LocalExecTerminal extends EventEmitter {
 
     kill() {
         if (!this.closed) {
-            this.child.kill('SIGTERM');
+            signalChildProcessTree(this.child, 'SIGTERM');
         }
         return {};
     }
 
     async release() {
         if (!this.closed) {
-            this.child.kill('SIGTERM');
+            await terminateChildProcessTree(this.child, {
+                label: `terminal command ${this.command}`
+            });
             await this.waitForExit().catch(() => {});
         }
     }
@@ -2112,6 +2249,8 @@ export class AcpRuntime extends EventEmitter {
         this.process = null;
         this.started = false;
         this.startPromise = null;
+        this.disposed = false;
+        this.disposePromise = null;
         this.idleTimer = null;
         this.agentInfo = null;
         this.agentCapabilities = null;
@@ -2172,7 +2311,7 @@ export class AcpRuntime extends EventEmitter {
     async #listSessionsViaGeminiCli() {
         const args = this.#buildGeminiSessionListArgs();
         const result = await new Promise((resolve, reject) => {
-            const child = spawn(this.definition.command, args, {
+            const child = spawnChildProcessGroup(this.definition.command, args, {
                 cwd: this.cwd,
                 env: withAgentPath(this.env),
                 stdio: ['ignore', 'pipe', 'pipe']
@@ -2183,7 +2322,9 @@ export class AcpRuntime extends EventEmitter {
             const timer = setTimeout(() => {
                 if (settled) return;
                 settled = true;
-                child.kill('SIGTERM');
+                void terminateChildProcessTree(child, {
+                    label: 'Gemini session listing'
+                });
                 reject(new Error('Gemini session listing timed out'));
             }, 5000);
             child.stdout?.on('data', (chunk) => {
@@ -2418,17 +2559,27 @@ export class AcpRuntime extends EventEmitter {
         this.startPromise = this.#startInternal();
         try {
             await this.startPromise;
+        } catch (error) {
+            await terminateChildProcessTree(this.process, {
+                label: `ACP runtime ${this.runtimeKey}`
+            });
+            this.process = null;
+            throw error;
         } finally {
             this.startPromise = null;
         }
     }
 
     async #startInternal() {
-        const child = spawn(this.definition.command, this.definition.args, {
-            cwd: this.cwd,
-            env: this.env,
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
+        const child = spawnChildProcessGroup(
+            this.definition.command,
+            this.definition.args,
+            {
+                cwd: this.cwd,
+                env: this.env,
+                stdio: ['pipe', 'pipe', 'pipe']
+            }
+        );
 
         this.process = child;
         let startupSettled = false;
@@ -3527,19 +3678,35 @@ export class AcpRuntime extends EventEmitter {
     }
 
     async dispose() {
-        clearTimeout(this.idleTimer);
-        this.idleTimer = null;
-        for (const terminal of this.terminals.values()) {
-            await terminal.release({ destroy: true }).catch(() => {});
+        if (this.disposePromise) {
+            return this.disposePromise;
         }
-        this.terminals.clear();
-        for (const tabId of Array.from(this.tabs.keys())) {
-            await this.closeTab(tabId);
-        }
-        if (this.process && !this.process.killed) {
-            this.process.kill('SIGTERM');
-        }
-        await this.connection?.closed.catch(() => {});
+        this.disposed = true;
+        this.disposePromise = (async () => {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+            for (const terminal of this.terminals.values()) {
+                await terminal.release({ destroy: true }).catch(() => {});
+            }
+            this.terminals.clear();
+            for (const tabId of Array.from(this.tabs.keys())) {
+                await this.closeTab(tabId).catch(() => {});
+            }
+            try {
+                this.process?.stdin?.end?.();
+            } catch {}
+            await terminateChildProcessTree(this.process, {
+                label: `ACP runtime ${this.runtimeKey}`
+            });
+            await Promise.race([
+                this.connection?.closed?.catch(() => {}),
+                sleep(500)
+            ]).catch(() => {});
+            this.connection = null;
+            this.process = null;
+            this.started = false;
+        })();
+        return this.disposePromise;
     }
 
     async #handleSessionUpdate(params) {

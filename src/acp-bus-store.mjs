@@ -10,6 +10,15 @@ const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
 const DEFAULT_EVENT_LIMIT = 2000;
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 const MAX_EVENT_DELTA_ITEMS = 50;
+const DEFAULT_MAX_STORED_SNAPSHOT_BYTES = 1024 * 1024;
+const DEFAULT_MAX_STORED_TERMINAL_OUTPUT_BYTES = 32 * 1024;
+const MAX_STORED_RESOURCE_ITEMS = 100;
+const ACTIVE_STATUSES = new Set([
+    'pending',
+    'running',
+    'in_progress',
+    'active'
+]);
 const WORKER_SAFE_EXEC_ARGV = new Set([
     '--experimental-sqlite'
 ]);
@@ -28,8 +37,14 @@ async function initWebjamSqlitePool(options) {
     }
 }
 
-function parseJsonText(text, fallback) {
+function parseJsonText(text, fallback, options = {}) {
     if (typeof text !== 'string' || text.trim() === '') {
+        return fallback;
+    }
+    const maxBytes = Number.isFinite(options.maxBytes)
+        ? Math.max(0, Math.floor(options.maxBytes))
+        : 0;
+    if (maxBytes > 0 && Buffer.byteLength(text, 'utf8') > maxBytes) {
         return fallback;
     }
     try {
@@ -64,6 +79,204 @@ function cloneSerializable(value, fallback) {
     } catch {
         return fallback;
     }
+}
+
+function truncateStringBytes(value, maxBytes) {
+    const text = typeof value === 'string' ? value : String(value || '');
+    const limit = Number.isFinite(maxBytes)
+        ? Math.max(0, Math.floor(maxBytes))
+        : 0;
+    if (limit <= 0 || Buffer.byteLength(text, 'utf8') <= limit) {
+        return text;
+    }
+    return `${Buffer.from(text, 'utf8')
+        .subarray(0, limit)
+        .toString('utf8')}\n...[truncated]`;
+}
+
+function isActiveStatus(value = '') {
+    return ACTIVE_STATUSES.has(String(value || '').toLowerCase());
+}
+
+function isPendingPermission(value = '') {
+    return String(value || 'pending').toLowerCase() === 'pending';
+}
+
+function takeStoredResourceItems(items, predicate) {
+    return (Array.isArray(items) ? items : [])
+        .filter((item) => item && typeof item === 'object' && predicate(item))
+        .slice(-MAX_STORED_RESOURCE_ITEMS)
+        .map((item) => cloneSerializable(item, {}) || {});
+}
+
+function compactStoredTerminalSummary(terminal, maxOutputBytes) {
+    if (!terminal || typeof terminal !== 'object') {
+        return null;
+    }
+    const summary = cloneSerializable(terminal, {}) || {};
+    if (typeof summary.output === 'string') {
+        summary.output = truncateStringBytes(summary.output, maxOutputBytes);
+    }
+    return summary;
+}
+
+function compactStoredSnapshot(snapshot, options = {}) {
+    const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const maxTerminalOutputBytes = Number.isFinite(
+        options.maxTerminalOutputBytes
+    )
+        ? Math.max(0, Math.floor(options.maxTerminalOutputBytes))
+        : DEFAULT_MAX_STORED_TERMINAL_OUTPUT_BYTES;
+    const copyKeys = [
+        'id',
+        'runtimeId',
+        'runtimeKey',
+        'acpSessionId',
+        'agentId',
+        'agentLabel',
+        'commandLabel',
+        'terminalSessionId',
+        'cwd',
+        'title',
+        'createdAt',
+        'status',
+        'busy',
+        'errorMessage',
+        'currentModeId',
+        'availableModes',
+        'availableCommands',
+        'configOptions',
+        'sessionCapabilities',
+        'usage',
+        'authoritativeSnapshot'
+    ];
+    const compact = {};
+    for (const key of copyKeys) {
+        if (source[key] !== undefined) {
+            compact[key] = cloneSerializable(source[key], source[key]);
+        }
+    }
+    compact.messages = [];
+    compact.timelineItems = [];
+    compact.planHistory = takeStoredResourceItems(
+        source.planHistory,
+        (item) => item.active === true || isActiveStatus(item.status)
+    );
+    compact.toolCalls = takeStoredResourceItems(
+        source.toolCalls,
+        (item) => isActiveStatus(item.status)
+    );
+    compact.permissions = takeStoredResourceItems(
+        source.permissions,
+        (item) => isPendingPermission(item.status)
+    );
+    compact.plan = takeStoredResourceItems(
+        source.plan,
+        (item) => isActiveStatus(item.status)
+    );
+    compact.terminals = (Array.isArray(source.terminals)
+        ? source.terminals
+        : []
+    )
+        .map((item) =>
+            compactStoredTerminalSummary(item, maxTerminalOutputBytes)
+        )
+        .filter(Boolean)
+        .slice(-MAX_STORED_RESOURCE_ITEMS);
+    return compact;
+}
+
+function trimStoredSnapshotResources(snapshot, options = {}) {
+    const maxTerminalOutputBytes = Number.isFinite(
+        options.maxTerminalOutputBytes
+    )
+        ? Math.max(0, Math.floor(options.maxTerminalOutputBytes))
+        : 1024;
+    const maxItems = Number.isFinite(options.maxItems)
+        ? Math.max(0, Math.floor(options.maxItems))
+        : 10;
+    const next = cloneSerializable(snapshot, {}) || {};
+    for (const key of ['toolCalls', 'permissions', 'plan', 'planHistory']) {
+        next[key] = (Array.isArray(next[key]) ? next[key] : []).slice(-maxItems);
+    }
+    next.terminals = (Array.isArray(next.terminals) ? next.terminals : [])
+        .slice(-maxItems)
+        .map((terminal) => {
+            const summary = cloneSerializable(terminal, {}) || {};
+            if (typeof summary.output === 'string') {
+                summary.output = truncateStringBytes(
+                    summary.output,
+                    maxTerminalOutputBytes
+                );
+            }
+            return summary;
+        });
+    return next;
+}
+
+function minimalStoredSnapshot(snapshot) {
+    const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const minimal = {};
+    for (const key of [
+        'id',
+        'runtimeId',
+        'runtimeKey',
+        'acpSessionId',
+        'agentId',
+        'agentLabel',
+        'commandLabel',
+        'terminalSessionId',
+        'cwd',
+        'title',
+        'createdAt',
+        'status',
+        'busy',
+        'errorMessage',
+        'currentModeId'
+    ]) {
+        if (source[key] !== undefined) {
+            minimal[key] = cloneSerializable(source[key], source[key]);
+        }
+    }
+    minimal.messages = [];
+    minimal.toolCalls = [];
+    minimal.permissions = [];
+    minimal.plan = [];
+    minimal.planHistory = [];
+    minimal.terminals = [];
+    minimal.timelineItems = [];
+    return minimal;
+}
+
+function stringifyStoredSnapshot(snapshot, options = {}) {
+    const maxBytes = Number.isFinite(options.maxBytes)
+        ? Math.max(1024, Math.floor(options.maxBytes))
+        : DEFAULT_MAX_STORED_SNAPSHOT_BYTES;
+    let compact = compactStoredSnapshot(snapshot, options);
+    let json = JSON.stringify(compact);
+    if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
+        return json;
+    }
+
+    compact = trimStoredSnapshotResources(compact, {
+        maxItems: 20,
+        maxTerminalOutputBytes: 4096
+    });
+    json = JSON.stringify(compact);
+    if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
+        return json;
+    }
+
+    compact = trimStoredSnapshotResources(compact, {
+        maxItems: 5,
+        maxTerminalOutputBytes: 1024
+    });
+    json = JSON.stringify(compact);
+    if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
+        return json;
+    }
+
+    return JSON.stringify(minimalStoredSnapshot(compact));
 }
 
 function encodeTimelineCursor(row) {
@@ -186,6 +399,21 @@ function timelineRowSignature(row) {
     });
 }
 
+function normalizeTimelineRow(row) {
+    return {
+        sessionKey: String(row?.session_key || row?.sessionKey || ''),
+        itemKey: String(row?.item_key || row?.itemKey || ''),
+        itemType: String(row?.item_type || row?.itemType || ''),
+        itemId: String(row?.item_id || row?.itemId || ''),
+        itemIndex: Number(row?.item_index || row?.itemIndex || 0),
+        role: String(row?.role || ''),
+        kind: String(row?.kind || ''),
+        status: String(row?.status || ''),
+        updatedAt: String(row?.updated_at || row?.updatedAt || ''),
+        payloadJson: String(row?.payload_json ?? row?.payloadJson ?? '{}')
+    };
+}
+
 function buildTimelineDelta(previousRows, nextRows, options = {}) {
     const previous = Array.isArray(previousRows) ? previousRows : [];
     const next = Array.isArray(nextRows) ? nextRows : [];
@@ -223,6 +451,26 @@ function buildTimelineDelta(previousRows, nextRows, options = {}) {
         removedItemKeys,
         timelineIndex
     };
+}
+
+function mergeTimelineRowsForDelta(previousRows, nextRows, options = {}) {
+    if (options.authoritativeSnapshot === true) {
+        return Array.isArray(nextRows) ? nextRows : [];
+    }
+    const merged = new Map();
+    for (const row of Array.isArray(previousRows) ? previousRows : []) {
+        const key = String(row?.item_key || row?.itemKey || '');
+        if (key) {
+            merged.set(key, normalizeTimelineRow(row));
+        }
+    }
+    for (const row of Array.isArray(nextRows) ? nextRows : []) {
+        const key = String(row?.item_key || row?.itemKey || '');
+        if (key) {
+            merged.set(key, normalizeTimelineRow(row));
+        }
+    }
+    return Array.from(merged.values()).sort(compareTimelineRows);
 }
 
 function mergeSnapshotArray(previousItems, nextItems, type) {
@@ -547,6 +795,48 @@ function buildTimelineRowsFromSnapshot(
     return finalizeTimelineRows(rows, options);
 }
 
+const SESSION_METADATA_COLUMNS = [
+    'session_key',
+    'agent_id',
+    'session_id',
+    'cwd',
+    'title',
+    'upstream_updated_at',
+    'last_activity_at',
+    'last_seen_at',
+    'last_attached_at',
+    'last_loaded_at',
+    'last_live_at',
+    'last_received_at',
+    'last_detached_at',
+    'continuity_state',
+    'hot_rank',
+    'status',
+    'busy',
+    'error_message',
+    'message_count',
+    'tool_call_count',
+    'is_present',
+    'snapshot_version'
+];
+
+function buildSessionSelectColumns(includeSnapshot, maxSnapshotBytes) {
+    const snapshotLimit = Number.isFinite(maxSnapshotBytes)
+        ? Math.max(0, Math.floor(maxSnapshotBytes))
+        : DEFAULT_MAX_STORED_SNAPSHOT_BYTES;
+    const snapshotColumn = includeSnapshot
+        ? `CASE
+                WHEN length(snapshot_json) <= ${snapshotLimit}
+                THEN snapshot_json
+                ELSE ''
+            END AS snapshot_json`
+        : `'' AS snapshot_json`;
+    return [
+        ...SESSION_METADATA_COLUMNS,
+        snapshotColumn
+    ].join(',\n                ');
+}
+
 function rowToSession(row, includeSnapshot = false) {
     if (!row) return null;
     const snapshot = includeSnapshot
@@ -680,6 +970,16 @@ export class AcpBusStore {
         this.busyTimeoutMs = Number.isFinite(options.busyTimeoutMs)
             ? Math.max(0, Math.floor(options.busyTimeoutMs))
             : DEFAULT_BUSY_TIMEOUT_MS;
+        this.maxStoredSnapshotBytes = Number.isFinite(
+            options.maxStoredSnapshotBytes
+        )
+            ? Math.max(1024, Math.floor(options.maxStoredSnapshotBytes))
+            : DEFAULT_MAX_STORED_SNAPSHOT_BYTES;
+        this.maxStoredTerminalOutputBytes = Number.isFinite(
+            options.maxStoredTerminalOutputBytes
+        )
+            ? Math.max(1024, Math.floor(options.maxStoredTerminalOutputBytes))
+            : DEFAULT_MAX_STORED_TERMINAL_OUTPUT_BYTES;
         this.now = typeof options.now === 'function' ? options.now : nowIso;
         this.db = null;
     }
@@ -770,6 +1070,13 @@ export class AcpBusStore {
             'INTEGER NOT NULL DEFAULT 0'
         );
         await this.#ensureTimelineIndexColumn();
+        const prunedSnapshots = await this.pruneOversizedSnapshots();
+        if (prunedSnapshots > 0) {
+            console.warn(
+                `[ACP Bus] Pruned ${prunedSnapshots} oversized stored `
+                + 'session snapshots. Timeline rows were preserved.'
+            );
+        }
     }
 
     async close() {
@@ -778,6 +1085,30 @@ export class AcpBusStore {
         }
         await dbio.end();
         this.db = null;
+    }
+
+    async pruneOversizedSnapshots(maxBytes = this.maxStoredSnapshotBytes) {
+        const db = this.#requireDb();
+        const safeMaxBytes = Number.isFinite(maxBytes)
+            ? Math.max(1024, Math.floor(maxBytes))
+            : this.maxStoredSnapshotBytes;
+        const row = await db.get(`
+            SELECT COUNT(*) AS count
+            FROM acp_bus_sessions
+            WHERE length(snapshot_json) > ?
+        `, [safeMaxBytes]);
+        const count = Number(row?.count || 0);
+        if (count <= 0) {
+            return 0;
+        }
+        await db.run(`
+            UPDATE acp_bus_sessions
+            SET
+                snapshot_json = '',
+                snapshot_version = snapshot_version + 1
+            WHERE length(snapshot_json) > ?
+        `, [safeMaxBytes]);
+        return count;
     }
 
     #requireDb() {
@@ -888,17 +1219,29 @@ export class AcpBusStore {
         `);
     }
 
-    async #getSessionRow(sessionKey) {
+    #sessionSelectColumns(includeSnapshot = false) {
+        return buildSessionSelectColumns(
+            includeSnapshot,
+            this.maxStoredSnapshotBytes
+        );
+    }
+
+    async #getSessionRow(sessionKey, options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         return await db.get(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             WHERE session_key = ?
         `, [sessionKey]) || null;
     }
 
     async getSession(sessionKey, options = {}) {
-        const row = await this.#getSessionRow(sessionKey);
+        const row = await this.#getSessionRow(sessionKey, {
+            includeSnapshot: options.includeSnapshot === true
+        });
         return rowToSession(row, options.includeSnapshot === true);
     }
 
@@ -983,7 +1326,11 @@ export class AcpBusStore {
                 tool_call_count = excluded.tool_call_count,
                 is_present = excluded.is_present,
                 snapshot_version = excluded.snapshot_version,
-                snapshot_json = excluded.snapshot_json
+                snapshot_json = CASE
+                    WHEN @preserveSnapshotJson
+                    THEN acp_bus_sessions.snapshot_json
+                    ELSE excluded.snapshot_json
+                END
         `, {
             sessionKey: record.sessionKey,
             agentId: record.agentId,
@@ -1009,7 +1356,10 @@ export class AcpBusStore {
             snapshotVersion: Number.isFinite(record.snapshotVersion)
                 ? record.snapshotVersion
                 : 0,
-            snapshotJson: record.snapshotJson
+            snapshotJson: typeof record.snapshotJson === 'string'
+                ? record.snapshotJson
+                : '',
+            preserveSnapshotJson: record.preserveSnapshotJson ? 1 : 0
         });
     }
 
@@ -1185,7 +1535,7 @@ export class AcpBusStore {
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
         const previous = await this.getSession(sessionKey, {
-            includeSnapshot: true
+            includeSnapshot: false
         });
         const seenAt = typeof entry.seenAt === 'string' && entry.seenAt.trim()
             ? entry.seenAt.trim()
@@ -1227,9 +1577,8 @@ export class AcpBusStore {
             toolCallCount: previous?.toolCallCount || 0,
             isPresent: true,
             snapshotVersion: previous?.snapshotVersion || 0,
-            snapshotJson: previous?.snapshot
-                ? JSON.stringify(previous.snapshot)
-                : ''
+            snapshotJson: '',
+            preserveSnapshotJson: true
         };
         await this.#writeSession(next);
         const record = await this.getSession(sessionKey, {
@@ -1251,7 +1600,9 @@ export class AcpBusStore {
             throw new Error('Observed snapshot must include agentId and sessionId');
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
-        const previousRow = await this.#getSessionRow(sessionKey);
+        const previousRow = await this.#getSessionRow(sessionKey, {
+            includeSnapshot: true
+        });
         const previous = rowToSession(previousRow, true);
         const mergedSnapshot = mergeObservedSnapshot(
             previous?.snapshot || null,
@@ -1298,9 +1649,16 @@ export class AcpBusStore {
             indexedSnapshot,
             timelineRows
         );
-        const timelineDelta = buildTimelineDelta(
+        const deltaRows = mergeTimelineRowsForDelta(
             previousTimelineRows,
             timelineRows,
+            {
+                authoritativeSnapshot: options.authoritativeSnapshot === true
+            }
+        );
+        const timelineDelta = buildTimelineDelta(
+            previousTimelineRows,
+            deltaRows,
             {
                 authoritativeSnapshot: options.authoritativeSnapshot === true
             }
@@ -1309,7 +1667,10 @@ export class AcpBusStore {
             && options.receivedAt.trim()
             ? options.receivedAt.trim()
             : (timelineRows.length > 0 ? observedAt : '');
-        const snapshotJson = JSON.stringify(safeSnapshot);
+        const snapshotJson = stringifyStoredSnapshot(safeSnapshot, {
+            maxBytes: this.maxStoredSnapshotBytes,
+            maxTerminalOutputBytes: this.maxStoredTerminalOutputBytes
+        });
         const previousSnapshotJson = String(previousRow?.snapshot_json || '');
         const snapshotChanged = !previous || previousSnapshotJson !== snapshotJson;
         const snapshotVersion = Number(previous?.snapshotVersion || 0)
@@ -1350,12 +1711,20 @@ export class AcpBusStore {
             errorMessage: String(
                 safeSnapshot.errorMessage || previous?.errorMessage || ''
             ),
-            messageCount: Array.isArray(safeSnapshot.messages)
-                ? safeSnapshot.messages.length
-                : 0,
-            toolCallCount: Array.isArray(safeSnapshot.toolCalls)
-                ? safeSnapshot.toolCalls.length
-                : 0,
+            messageCount: (
+                options.authoritativeSnapshot === true
+                || (Array.isArray(safeSnapshot.messages)
+                    && safeSnapshot.messages.length > 0)
+            )
+                ? (safeSnapshot.messages || []).length
+                : (previous?.messageCount || 0),
+            toolCallCount: (
+                options.authoritativeSnapshot === true
+                || (Array.isArray(safeSnapshot.toolCalls)
+                    && safeSnapshot.toolCalls.length > 0)
+            )
+                ? (safeSnapshot.toolCalls || []).length
+                : (previous?.toolCallCount || 0),
             isPresent: options.isPresent === false
                 ? false
                 : (previous?.isPresent ?? true),
@@ -1391,7 +1760,7 @@ export class AcpBusStore {
         }
         const sessionKey = buildAcpBusSessionKey(agentId, sessionId);
         const previous = await this.getSession(sessionKey, {
-            includeSnapshot: true
+            includeSnapshot: false
         });
         const next = {
             sessionKey,
@@ -1418,9 +1787,8 @@ export class AcpBusStore {
             toolCallCount: previous?.toolCallCount || 0,
             isPresent: previous?.isPresent ?? true,
             snapshotVersion: previous?.snapshotVersion || 0,
-            snapshotJson: previous?.snapshot
-                ? JSON.stringify(previous.snapshot)
-                : ''
+            snapshotJson: '',
+            preserveSnapshotJson: true
         };
         await this.#writeSession(next);
         const record = await this.getSession(sessionKey, {
@@ -1436,7 +1804,7 @@ export class AcpBusStore {
 
     async updateContinuityState(sessionKey, continuityState, options = {}) {
         const previous = await this.getSession(sessionKey, {
-            includeSnapshot: true
+            includeSnapshot: false
         });
         if (!previous) {
             return null;
@@ -1465,9 +1833,8 @@ export class AcpBusStore {
             errorMessage: typeof options.errorMessage === 'string'
                 ? options.errorMessage
                 : previous.errorMessage,
-            snapshotJson: previous.snapshot
-                ? JSON.stringify(previous.snapshot)
-                : ''
+            snapshotJson: '',
+            preserveSnapshotJson: true
         };
         await this.#writeSession(next);
         return await this.getSession(sessionKey, { includeSnapshot: true });
@@ -1475,7 +1842,7 @@ export class AcpBusStore {
 
     async markSessionForUpstreamSync(sessionKey, options = {}) {
         const previous = await this.getSession(sessionKey, {
-            includeSnapshot: true
+            includeSnapshot: false
         });
         if (!previous) {
             return null;
@@ -1494,9 +1861,8 @@ export class AcpBusStore {
             errorMessage: typeof options.errorMessage === 'string'
                 ? options.errorMessage
                 : previous.errorMessage,
-            snapshotJson: previous.snapshot
-                ? JSON.stringify(previous.snapshot)
-                : ''
+            snapshotJson: '',
+            preserveSnapshotJson: true
         };
         await this.#writeSession(next);
         return await this.getSession(sessionKey, { includeSnapshot: true });
@@ -1509,7 +1875,7 @@ export class AcpBusStore {
     ) {
         const rows = await this.listSessions({
             agentId,
-            includeSnapshot: true
+            includeSnapshot: false
         });
         const seen = new Set(seenSessionKeys);
         const missing = [];
@@ -1523,7 +1889,8 @@ export class AcpBusStore {
                 lastSeenAt: reconciledAt,
                 lastReceivedAt: row.lastReceivedAt || '',
                 lastDetachedAt: row.lastDetachedAt || '',
-                snapshotJson: row.snapshot ? JSON.stringify(row.snapshot) : ''
+                snapshotJson: '',
+                preserveSnapshotJson: true
             };
             await this.#writeSession(next);
             missing.push(
@@ -1594,6 +1961,9 @@ export class AcpBusStore {
 
     async listSessions(options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         const clauses = [];
         const params = [];
         if (options.agentId) {
@@ -1613,7 +1983,7 @@ export class AcpBusStore {
             ? `LIMIT ${Math.floor(options.limit)}`
             : '';
         const rows = await db.all(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             ${whereClause}
             ORDER BY
@@ -1632,6 +2002,9 @@ export class AcpBusStore {
 
     async listMostActiveSessions(limit, options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
             : 10;
@@ -1644,7 +2017,7 @@ export class AcpBusStore {
             ? `WHERE ${clauses.join(' AND ')}`
             : '';
         const rows = await db.all(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             ${whereClause}
             ORDER BY
@@ -1661,6 +2034,9 @@ export class AcpBusStore {
 
     async listHotCandidates(limit, options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
             : 10;
@@ -1672,7 +2048,7 @@ export class AcpBusStore {
             ? `WHERE ${clauses.join(' AND ')}`
             : '';
         const rows = await db.all(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             ${whereClause}
             ORDER BY
@@ -1689,6 +2065,9 @@ export class AcpBusStore {
 
     async listColdRepairCandidates(limit, options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         const safeLimit = Number.isFinite(limit)
             ? Math.max(1, Math.floor(limit))
             : 1;
@@ -1701,7 +2080,7 @@ export class AcpBusStore {
             ? Math.max(0, Math.floor(options.minAgeMs))
             : 10 * 60 * 1000;
         const rows = await db.all(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             WHERE is_present = 1
             ORDER BY
@@ -1753,11 +2132,14 @@ export class AcpBusStore {
 
     async listHotSessions(limit, options = {}) {
         const db = this.#requireDb();
+        const selectColumns = this.#sessionSelectColumns(
+            options.includeSnapshot === true
+        );
         const limitClause = Number.isFinite(limit) && limit > 0
             ? `LIMIT ${Math.floor(limit)}`
             : '';
         const rows = await db.all(`
-            SELECT *
+            SELECT ${selectColumns}
             FROM acp_bus_sessions
             WHERE hot_rank IS NOT NULL
             ORDER BY hot_rank ASC

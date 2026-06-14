@@ -226,13 +226,152 @@ describe('AcpBusStore', () => {
                 includeSnapshot: true
             });
             assert.equal(loaded.snapshot.title, 'Observed session');
-            assert.equal(loaded.snapshot.messages.length, 2);
+            assert.equal(loaded.snapshot.messages.length, 0);
             assert.equal(saved.record.snapshotVersion, 1);
             assert.equal(saved.timelineDelta.requiresFullSync, false);
             assert.deepEqual(
                 saved.timelineDelta.changedItems.map((item) => item.itemKey),
                 ['message:m-1', 'message:m-2', 'tool:t-1']
             );
+            const page = await store.listTimelineItems(saved.record.sessionKey, {
+                limit: 10
+            });
+            assert.deepEqual(
+                page.items.map((item) => item.itemKey),
+                ['message:m-1', 'message:m-2', 'tool:t-1']
+            );
+        });
+    });
+
+    it('stores compact snapshots while preserving full timeline payloads', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            const bigText = 'x'.repeat(200_000);
+            const bigOutput = 'y'.repeat(80_000);
+            const saved = await store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-compact',
+                cwd: '/tmp/project',
+                title: 'Compact session',
+                messages: [{
+                    id: 'm-big',
+                    role: 'assistant',
+                    text: bigText
+                }],
+                toolCalls: [{
+                    toolCallId: 'tool-done',
+                    status: 'completed'
+                }, {
+                    toolCallId: 'tool-live',
+                    status: 'running'
+                }],
+                terminals: [{
+                    terminalId: 'term-big',
+                    output: bigOutput
+                }]
+            }, {
+                observedAt: '2026-04-14T10:10:00.000Z'
+            });
+
+            const loaded = await store.getSession(saved.record.sessionKey, {
+                includeSnapshot: true
+            });
+            assert.equal(loaded.snapshot.messages.length, 0);
+            assert.deepEqual(
+                loaded.snapshot.toolCalls.map((entry) => entry.toolCallId),
+                ['tool-live']
+            );
+            assert.ok(loaded.snapshot.terminals[0].output.length < bigOutput.length);
+            const row = await store.db.get(`
+                SELECT length(snapshot_json) AS size
+                FROM acp_bus_sessions
+                WHERE session_key = ?
+            `, [saved.record.sessionKey]);
+            assert.ok(Number(row.size) < 80_000);
+
+            const page = await store.listTimelineItems(saved.record.sessionKey, {
+                limit: 10
+            });
+            assert.equal(page.items[0].value.text.length, bigText.length);
+            assert.deepEqual(
+                page.items.map((item) => item.itemKey),
+                ['message:m-big', 'tool:tool-done', 'tool:tool-live']
+            );
+        });
+    });
+
+    it('enforces a hard stored snapshot size limit', async () => {
+        const { dir, dbPath } = await createTempDbPath('acp-bus-store-');
+        const store = new AcpBusStore({
+            dbPath,
+            maxStoredSnapshotBytes: 4096,
+            maxStoredTerminalOutputBytes: 4096
+        });
+        try {
+            await store.init();
+            const saved = await store.saveObservedSession({
+                agentId: 'codex',
+                acpSessionId: 's-hard-limit',
+                cwd: '/tmp/project',
+                title: 'Hard limit session',
+                messages: [{
+                    id: 'm-1',
+                    role: 'assistant',
+                    text: 'message'
+                }],
+                terminals: Array.from({ length: 100 }, (_, index) => ({
+                    terminalId: `term-${index}`,
+                    output: 'z'.repeat(10_000)
+                }))
+            }, {
+                observedAt: '2026-04-14T10:10:00.000Z'
+            });
+            const row = await store.db.get(`
+                SELECT length(snapshot_json) AS size
+                FROM acp_bus_sessions
+                WHERE session_key = ?
+            `, [saved.record.sessionKey]);
+            assert.ok(Number(row.size) <= 4096);
+            const page = await store.listTimelineItems(saved.record.sessionKey, {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.itemKey), [
+                'message:m-1'
+            ]);
+        } finally {
+            await store.close();
+            await fs.rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('prunes oversized legacy snapshots without parsing them', async () => {
+        await withStore('acp-bus-store-', async (store) => {
+            const inserted = await store.upsertIndexedSession({
+                agentId: 'codex',
+                sessionId: 'legacy-large',
+                cwd: '/tmp/project',
+                title: 'Legacy large snapshot',
+                updatedAt: '2026-04-14T10:00:00.000Z',
+                seenAt: '2026-04-14T10:00:00.000Z'
+            });
+            await store.db.run(`
+                UPDATE acp_bus_sessions
+                SET snapshot_json = ?
+                WHERE session_key = ?
+            `, ['{'.padEnd(20_000, 'x'), inserted.record.sessionKey]);
+
+            const pruned = await store.pruneOversizedSnapshots(1024);
+            assert.equal(pruned, 1);
+
+            const row = await store.db.get(`
+                SELECT length(snapshot_json) AS size
+                FROM acp_bus_sessions
+                WHERE session_key = ?
+            `, [inserted.record.sessionKey]);
+            assert.equal(Number(row.size), 0);
+            const loaded = await store.getSession(inserted.record.sessionKey, {
+                includeSnapshot: true
+            });
+            assert.equal(loaded.snapshot, null);
         });
     });
 
@@ -547,11 +686,19 @@ describe('AcpBusStore', () => {
             });
             assert.equal(loaded.snapshot.status, 'restoring');
             assert.equal(loaded.snapshot.busy, true);
-            assert.equal(loaded.snapshot.messages.length, 2);
-            assert.equal(loaded.snapshot.toolCalls.length, 1);
+            assert.equal(loaded.snapshot.messages.length, 0);
+            assert.equal(loaded.snapshot.toolCalls.length, 0);
             assert.deepEqual(loaded.snapshot.usage, {
                 totals: { inputTokens: 10 }
             });
+            const page = await store.listTimelineItems(updated.record.sessionKey, {
+                limit: 10
+            });
+            assert.deepEqual(page.items.map((item) => item.itemKey), [
+                'message:m-1',
+                'message:m-2',
+                'tool:t-1'
+            ]);
         });
     });
 

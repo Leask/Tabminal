@@ -1149,11 +1149,14 @@ describe('AcpBusManager', () => {
             assert.ok(event);
             assert.equal(event.payload.resources.terminals[0].output, 'alpha\nbeta\n');
 
-            const full = await manager.getOpenTab(created.id, {
-                includeTranscript: true
-            });
-            assert.equal(full.messages.length, 1);
-            assert.equal(full.terminals.length, 1);
+            const page = await manager.listTimelineItems(
+                `codex::${created.acpSessionId}`,
+                { limit: 10 }
+            );
+            assert.deepEqual(
+                page.items.map((item) => item.itemKey),
+                ['message:terminal-context']
+            );
         });
     });
 
@@ -1260,13 +1263,14 @@ describe('AcpBusManager', () => {
                 ['Active step', 'Pending step']
             );
 
-            const full = await manager.getOpenTab(created.id, {
-                includeTranscript: true
-            });
-            assert.equal(full.messages.length, 1);
-            assert.equal(full.toolCalls.length, 2);
-            assert.equal(full.permissions.length, 2);
-            assert.equal(full.plan.length, 3);
+            const page = await manager.listTimelineItems(
+                `codex::${created.acpSessionId}`,
+                { limit: 10 }
+            );
+            assert.deepEqual(
+                page.items.map((item) => item.type),
+                ['message', 'tool', 'tool', 'permission', 'permission', 'plan']
+            );
         });
     });
 
@@ -1307,7 +1311,11 @@ describe('AcpBusManager', () => {
                 includeSnapshot: true
             });
             assert.equal(updated.messageCount, 2);
-            assert.equal(updated.snapshot.messages.length, 2);
+            assert.equal(updated.snapshot.messages.length, 0);
+            const page = await manager.listTimelineItems('codex::c-1', {
+                limit: 10
+            });
+            assert.equal(page.items.length, 2);
 
             const snapshotEvents = (await manager.listEvents(10)).filter((event) =>
                 event.type === 'session_snapshot_updated'

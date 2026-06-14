@@ -445,7 +445,7 @@ async function startTabminal(webRuntime, actualPort) {
         const forceExitTimer = setTimeout(() => {
             console.warn('Forced shutdown after timeout.');
             process.exit(1);
-        }, 5000).unref();
+        }, 15000).unref();
 
         try {
             await Promise.all([
