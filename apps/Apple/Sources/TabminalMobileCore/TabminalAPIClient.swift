@@ -18,6 +18,69 @@ public actor TabminalAPIClient {
         self.encoder = TabminalJSONCoding.makeEncoder()
     }
 
+    /// Runs the full challenge/login handshake and returns freshly issued
+    /// tokens. The challenge is single-use and lives ~30s, so it is requested
+    /// and consumed inside this one call.
+    public func login(
+        server: TabminalServerEndpoint,
+        password: String
+    ) async throws -> TabminalAuthTokens {
+        let challenge = try await requestChallenge(server: server)
+        let response = TabminalLoginChallengeResponder.response(
+            passwordHash: TabminalPasswordHasher.sha256Hex(password),
+            challenge: challenge
+        )
+        let request = try makeRequest(
+            server: server,
+            path: "/api/auth/login",
+            method: "POST",
+            body: TabminalLoginRequest(
+                challengeId: challenge.challengeId,
+                response: response
+            )
+        )
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalAuthTokens.self
+        )
+    }
+
+    /// Exchanges a refresh token for a new token pair. The server rotates the
+    /// refresh token on every success, so the caller must persist the result.
+    public func refreshTokens(
+        server: TabminalServerEndpoint,
+        refreshToken: String
+    ) async throws -> TabminalAuthTokens {
+        let request = try makeRequest(
+            server: server,
+            path: "/api/auth/refresh",
+            method: "POST",
+            body: TabminalRefreshRequest(refreshToken: refreshToken)
+        )
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalAuthTokens.self
+        )
+    }
+
+    public func requestChallenge(
+        server: TabminalServerEndpoint
+    ) async throws -> TabminalAuthChallenge {
+        let request = try makeRequest(
+            server: server,
+            path: "/api/auth/challenge",
+            method: "POST",
+            body: [String: String]()
+        )
+        return try await send(
+            request,
+            server: server,
+            decodeAs: TabminalAuthChallenge.self
+        )
+    }
+
     public func heartbeat(
         server: TabminalServerEndpoint,
         updates: [TabminalSessionUpdate]

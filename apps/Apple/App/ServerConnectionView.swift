@@ -133,7 +133,7 @@ struct ServerConnectionView: View {
                     label: "Password",
                     hint: model.hasStoredMainLogin
                         ? "Optional. Leave empty to reuse the saved main-host login."
-                        : "The app sends the same SHA-256 hash used by the web client."
+                        : "Exchanged for a login token. The password is never stored or sent."
                 ) {
                     SecureField(
                         "Password (optional, use saved login)",
