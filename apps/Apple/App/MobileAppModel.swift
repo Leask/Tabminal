@@ -131,7 +131,11 @@ final class MobileAppModel {
     @ObservationIgnored
     private var heartbeatTask: Task<Void, Never>?
     @ObservationIgnored
-    private var mainToken: String = ""
+    private var mainAccessToken: String = ""
+    @ObservationIgnored
+    private var mainRefreshToken: String = ""
+    @ObservationIgnored
+    private var mainAccessTokenExpiresAt: Date?
     @ObservationIgnored
     private var workspaces: [String: SessionWorkspaceModel] = [:]
     @ObservationIgnored
@@ -228,24 +232,15 @@ final class MobileAppModel {
         let trimmedPassword = mainPassword.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        let token = !trimmedPassword.isEmpty
-            ? TabminalPasswordHasher.sha256Hex(trimmedPassword)
-            : credentialStore.loadToken() ?? ""
+        let storedRefreshToken = credentialStore.loadToken() ?? ""
 
-        guard !token.isEmpty else {
+        guard !trimmedPassword.isEmpty || !storedRefreshToken.isEmpty else {
             loginErrorMessage = "Password is required."
             return
         }
 
         loginErrorMessage = ""
         isAuthenticating = true
-        let mainEndpoint = TabminalServerEndpoint(
-            id: "main",
-            baseURL: parsedURL,
-            host: mainHostName,
-            token: token,
-            isPrimary: true
-        )
 
         Task {
             defer {
@@ -254,7 +249,21 @@ final class MobileAppModel {
 
             do {
                 phase = .loading
-                mainToken = token
+                let tokens = try await authenticate(
+                    baseURL: parsedURL,
+                    host: mainHostName,
+                    password: trimmedPassword,
+                    refreshToken: storedRefreshToken
+                )
+                applyMainTokens(tokens)
+
+                let mainEndpoint = TabminalServerEndpoint(
+                    id: "main",
+                    baseURL: parsedURL,
+                    host: mainHostName,
+                    token: tokens.accessToken,
+                    isPrimary: true
+                )
                 try await bootstrap(mainEndpoint: mainEndpoint)
                 defaults.set(
                     mainEndpoint.baseURL.absoluteString,
@@ -264,13 +273,53 @@ final class MobileAppModel {
                     mainEndpoint.host,
                     forKey: Self.defaultsMainHostKey
                 )
-                credentialStore.saveToken(token)
+                mainPassword = ""
                 phase = .ready
             } catch {
                 phase = .login
                 loginErrorMessage = Self.displayMessage(for: error)
             }
         }
+    }
+
+    /// Trades a password (or a stored refresh token) for a token pair.
+    ///
+    /// The password is used once and never stored: only the rotating refresh
+    /// token is persisted.
+    private func authenticate(
+        baseURL: URL,
+        host: String,
+        password: String,
+        refreshToken: String
+    ) async throws -> TabminalAuthTokens {
+        let anonymous = TabminalServerEndpoint(
+            id: "main",
+            baseURL: baseURL,
+            host: host,
+            token: "",
+            isPrimary: true
+        )
+
+        if !password.isEmpty {
+            return try await apiClient.login(
+                server: anonymous,
+                password: password
+            )
+        }
+
+        return try await apiClient.refreshTokens(
+            server: anonymous,
+            refreshToken: refreshToken
+        )
+    }
+
+    /// The server rotates the refresh token on every issue, so the new one must
+    /// replace the stored copy or the next launch will present a dead token.
+    private func applyMainTokens(_ tokens: TabminalAuthTokens) {
+        mainAccessToken = tokens.accessToken
+        mainAccessTokenExpiresAt = tokens.accessTokenExpiresAt
+        mainRefreshToken = tokens.refreshToken
+        credentialStore.saveToken(tokens.refreshToken)
     }
 
     func logout(clearCredentials: Bool = true) {
@@ -288,12 +337,18 @@ final class MobileAppModel {
         isSubmittingHostDraft = false
         phase = .login
         mainPassword = ""
-        mainToken = ""
+        clearMainTokens()
 
         for workspace in workspaces.values {
             workspace.setPresented(false)
         }
         workspaces.removeAll()
+    }
+
+    private func clearMainTokens() {
+        mainAccessToken = ""
+        mainRefreshToken = ""
+        mainAccessTokenExpiresAt = nil
     }
 
     func restoreMainHostSessionIfNeeded() {
@@ -303,19 +358,11 @@ final class MobileAppModel {
         didAttemptRestore = true
 
         guard let parsedURL = URL(string: mainServerURL),
-              let token = credentialStore.loadToken(),
-              !token.isEmpty
+              let refreshToken = credentialStore.loadToken(),
+              !refreshToken.isEmpty
         else {
             return
         }
-
-        let mainEndpoint = TabminalServerEndpoint(
-            id: "main",
-            baseURL: parsedURL,
-            host: mainHostName,
-            token: token,
-            isPrimary: true
-        )
 
         phase = .loading
         loginErrorMessage = ""
@@ -327,17 +374,31 @@ final class MobileAppModel {
             }
 
             do {
-                mainToken = token
-                try await bootstrap(mainEndpoint: mainEndpoint)
+                let tokens = try await authenticate(
+                    baseURL: parsedURL,
+                    host: mainHostName,
+                    password: "",
+                    refreshToken: refreshToken
+                )
+                applyMainTokens(tokens)
+
+                try await bootstrap(
+                    mainEndpoint: TabminalServerEndpoint(
+                        id: "main",
+                        baseURL: parsedURL,
+                        host: mainHostName,
+                        token: tokens.accessToken,
+                        isPrimary: true
+                    )
+                )
                 phase = .ready
             } catch let TabminalClientError.invalidStatus(code, _)
                 where code == 401 || code == 403 {
                 credentialStore.clearToken()
-                mainToken = ""
+                clearMainTokens()
                 phase = .login
                 loginErrorMessage = "Saved login expired."
             } catch {
-                mainToken = token
                 phase = .login
                 loginErrorMessage = Self.displayMessage(for: error)
             }
@@ -542,21 +603,19 @@ final class MobileAppModel {
             return
         }
 
-        let inheritedToken = mainToken
-        let tokenToUse: String
-        if !hostDraft.password.isEmpty {
-            tokenToUse = TabminalPasswordHasher.sha256Hex(hostDraft.password)
-        } else {
-            switch hostEditorMode {
-            case .add:
-                tokenToUse = inheritedToken
-            case .edit(let hostID), .reconnect(let hostID):
-                tokenToUse = hostRecord(for: hostID)?.endpoint.token
-                    ?? inheritedToken
-            }
+        // Every host issues its own access token, so a password typed here is
+        // exchanged against that host. Reusing the main host's token would
+        // always be rejected.
+        let password = hostDraft.password
+        let existingToken: String
+        switch hostEditorMode {
+        case .add:
+            existingToken = ""
+        case .edit(let hostID), .reconnect(let hostID):
+            existingToken = hostRecord(for: hostID)?.endpoint.token ?? ""
         }
 
-        guard !tokenToUse.isEmpty else {
+        guard !password.isEmpty || !existingToken.isEmpty else {
             hostDraftErrorMessage = "Password is required for this host."
             return
         }
@@ -570,6 +629,13 @@ final class MobileAppModel {
             }
 
             do {
+                let tokenToUse = try await subHostToken(
+                    baseURL: parsedURL,
+                    host: hostDraft.host,
+                    password: password,
+                    existingToken: existingToken
+                )
+
                 switch hostEditorMode {
                 case .add:
                     try await addHost(
@@ -591,6 +657,32 @@ final class MobileAppModel {
                 hostDraftErrorMessage = Self.displayMessage(for: error)
             }
         }
+    }
+
+    /// Only the main host's refresh token is persisted, so a sub-host access
+    /// token is not renewed in the background: once it lapses the host drops to
+    /// `needsAuth` and the reconnect sheet asks for the password again.
+    private func subHostToken(
+        baseURL: URL,
+        host: String,
+        password: String,
+        existingToken: String
+    ) async throws -> String {
+        guard !password.isEmpty else {
+            return existingToken
+        }
+
+        let candidate = TabminalServerEndpoint(
+            id: "candidate",
+            baseURL: baseURL,
+            host: host,
+            token: "",
+            isPrimary: false
+        )
+        return try await apiClient.login(
+            server: candidate,
+            password: password
+        ).accessToken
     }
 
     func removeHost(_ hostID: String) {
@@ -1026,6 +1118,7 @@ final class MobileAppModel {
                 if Task.isCancelled {
                     return
                 }
+                await self.refreshMainTokensIfNeeded()
                 await self.syncAllHosts(ensurePrimarySession: false)
             }
         }
@@ -1034,6 +1127,57 @@ final class MobileAppModel {
     private func stopHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = nil
+    }
+
+    /// Access tokens live 15 minutes, so they are rotated shortly before expiry
+    /// rather than after a request has already failed.
+    ///
+    /// A failure here is left to the heartbeat's own `401` handling: it either
+    /// recovers on the next tick or ends in a clean logout.
+    private func refreshMainTokensIfNeeded() async {
+        guard !mainRefreshToken.isEmpty,
+              let expiry = mainAccessTokenExpiresAt,
+              expiry.timeIntervalSinceNow < Self.tokenRefreshLeadTime,
+              let record = hostRecord(for: "main")
+        else {
+            return
+        }
+
+        do {
+            let tokens = try await apiClient.refreshTokens(
+                server: record.endpoint,
+                refreshToken: mainRefreshToken
+            )
+            applyMainTokens(tokens)
+            propagateMainToken(tokens.accessToken)
+        } catch {
+            return
+        }
+    }
+
+    /// The endpoint is a value type held by the host record, every workspace,
+    /// and each websocket feed, so a rotated token has to be pushed to all of
+    /// them or the next reconnect would present the old one.
+    private func propagateMainToken(_ token: String) {
+        guard let record = hostRecord(for: "main") else {
+            return
+        }
+
+        let endpoint = TabminalServerEndpoint(
+            id: "main",
+            baseURL: record.endpoint.baseURL,
+            host: record.endpoint.host,
+            token: token,
+            isPrimary: true
+        )
+
+        updateHost("main") { current in
+            current.endpoint = endpoint
+        }
+
+        for workspace in workspaces.values where workspace.hostID == "main" {
+            workspace.updateEndpoint(endpoint)
+        }
     }
 
     private func hostRecord(for hostID: String) -> HostRecord? {
@@ -1121,6 +1265,7 @@ final class MobileAppModel {
 
     private static let defaultsMainURLKey = "tabminal.mobile.mainURL"
     private static let defaultsMainHostKey = "tabminal.mobile.mainHost"
+    private static let tokenRefreshLeadTime: TimeInterval = 60
 }
 
 enum ConnectionError: LocalizedError {

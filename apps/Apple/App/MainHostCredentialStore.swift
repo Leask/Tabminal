@@ -1,9 +1,10 @@
 import Foundation
 import Security
 
+/// Stores the main host's refresh token. The password is never persisted.
 struct MainHostCredentialStore {
     private static let service = "com.leask.tabminal.mobile.main-host"
-    private static let account = "auth-token"
+    private static let account = "refresh-token"
 
     func loadToken() -> String? {
         let query: [CFString: Any] = [

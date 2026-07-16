@@ -51,6 +51,57 @@ func passwordHasherMatchesServerSha256Format() {
 }
 
 @Test
+func loginChallengeResponseMatchesServerHmac() {
+    // Vector produced with the server's own construction:
+    // HMAC-SHA256(key = raw bytes of SHA-256(password),
+    //             message = "tabminal-login-v1:<id>:<salt>:<expiresAt>")
+    let challenge = TabminalAuthChallenge(
+        challengeId: "9f8d1c2b-0000-4a1b-8c3d-5e6f70819293",
+        salt: "Zm9vYmFyLXNhbHQtdmFsdWU",
+        expiresAt: "2026-04-10T15:00:30.000Z",
+        algorithm: "tabminal-hmac-sha256-login-v1"
+    )
+    let passwordHash = TabminalPasswordHasher.sha256Hex(
+        "correct horse battery staple"
+    )
+
+    #expect(
+        passwordHash
+            == "c4bbcb1fbec99d65bf59d85c8cb62ee2db963f0fe106f483d9afa73bd4e39a8a"
+    )
+    #expect(
+        TabminalLoginChallengeResponder.response(
+            passwordHash: passwordHash,
+            challenge: challenge
+        ) == "8ae9f238b25725db9274c181fca261d65c9af71790434190d77db54b03b62844"
+    )
+}
+
+@Test
+func authTokensDecodeFractionalISODates() throws {
+    let json = """
+    {
+        "accessToken": "ta_abc",
+        "accessTokenExpiresAt": "2026-04-10T15:00:00.000Z",
+        "refreshToken": "tr_def",
+        "refreshTokenExpiresAt": "2026-07-09T15:00:00.000Z"
+    }
+    """
+
+    let tokens = try TabminalJSONCoding.makeDecoder().decode(
+        TabminalAuthTokens.self,
+        from: Data(json.utf8)
+    )
+
+    #expect(tokens.accessToken == "ta_abc")
+    #expect(tokens.refreshToken == "tr_def")
+    #expect(
+        tokens.accessTokenExpiresAt
+            == Date(timeIntervalSince1970: 1_775_833_200)
+    )
+}
+
+@Test
 func clusterPayloadDecodesBackendBaseUrlKey() throws {
     let json = """
     {

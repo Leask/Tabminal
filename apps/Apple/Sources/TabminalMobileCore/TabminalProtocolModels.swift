@@ -160,6 +160,98 @@ public enum TabminalPasswordHasher {
     }
 }
 
+public struct TabminalAuthChallenge: Codable, Sendable {
+    public let challengeId: String
+    public let salt: String
+    /// Kept as the raw string the server sent. It is signed verbatim, so
+    /// round-tripping it through `Date` would change the bytes and the server
+    /// would reject the response.
+    public let expiresAt: String
+    public let algorithm: String
+
+    public init(
+        challengeId: String,
+        salt: String,
+        expiresAt: String,
+        algorithm: String
+    ) {
+        self.challengeId = challengeId
+        self.salt = salt
+        self.expiresAt = expiresAt
+        self.algorithm = algorithm
+    }
+}
+
+public struct TabminalAuthTokens: Codable, Sendable {
+    public let accessToken: String
+    public let accessTokenExpiresAt: Date
+    public let refreshToken: String
+    public let refreshTokenExpiresAt: Date
+}
+
+public struct TabminalLoginRequest: Codable, Sendable {
+    public let challengeId: String
+    public let response: String
+}
+
+public struct TabminalRefreshRequest: Codable, Sendable {
+    public let refreshToken: String
+}
+
+/// Computes the one-time login response for `tabminal-hmac-sha256-login-v1`.
+///
+/// The password hash itself is never sent: the server recomputes this HMAC from
+/// its own configured hash and compares in constant time.
+public enum TabminalLoginChallengeResponder {
+    public static let messagePrefix = "tabminal-login-v1"
+
+    public static func response(
+        passwordHash: String,
+        challenge: TabminalAuthChallenge
+    ) -> String {
+        let message = [
+            messagePrefix,
+            challenge.challengeId,
+            challenge.salt,
+            challenge.expiresAt
+        ].joined(separator: ":")
+
+        // The server keys the HMAC with the digest's raw bytes
+        // (`Buffer.from(hash, 'hex')`), not with its hex text.
+        let key = SymmetricKey(
+            data: Data(hexEncoded: passwordHash.lowercased())
+        )
+        let code = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: key
+        )
+        return code.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension Data {
+    init(hexEncoded string: String) {
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(string.count / 2)
+
+        var index = string.startIndex
+        while index < string.endIndex,
+              let next = string.index(
+                  index,
+                  offsetBy: 2,
+                  limitedBy: string.endIndex
+              ) {
+            guard let byte = UInt8(string[index ..< next], radix: 16) else {
+                break
+            }
+            bytes.append(byte)
+            index = next
+        }
+
+        self = Data(bytes)
+    }
+}
+
 public struct TabminalClusterPayload: Codable, Sendable {
     public let servers: [TabminalClusterServer]
 
