@@ -172,10 +172,8 @@ final class TerminalInputTextView: UITextView {
         isEditable = true
         isSelectable = true
         textDragInteraction?.isEnabled = false
-        isAccessibilityElement = false
-        accessibilityElementsHidden = true
-        accessibilityTraits = []
-        accessibilityLabel = nil
+        isAccessibilityElement = true
+        accessibilityLabel = "Terminal Input"
     }
 
     @available(*, unavailable)

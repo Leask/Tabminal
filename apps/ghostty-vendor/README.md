@@ -16,12 +16,20 @@ Ghostty fork/build logic directly.
 
 ## Current status
 
-The local custom-I/O Ghostty fork has already been patched far enough to:
+The March custom-I/O Ghostty fork had been patched far enough to:
 
 - emit `xros` and `xrsimulator` slices in `GhosttyKit.xcframework`
 - pass a real consumer build of the Tabminal visionOS target
 
 The scripts here document and reproduce that workflow.
+
+The current recovery is tracked in [Apple progress](../Apple/PROGRESS.md) and
+[issue #25](https://github.com/Leask/Tabminal/issues/25). Use the documented
+source pin, not the floating `custom-io` branch. Supply the compatible compiler
+through `TABMINAL_GHOSTTY_ZIG`; `TABMINAL_GHOSTTY_BUILD_JOBS` defaults to 4.
+The build and consumer helpers reject a header that differs from our C bridge.
+The current Xcode 27.2 SDK blocks the legacy Zig 0.15.2 build runner; an artifact
+has not yet been restored with that toolchain.
 
 ## Files
 

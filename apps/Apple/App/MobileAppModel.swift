@@ -131,7 +131,11 @@ final class MobileAppModel {
     @ObservationIgnored
     private var heartbeatTask: Task<Void, Never>?
     @ObservationIgnored
-    private var mainToken: String = ""
+    private var loginTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var loginGeneration = UUID()
+    @ObservationIgnored
+    private var credentialCleanup: Task<Void, Never>?
     @ObservationIgnored
     private var workspaces: [String: SessionWorkspaceModel] = [:]
     @ObservationIgnored
@@ -140,6 +144,7 @@ final class MobileAppModel {
     private var didRunStartupFlow: Bool = false
 
     init() {
+        credentialStore.discardLegacyToken()
         mainServerURL = defaults.string(forKey: Self.defaultsMainURLKey)
             ?? "http://127.0.0.1:9846"
         mainHostName = defaults.string(forKey: Self.defaultsMainHostKey) ?? ""
@@ -199,8 +204,15 @@ final class MobileAppModel {
     }
 
     var hasStoredMainLogin: Bool {
-        let token = credentialStore.loadToken() ?? ""
-        return !token.isEmpty
+        guard let endpoint = mainEndpoint else { return false }
+        return credentialStore.hasLogin(for: endpoint)
+    }
+
+    private var mainEndpoint: TabminalServerEndpoint? {
+        guard let url = Self.validHostURL(mainServerURL) else { return nil }
+        return TabminalServerEndpoint(
+            id: "main", baseURL: url, host: mainHostName, isPrimary: true
+        )
     }
 
     var canAttemptLogin: Bool {
@@ -208,7 +220,7 @@ final class MobileAppModel {
             return false
         }
 
-        if !mainPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !mainPassword.isEmpty {
             return true
         }
 
@@ -220,42 +232,41 @@ final class MobileAppModel {
             return
         }
 
-        guard let parsedURL = URL(string: mainServerURL) else {
+        guard let mainEndpoint else {
             loginErrorMessage = "Invalid server URL."
             return
         }
 
-        let trimmedPassword = mainPassword.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        let token = !trimmedPassword.isEmpty
-            ? TabminalPasswordHasher.sha256Hex(trimmedPassword)
-            : credentialStore.loadToken() ?? ""
-
-        guard !token.isEmpty else {
+        let password = mainPassword
+        guard !password.isEmpty || hasStoredMainLogin else {
             loginErrorMessage = "Password is required."
             return
         }
 
         loginErrorMessage = ""
         isAuthenticating = true
-        let mainEndpoint = TabminalServerEndpoint(
-            id: "main",
-            baseURL: parsedURL,
-            host: mainHostName,
-            token: token,
-            isPrimary: true
-        )
+        mainPassword = ""
+        let generation = UUID()
+        loginGeneration = generation
 
-        Task {
+        loginTask = Task {
             defer {
-                isAuthenticating = false
+                if loginGeneration == generation {
+                    isAuthenticating = false
+                }
             }
 
             do {
                 phase = .loading
-                mainToken = token
+                await credentialCleanup?.value
+                try Task.checkCancellation()
+                if !password.isEmpty {
+                    try await apiClient.login(
+                        server: mainEndpoint, password: password
+                    )
+                }
                 try await bootstrap(mainEndpoint: mainEndpoint)
+                try Task.checkCancellation()
                 defaults.set(
                     mainEndpoint.baseURL.absoluteString,
                     forKey: Self.defaultsMainURLKey
@@ -264,9 +275,11 @@ final class MobileAppModel {
                     mainEndpoint.host,
                     forKey: Self.defaultsMainHostKey
                 )
-                credentialStore.saveToken(token)
                 phase = .ready
+            } catch is CancellationError {
+                return
             } catch {
+                guard loginGeneration == generation else { return }
                 phase = .login
                 loginErrorMessage = Self.displayMessage(for: error)
             }
@@ -274,9 +287,23 @@ final class MobileAppModel {
     }
 
     func logout(clearCredentials: Bool = true) {
+        loginGeneration = UUID()
+        loginTask?.cancel()
+        loginTask = nil
+        isAuthenticating = false
         stopHeartbeat()
         if clearCredentials {
-            credentialStore.clearToken()
+            let endpoints = hosts.map(\.endpoint)
+                + (mainEndpoint.map { [$0] } ?? [])
+            credentialCleanup = Task {
+                for endpoint in endpoints {
+                    do {
+                        try await apiClient.logout(server: endpoint)
+                    } catch {
+                        loginErrorMessage = Self.displayMessage(for: error)
+                    }
+                }
+            }
         }
         isPresentingWorkspace = false
         isPresentingHostEditor = false
@@ -288,7 +315,6 @@ final class MobileAppModel {
         isSubmittingHostDraft = false
         phase = .login
         mainPassword = ""
-        mainToken = ""
 
         for workspace in workspaces.values {
             workspace.setPresented(false)
@@ -302,46 +328,8 @@ final class MobileAppModel {
         }
         didAttemptRestore = true
 
-        guard let parsedURL = URL(string: mainServerURL),
-              let token = credentialStore.loadToken(),
-              !token.isEmpty
-        else {
-            return
-        }
-
-        let mainEndpoint = TabminalServerEndpoint(
-            id: "main",
-            baseURL: parsedURL,
-            host: mainHostName,
-            token: token,
-            isPrimary: true
-        )
-
-        phase = .loading
-        loginErrorMessage = ""
-        isAuthenticating = true
-
-        Task {
-            defer {
-                isAuthenticating = false
-            }
-
-            do {
-                mainToken = token
-                try await bootstrap(mainEndpoint: mainEndpoint)
-                phase = .ready
-            } catch let TabminalClientError.invalidStatus(code, _)
-                where code == 401 || code == 403 {
-                credentialStore.clearToken()
-                mainToken = ""
-                phase = .login
-                loginErrorMessage = "Saved login expired."
-            } catch {
-                mainToken = token
-                phase = .login
-                loginErrorMessage = Self.displayMessage(for: error)
-            }
-        }
+        guard hasStoredMainLogin else { return }
+        login()
     }
 
     func runStartupFlowIfNeeded() {
@@ -529,6 +517,7 @@ final class MobileAppModel {
     func cancelHostEditor() {
         isPresentingHostEditor = false
         hostDraftErrorMessage = ""
+        hostDraft.password = ""
         isSubmittingHostDraft = false
     }
 
@@ -537,30 +526,14 @@ final class MobileAppModel {
             return
         }
 
-        guard let parsedURL = URL(string: hostDraft.url) else {
+        guard let parsedURL = Self.validHostURL(hostDraft.url) else {
             hostDraftErrorMessage = "Invalid host URL."
             return
         }
 
-        let inheritedToken = mainToken
-        let tokenToUse: String
-        if !hostDraft.password.isEmpty {
-            tokenToUse = TabminalPasswordHasher.sha256Hex(hostDraft.password)
-        } else {
-            switch hostEditorMode {
-            case .add:
-                tokenToUse = inheritedToken
-            case .edit(let hostID), .reconnect(let hostID):
-                tokenToUse = hostRecord(for: hostID)?.endpoint.token
-                    ?? inheritedToken
-            }
-        }
-
-        guard !tokenToUse.isEmpty else {
-            hostDraftErrorMessage = "Password is required for this host."
-            return
-        }
-
+        let draft = hostDraft
+        let mode = hostEditorMode
+        hostDraft.password = ""
         isSubmittingHostDraft = true
         hostDraftErrorMessage = ""
 
@@ -570,19 +543,19 @@ final class MobileAppModel {
             }
 
             do {
-                switch hostEditorMode {
+                switch mode {
                 case .add:
                     try await addHost(
                         baseURL: parsedURL,
-                        host: hostDraft.host,
-                        token: tokenToUse
+                        host: draft.host,
+                        password: draft.password
                     )
                 case .edit(let hostID), .reconnect(let hostID):
                     try await updateHost(
                         hostID: hostID,
                         baseURL: parsedURL,
-                        host: hostDraft.host,
-                        token: tokenToUse
+                        host: draft.host,
+                        password: draft.password
                     )
                 }
 
@@ -605,6 +578,7 @@ final class MobileAppModel {
                     workspace.hostID != hostID
                 }
                 try await persistCluster()
+                try await apiClient.clearCredentials(server: host.endpoint)
                 if activeHostID == hostID {
                     activeHostID = "main"
                     resolveSelection(for: activeHostID)
@@ -648,6 +622,7 @@ final class MobileAppModel {
         _ = try await apiClient.heartbeat(server: mainEndpoint, updates: [])
 
         let cluster = try await apiClient.loadCluster(server: mainEndpoint)
+        try Task.checkCancellation()
         hosts = [HostRecord(endpoint: mainEndpoint)]
         var seenEndpointKeys = Set([Self.endpointKey(for: mainEndpoint.baseURL)])
         var seenHostIDs = Set(["main"])
@@ -661,7 +636,6 @@ final class MobileAppModel {
                 id: server.id,
                 baseURL: server.baseURL,
                 host: server.host,
-                token: server.token,
                 isPrimary: false
             )
 
@@ -684,6 +658,10 @@ final class MobileAppModel {
         sortHosts()
         activeHostID = "main"
         await syncHost("main", ensurePrimarySession: true)
+        try Task.checkCancellation()
+        guard hostRecord(for: "main")?.connectionState == .connected else {
+            throw TabminalClientError.invalidResponse
+        }
         startHeartbeat()
 
         Task { @MainActor [weak self] in
@@ -700,7 +678,7 @@ final class MobileAppModel {
     private func addHost(
         baseURL: URL,
         host: String,
-        token: String
+        password: String
     ) async throws {
         let existing = existingHostID(for: baseURL)
         if existing == "main" {
@@ -712,10 +690,12 @@ final class MobileAppModel {
             id: hostID,
             baseURL: baseURL,
             host: host,
-            token: token,
             isPrimary: false
         )
 
+        if !password.isEmpty {
+            try await apiClient.login(server: endpoint, password: password)
+        }
         _ = try await apiClient.heartbeat(server: endpoint, updates: [])
 
         if let existing {
@@ -744,7 +724,7 @@ final class MobileAppModel {
         hostID: String,
         baseURL: URL,
         host: String,
-        token: String
+        password: String
     ) async throws {
         guard let current = hostRecord(for: hostID) else {
             throw ConnectionError.invalidURL
@@ -754,10 +734,12 @@ final class MobileAppModel {
             id: current.id,
             baseURL: baseURL,
             host: host,
-            token: token,
             isPrimary: current.isPrimary
         )
 
+        if !password.isEmpty {
+            try await apiClient.login(server: endpoint, password: password)
+        }
         _ = try await apiClient.heartbeat(server: endpoint, updates: [])
 
         updateHost(hostID) { record in
@@ -771,6 +753,15 @@ final class MobileAppModel {
         }
 
         try await persistCluster()
+        if endpoint.baseURL != current.endpoint.baseURL {
+            try await apiClient.clearCredentials(server: current.endpoint)
+        }
+        if endpoint.isPrimary {
+            mainServerURL = endpoint.baseURL.absoluteString
+            mainHostName = endpoint.host
+            defaults.set(mainServerURL, forKey: Self.defaultsMainURLKey)
+            defaults.set(mainHostName, forKey: Self.defaultsMainHostKey)
+        }
         await syncHost(hostID, ensurePrimarySession: false)
     }
 
@@ -786,8 +777,7 @@ final class MobileAppModel {
                     TabminalClusterServer(
                         id: $0.id,
                         baseURL: $0.endpoint.baseURL,
-                        host: $0.endpoint.host,
-                        token: $0.endpoint.token
+                        host: $0.endpoint.host
                     )
                 }
         )
@@ -830,6 +820,7 @@ final class MobileAppModel {
                 server: host.endpoint,
                 updates: updates
             )
+            try Task.checkCancellation()
 
             var mappedSessions = response.sessions.map { summary in
                 SessionRecord(
@@ -899,7 +890,7 @@ final class MobileAppModel {
         } catch let TabminalClientError.invalidStatus(code, _) {
             if code == 401 || code == 403 {
                 if host.isPrimary {
-                    credentialStore.clearToken()
+                    try? await apiClient.clearCredentials(server: host.endpoint)
                     logout(clearCredentials: false)
                     loginErrorMessage = "Main host authentication expired."
                     return
@@ -960,6 +951,10 @@ final class MobileAppModel {
                 editorState: state
             )
         }
+    }
+
+    func flushEditorDrafts() async {
+        for workspace in workspaces.values { await workspace.flushDrafts() }
     }
 
     private func ensureWorkspace(
@@ -1077,6 +1072,14 @@ final class MobileAppModel {
         let host = url.host?.lowercased() ?? ""
         let port = url.port.map(String.init) ?? ""
         return port.isEmpty ? host : "\(host):\(port)"
+    }
+
+    private static func validHostURL(_ value: String) -> URL? {
+        guard let url = URL(string: value),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return url
     }
 
     private static func sessionTitle(

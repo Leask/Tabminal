@@ -162,6 +162,7 @@ async function createRuntimeManagers() {
         eventLimit: config.acpBusEventLimit
     });
     const acpBusManager = new AcpBusManager({
+        discoveryEnabled: process.env.TABMINAL_ACP_DISCOVERY !== '0',
         acpManager,
         store: acpBusStore,
         loadOpenTabs: () => terminalManager.loadOpenAgentTabsFromWorkspace(),

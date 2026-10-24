@@ -15,22 +15,54 @@ if [[ ! -d ${xcframework} ]]; then
     exit 1
 fi
 
-cd "${repo_root}/apps/Apple"
-./xcodebuild-lock.sh xcodegen generate >/dev/null
+xcframework=$(cd -- "${xcframework}" && pwd)
+apple_root="${repo_root}/apps/Apple"
+"${script_dir}/verify-slices.sh" "${xcframework}"
 
+source "${apple_root}/xcodebuild-lock.sh"
+source "${apple_root}/ghostty-build-settings.sh"
+
+export TABMINAL_GHOSTTY_XCFRAMEWORK_PATH="${xcframework}"
+export TABMINAL_MOBILE_TERMINAL_RENDERER=ghostty
+XCODEBUILD_ARGS=()
+tabminal_ghostty_xcodebuild_args "${apple_root}" xros
+
+tmp_root=''
+lock_acquired=false
+cleanup() {
+    local status=$?
+    trap - EXIT
+    if [[ ${lock_acquired} == true ]]; then
+        tabminal_release_xcodebuild_lock || true
+    fi
+    if [[ -n ${tmp_root} ]]; then
+        rm -rf -- "${tmp_root}" || true
+    fi
+    exit "${status}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tabminal_acquire_xcodebuild_lock
+lock_acquired=true
+# The lock helper installs its own EXIT trap; retain both cleanup duties.
+trap cleanup EXIT
 tmp_root=$(mktemp -d "${TMPDIR:-/tmp}/tabminal-visionos-smoke.XXXXXX")
-trap 'rm -rf "${tmp_root}"' EXIT
 
-HOME="${tmp_root}/home" \
+cd "${apple_root}"
+xcodegen generate
+
 CLANG_MODULE_CACHE_PATH="${tmp_root}/module-cache" \
 SWIFTPM_MODULECACHE_OVERRIDE="${tmp_root}/module-cache" \
-TABMINAL_GHOSTTY_XCFRAMEWORK_PATH="${xcframework}" \
-./xcodebuild-lock.sh \
-    xcodebuild \
+xcodebuild \
     -project TabminalMobileApp.xcodeproj \
     -scheme TabminalMobileApp \
     -sdk xros \
     -destination 'generic/platform=visionOS' \
     -derivedDataPath "${tmp_root}/DerivedData" \
+    ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"} \
     CODE_SIGNING_ALLOWED=NO \
     build
+
+echo 'visionOS Ghostty consumer build passed; runtime rendering was not tested.'

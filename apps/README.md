@@ -1,5 +1,7 @@
 # Tabminal Apps
 
+Latest Apple recovery results and blockers: [Apple/PROGRESS.md](Apple/PROGRESS.md).
+
 ## Goal
 
 Build native app clients that reuse the current Tabminal server protocol
@@ -20,10 +22,12 @@ The constraints for this track are:
 The current backend already exposes the protocol required for a native mobile
 client:
 
-- Auth via SHA-256 password hash in `Authorization` or `token`
+- One-use challenge/HMAC password login via `/api/auth/challenge` and
+  `/api/auth/login`, followed by bearer access tokens and refresh rotation
 - Heartbeat sync via `POST /api/heartbeat`
 - Session create/delete via `/api/sessions`
-- Session websocket via `/ws/:sessionId`
+- Session websocket via `/ws/:sessionId`, with native bearer headers (never a
+  password hash or URL token)
 - File APIs via `/api/fs/*`
 - Cluster registry via `/api/cluster`
 
@@ -81,9 +85,10 @@ Planned medium-term split:
 
 ## iOS Direction
 
-iOS is the lead platform because the `libghostty` integration path is most
-natural there, and the Ghostty custom-I/O bridge is now validated in the
-current mobile shell.
+iOS is the lead platform. A custom-I/O Ghostty bridge exists, but its historical
+local renderer proof needs a reproducible matching artifact before it can be
+the default for current builds. The text renderer is an explicit fallback,
+not full terminal emulation.
 
 Decisions:
 
@@ -132,14 +137,15 @@ This branch is past the initial scaffold phase:
   - `npm test`
   - `swift test` for `apps/Apple`
   - shell syntax for mobile scripts
-  - a macOS app-shell build
-- The Ghostty custom-I/O renderer path is working on iPhone and iPad
-  simulator runs.
-- The macOS Ghostty renderer path is working.
-- The app compiles and runs on visionOS.
-- When the linked Ghostty artifact includes the visionOS slices
-  `xros-arm64` and `xros-arm64-simulator`, the Ghostty renderer path also
-  works on visionOS.
+  - macOS and iOS simulator app-shell builds
+- Native auth now follows the current server challenge/token contract, using
+  host-scoped Keychain storage and shared refresh coordination.
+- iOS simulator terminal transport is tested against an isolated real backend.
+- macOS and visionOS app-shell builds are verified separately from renderer
+  runtime acceptance.
+- The Ghostty artifact and current-toolchain compatibility remain tracked in
+  [issue #25](https://github.com/Leask/Tabminal/issues/25); historical March
+  iPhone/iPad/macOS proofs do not establish current runtime support.
 - The new vendor flow can consume either:
   - `TABMINAL_GHOSTTY_XCFRAMEWORK_PATH=/path/to/GhosttyKit.xcframework`
   - `TABMINAL_GHOSTTY_REPO_PATH=/path/to/ghostty-checkout`

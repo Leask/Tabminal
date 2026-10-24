@@ -31,6 +31,11 @@ describe('FS read text detection', () => {
         ]);
         assert.equal(isSupportedTextBuffer(pngHeader), false);
     });
+
+    it('rejects malformed UTF-8 sequences', () => {
+        assert.equal(isSupportedTextBuffer(Buffer.from([0xc0, 0xaf])), false);
+        assert.equal(isSupportedTextBuffer(Buffer.from([0xe2, 0x82])), false);
+    });
 });
 
 describe('FS create unique child', () => {
@@ -186,5 +191,90 @@ describe('FS text snapshot versioning', () => {
         } finally {
             await fs.rm(tempDir, { recursive: true, force: true });
         }
+    });
+
+    it('rejects non-string replacements without touching the original', async (t) => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+        const filePath = path.join(tempDir, 'original.txt');
+        const original = Buffer.from('original\r\n');
+        await fs.writeFile(filePath, original);
+        const before = await readTextFileSnapshot(filePath);
+        const writes = t.mock.method(fs, 'writeFile');
+        for (const content of [undefined, null, 0, [], {}]) {
+            await assert.rejects(
+                writeTextFileSnapshot(filePath, content, before.version, true),
+                { status: 400, message: 'Content must be a string' }
+            );
+            assert.deepEqual(await fs.readFile(filePath), original);
+        }
+        assert.equal(writes.mock.callCount(), 0);
+        assert.equal((await readTextFileSnapshot(filePath)).version, before.version);
+    });
+
+    it('keeps conflict precedence when the proposed replacement is invalid', async (t) => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+        const filePath = path.join(tempDir, 'conflict.txt');
+        await fs.writeFile(filePath, 'original');
+        const before = await readTextFileSnapshot(filePath);
+        const external = Buffer.from('external update');
+        await fs.writeFile(filePath, external);
+        const writes = t.mock.method(fs, 'writeFile');
+        await assert.rejects(
+            writeTextFileSnapshot(filePath, 'invalid\u0000text', before.version),
+            (error) => error.status === 409
+                && error.code === 'file-version-conflict'
+                && error.snapshot.content === external.toString('utf8')
+        );
+        await assert.rejects(
+            writeTextFileSnapshot(filePath, 'invalid\u0000text', before.version, true),
+            { status: 415, code: 'unsupported-file-type' }
+        );
+        assert.deepEqual(await fs.readFile(filePath), external);
+        assert.equal(writes.mock.callCount(), 0);
+    });
+
+    it('keeps missing-file errors ahead of replacement validation', async (t) => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+        const filePath = path.join(tempDir, 'missing.txt');
+        const writes = t.mock.method(fs, 'writeFile');
+        for (const force of [false, true]) {
+            await assert.rejects(
+                writeTextFileSnapshot(filePath, 'bad\u0000text', 'old', force),
+                { status: 404, code: 'file-not-found' }
+            );
+        }
+        await assert.rejects(fs.stat(filePath), { code: 'ENOENT' });
+        assert.equal(writes.mock.callCount(), 0);
+    });
+
+    it('checks the bytes read even if the file grew after stat', async (t) => {
+        const tempDir = await fs.mkdtemp(
+            path.join(os.tmpdir(), 'tabminal-fs-routes-')
+        );
+        t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+        const filePath = path.join(tempDir, 'grew.txt');
+        const original = Buffer.alloc(5 * 1024 * 1024 + 1, 0x61);
+        await fs.writeFile(filePath, original);
+        const earlierStat = await fs.stat(filePath);
+        earlierStat.size = 1;
+        t.mock.method(fs, 'stat', async () => earlierStat);
+        const writes = t.mock.method(fs, 'writeFile');
+        await assert.rejects(readTextFileSnapshot(filePath), {
+            status: 400, message: 'File too large'
+        });
+        await assert.rejects(writeTextFileSnapshot(filePath, 'small', '', true), {
+            status: 400, message: 'File too large'
+        });
+        assert.deepEqual(await fs.readFile(filePath), original);
+        assert.equal(writes.mock.callCount(), 0);
     });
 });

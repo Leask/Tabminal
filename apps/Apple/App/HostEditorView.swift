@@ -82,28 +82,28 @@ struct HostEditorView: View {
     private var passwordHint: String {
         switch model.hostEditorMode {
         case .add:
-            return "Optional. Leave empty to reuse the current host password."
+            return "Enter this host's password. Logins are never shared between hosts."
         case .edit:
-            return "Optional. Leave empty to keep the existing token."
+            return "Optional for a saved login at the same host URL."
         case .reconnect:
             if reconnectHost?.isPrimary == true {
                 return "Optional. Leave empty to reuse the saved main-host login."
             }
-            return "Optional. Leave empty to reconnect with the existing token."
+            return "Optional. Leave empty to reuse this host's saved login."
         }
     }
 
     private var passwordPlaceholder: String {
         switch model.hostEditorMode {
         case .add:
-            return "Password (optional, use current password)"
+            return "Host password"
         case .edit:
-            return "Password (optional, keep existing token)"
+            return "Password (optional, use saved login)"
         case .reconnect:
             if reconnectHost?.isPrimary == true {
                 return "Password (optional, use saved main login)"
             }
-            return "Password (optional, use existing token)"
+            return "Password (optional, use saved login)"
         }
     }
 

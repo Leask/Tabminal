@@ -18,6 +18,8 @@ const RAW_MIME_TYPES = {
     '.pdf': 'application/pdf'
 };
 
+const MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024;
+
 export function isSupportedTextBuffer(buffer) {
     if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
         return true;
@@ -55,6 +57,21 @@ function createFsRouteError(message, status) {
     const error = new Error(message);
     error.status = status;
     return error;
+}
+
+function validateTextFileSize(size) {
+    if (size > MAX_TEXT_FILE_BYTES) {
+        throw createFsRouteError('File too large', 400);
+    }
+}
+
+function validateTextFileBuffer(buffer) {
+    validateTextFileSize(buffer.length);
+    if (!isSupportedTextBuffer(buffer)) {
+        const error = createFsRouteError('Unsupported file type', 415);
+        error.code = 'unsupported-file-type';
+        throw error;
+    }
 }
 
 function normalizeFsRouteError(error, fallbackMessage = 'File system error') {
@@ -107,16 +124,10 @@ export async function readTextFileSnapshot(fullPath) {
             throw createFsRouteError('Not a file', 400);
         }
 
-        if (stats.size > 1024 * 1024 * 5) {
-            throw createFsRouteError('File too large', 400);
-        }
+        validateTextFileSize(stats.size);
 
         const contentBuffer = await fs.readFile(fullPath);
-        if (!isSupportedTextBuffer(contentBuffer)) {
-            const error = createFsRouteError('Unsupported file type', 415);
-            error.code = 'unsupported-file-type';
-            throw error;
-        }
+        validateTextFileBuffer(contentBuffer);
 
         const decoder = new TextDecoder('utf-8', { fatal: true });
         const content = decoder.decode(contentBuffer);
@@ -151,7 +162,13 @@ export async function writeTextFileSnapshot(
         throw error;
     }
 
-    await fs.writeFile(fullPath, content, 'utf8');
+    if (typeof content !== 'string') {
+        throw createFsRouteError('Content must be a string', 400);
+    }
+    validateTextFileSize(Buffer.byteLength(content, 'utf8'));
+    const contentBuffer = Buffer.from(content, 'utf8');
+    validateTextFileBuffer(contentBuffer);
+    await fs.writeFile(fullPath, contentBuffer);
     return await readTextFileSnapshot(fullPath);
 }
 

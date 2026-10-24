@@ -53,7 +53,10 @@ jobs:
           xcodegen --version
 
       - name: Validate mobile shell scripts
-        run: bash -n apps/Apple/*.sh apps/ghostty-vendor/scripts/*.sh
+        run: |
+          for script in apps/Apple/*.sh apps/ghostty-vendor/scripts/*.sh; do
+            bash -n "$script"
+          done
 
       - name: Run Swift package tests
         run: |
@@ -72,4 +75,13 @@ jobs:
             -project TabminalMobileApp.xcodeproj \
             -scheme TabminalMobileApp \
             -destination 'platform=macOS' \
+            build
+
+      - name: Build iOS simulator app shell
+        run: |
+          cd apps/Apple
+          xcodebuild \
+            -project TabminalMobileApp.xcodeproj \
+            -scheme TabminalMobileApp \
+            -destination 'generic/platform=iOS Simulator' \
             build

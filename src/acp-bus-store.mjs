@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { dbio } from 'webjam';
+import { getDataDirectory } from './data-directory.mjs';
 
-const BASE_DIR = path.join(os.homedir(), '.tabminal');
+const BASE_DIR = getDataDirectory();
 const DEFAULT_DB_PATH = path.join(BASE_DIR, 'acp-bus.sqlite');
 const DEFAULT_EVENT_LIMIT = 2000;
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;

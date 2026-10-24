@@ -2,6 +2,10 @@ name: TabminalMobileApp
 options:
   createIntermediateGroups: true
   minimumXcodeGenVersion: 2.45.0
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+    visionOS: "2.0"
 configs:
   Debug: debug
   Release: release
@@ -15,10 +19,6 @@ targets:
       - iOS
       - macOS
       - visionOS
-    deploymentTarget:
-      iOS: "18.0"
-      macOS: "15.0"
-      visionOS: "2.0"
     sources:
       - path: App
         excludes:
@@ -49,6 +49,12 @@ targets:
         SUPPORTS_MACCATALYST: NO
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
+        "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
+        "CODE_SIGNING_ALLOWED[sdk=xrsimulator*]": YES
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+        "CODE_SIGN_IDENTITY[sdk=xrsimulator*]": "-"
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Simulator.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=xrsimulator*]": Simulator.entitlements
         DEVELOPMENT_ASSET_PATHS: "\"\""
         TARGETED_DEVICE_FAMILY: "1,2,7"
     scheme:

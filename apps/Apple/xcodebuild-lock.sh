@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo 'Source this helper and call tabminal_acquire_xcodebuild_lock.' >&2
+    exit 1
+fi
+
 TABMINAL_XCODEBUILD_LOCK_FILE="${TMPDIR:-/tmp}/tabminal-mobile-xcodebuild.lock"
 
 tabminal_acquire_xcodebuild_lock() {

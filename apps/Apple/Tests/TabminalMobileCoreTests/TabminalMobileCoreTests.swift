@@ -36,7 +36,7 @@ func websocketURLMatchesServerContract() throws {
 
     #expect(
         url.absoluteString
-            == "wss://tabminal-elm.example.com/ws/session-1?token=abc"
+            == "wss://tabminal-elm.example.com/ws/session-1"
     )
 }
 

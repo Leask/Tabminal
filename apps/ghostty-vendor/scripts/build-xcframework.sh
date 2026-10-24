@@ -14,12 +14,20 @@ if [[ ! -d ${repo_root} ]]; then
 fi
 
 cache_root=${TABMINAL_GHOSTTY_ZIG_CACHE_ROOT:-${repo_root}/.tabminal-zig-cache}
+zig_bin=${TABMINAL_GHOSTTY_ZIG:-zig}
+jobs=${TABMINAL_GHOSTTY_BUILD_JOBS:-4}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+expected_header="${script_dir}/../../Apple/Sources/CGhosttyShim/include/ghostty.h"
+if ! cmp -s "${expected_header}" "${repo_root}/include/ghostty.h"; then
+    echo 'Ghostty C header does not match the Apple bridge ABI; refusing build.' >&2
+    exit 1
+fi
 local_cache_dir=${cache_root}/local
 global_cache_dir=${cache_root}/global
 mkdir -p "${local_cache_dir}" "${global_cache_dir}"
 
 pushd "${repo_root}" >/dev/null
-zig build \
+"${zig_bin}" build -j"${jobs}" \
     --cache-dir "${local_cache_dir}" \
     --global-cache-dir "${global_cache_dir}" \
     -Dapp-runtime=none \

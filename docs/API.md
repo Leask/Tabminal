@@ -1991,6 +1991,15 @@ Heartbeat file writes may return per-file conflicts through
 
 This is the canonical optimistic concurrency path for text editing.
 
+After checking the current file and version, heartbeat writes validate the
+replacement before changing the file. Content must be a string, valid supported
+text without NUL bytes or excessive control bytes, and at most 5 MiB
+(5,242,880 UTF-8 bytes). Invalid replacement content returns a per-file
+`status: "error"` while preserving the original bytes and version.
+`force: true` bypasses version conflicts only; it does not bypass content limits,
+missing-file checks, or filesystem permissions. A stale unforced version still
+returns a conflict before replacement validation.
+
 ## 17. Native Client Requirements
 
 Future native clients should follow the same API contract as web.
@@ -2007,6 +2016,13 @@ Future native clients should follow the same API contract as web.
 - preserve host isolation
 
 ### 17.2 Client-specific storage may differ
+
+Native text editors must retain the read `version` and submit version-checked
+heartbeat `fileWrites`. Match acknowledgements by both terminal session ID and
+file path; a successful HTTP response can still contain per-file conflicts or
+errors. Keep local edits until the submitted text is acknowledged. Reload and
+forced overwrite are explicit user decisions, and draft recovery must remain
+scoped to the host URL, host ID, terminal session, and file path.
 
 Storage location is a client detail, not an API contract.
 

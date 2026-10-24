@@ -7,6 +7,7 @@ struct MobileDebugLaunchOptions {
     let autoLogin: Bool
     let presentSidebar: Bool
     let presentWorkspace: Bool
+    let fullWorkspace: Bool
 
     static let current = MobileDebugLaunchOptions(
         environment: ProcessInfo.processInfo.environment
@@ -29,6 +30,10 @@ struct MobileDebugLaunchOptions {
             environment["TABMINAL_MOBILE_DEBUG_PRESENT_WORKSPACE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        let fullWorkspaceValue =
+            environment["TABMINAL_MOBILE_DEBUG_FULL_WORKSPACE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
 
         self.mainURL = (url?.isEmpty == false) ? url : nil
         self.password = (password?.isEmpty == false) ? password : nil
@@ -42,6 +47,9 @@ struct MobileDebugLaunchOptions {
         self.presentWorkspace = workspaceValue == "1"
             || workspaceValue == "true"
             || workspaceValue == "yes"
+        self.fullWorkspace = fullWorkspaceValue == "1"
+            || fullWorkspaceValue == "true"
+            || fullWorkspaceValue == "yes"
     }
 
     var isEnabled: Bool {
@@ -51,5 +59,6 @@ struct MobileDebugLaunchOptions {
             || autoLogin
             || presentSidebar
             || presentWorkspace
+            || fullWorkspace
     }
 }

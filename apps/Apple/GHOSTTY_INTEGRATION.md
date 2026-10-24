@@ -1,8 +1,27 @@
 # Ghostty Integration Notes
 
-Last updated: 2026-03-23
+Reviewed: 2026-10-23
 
-## Current status
+## Current Recovery Status
+
+See [PROGRESS.md](PROGRESS.md) and [issue #25](https://github.com/Leask/Tabminal/issues/25).
+The March custom-I/O source remains ABI-compatible only at the pinned commit
+documented there. Floating upstream/fork binaries are not interchangeable.
+Official upstream no longer builds the full iOS renderer; `libghostty-vt` is a
+different integration boundary. The visionOS PR is still unmerged/conflicted.
+
+The fixed-source rebuild was attempted with Zig 0.15.2 and Xcode 27.2. It fails
+while linking Zig's build runner against current Apple SDK libc exports, before
+building a renderer. An older compatible Xcode SDK or a deliberate toolchain/
+wrapper migration is still required. No current Ghostty device acceptance is
+claimed.
+
+## Historical March 2026 Record
+
+The sections below describe the earlier local proof, not a redistributable
+artifact or a result revalidated on the current toolchain.
+
+### Earlier Status
 
 Tabminal iOS now includes a concrete native Ghostty integration path:
 
@@ -92,13 +111,13 @@ The iOS client now has a renderer abstraction layer and a native runtime
 probe so the future Ghostty host can be swapped in without rewriting
 session, shell, or workspace UI.
 
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalRenderer.swift`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalSurfaceHost.swift`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/TerminalRenderFeed.swift`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/GhosttyRuntime.swift`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/TabminalIOSKit/GhosttyNativeTerminalSurface.swift`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Sources/CGhosttyShim/include/ghostty_loader.h`
-- `/Users/leask/Documents/Tabminal/apps/Apple/Vendor/Ghostty/README.md`
+- `apps/Apple/Sources/TabminalIOSKit/TerminalRenderer.swift`
+- `apps/Apple/Sources/TabminalIOSKit/TerminalSurfaceHost.swift`
+- `apps/Apple/Sources/TabminalIOSKit/TerminalRenderFeed.swift`
+- `apps/Apple/Sources/TabminalIOSKit/GhosttyRuntime.swift`
+- `apps/Apple/Sources/TabminalIOSKit/GhosttyNativeTerminalSurface.swift`
+- `apps/Apple/Sources/CGhosttyShim/include/ghostty_loader.h`
+- `apps/Apple/Vendor/Ghostty/README.md`
 
 Current renderer behavior:
 
@@ -125,7 +144,7 @@ execution path. The correct move remains:
 This repo now includes a dedicated helper workflow for Ghostty vendor
 artifacts:
 
-- `/Users/leask/Documents/Tabminal/apps/ghostty-vendor/README.md`
+- `apps/ghostty-vendor/README.md`
 
 That workflow can build a `GhosttyKit.xcframework` from a compatible
 custom-I/O Ghostty checkout and verify the resulting Apple slices.

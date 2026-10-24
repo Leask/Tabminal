@@ -1,17 +1,24 @@
 # Tabminal Apple App
 
+For the current recovery status, verified checks, and remaining blockers, see
+[PROGRESS.md](PROGRESS.md). Historical Ghostty smoke results do not establish
+compatibility with a current Xcode toolchain or a different Ghostty binary.
+
 ## Scope
 
-This directory starts the native iOS client work without requiring backend
-changes.
+This directory contains the native Apple terminal and file client. iOS,
+macOS, and visionOS share the same transport and SwiftUI shell.
 
 It is intentionally split into two layers:
 
 - `TabminalMobileCore`
   Protocol models, auth, REST transport, websocket transport, and session key
-  handling.
+  handling, plus versioned file editing and local draft recovery.
 - `TabminalIOSKit`
   SwiftUI-facing shell code and the `libghostty` bridge surface.
+
+File save/conflict behavior, draft ownership, and regression commands are
+documented in [FILE_EDITING.md](FILE_EDITING.md).
 
 This directory also contains:
 
@@ -98,7 +105,8 @@ The visionOS path uses the same mobile package and app shell, but targets the
 What works now:
 
 - Connect to an existing Tabminal main host
-- Restore the saved main-host login from Keychain on app launch
+- Challenge/HMAC password login and host-scoped token storage in Keychain
+- Restore saved login on launch, rotate refresh tokens, and revoke on logout
 - Restore the backend cluster registry and saved sub-hosts
 - Create, close, and switch sessions across multiple hosts
 - Open the websocket for the active session with reconnect behavior
@@ -111,10 +119,12 @@ What works now:
   missing
 - Send input, return, tab, escape, Ctrl-C, and arrow keys
 - Browse files, open files, edit them, and save them back to the server
-- Open sub-host browser login flows for Access-style auth
+- Detect sub-host Access-style auth failures and offer a browser login URL;
+  native cookie handoff still needs end-to-end validation (issue #26)
 
 What is still pending:
 
+- Native ACP workspace support (not just terminal and file tabs)
 - Make the visionOS-capable Ghostty vendor artifact the default bundled
   developer path instead of an explicit local override
 - Rich terminal behaviors such as proper native selection and full VT rendering
@@ -126,6 +136,19 @@ What is still pending:
 2. Polish the Apple host views around Ghostty's IOSurface lifecycle.
 3. Add richer terminal UX such as selection, search, and better copy/paste.
 4. Polish iPad and large-screen workspace layouts.
+
+## Isolated Debugging
+
+`test-local-ui.sh` and `debug-local-*.sh` start the real backend in a temporary
+`TABMINAL_DATA_DIR`, with ACP discovery disabled. They never reuse production
+sessions or kill an existing port owner. Set `TABMINAL_MOBILE_DEBUG_PORT` to use
+another port. Debug scripts keep the isolated server running until Ctrl-C;
+UI-test scripts stop it on completion. Logs and test data remain in the printed
+temporary directory for inspection.
+
+The build helpers support the system Bash shipped by macOS. Set
+`TABMINAL_MOBILE_TERMINAL_RENDERER=ghostty` for renderer acceptance: missing
+artifacts/slices and mismatched C headers fail rather than silently falling back.
 
 ## libghostty Integration Boundary
 
@@ -155,7 +178,7 @@ build scripts resolve the artifact from:
 
 The helper workflow for building that artifact lives in:
 
-- `/Users/leask/Documents/Tabminal/apps/ghostty-vendor/README.md`
+- `apps/ghostty-vendor/README.md`
 
 That workflow now supports `ios`, `macOS`, and `visionOS`
 (`xros-arm64` and `xros-arm64-simulator`) slices.

@@ -84,8 +84,7 @@ public struct TabminalServerEndpoint: Hashable, Codable, Sendable {
     public func webSocketURL(sessionID: String) -> URL {
         TabminalURL.webSocketURL(
             baseURL: baseURL,
-            sessionID: sessionID,
-            token: token
+            sessionID: sessionID
         )
     }
 }
@@ -128,7 +127,7 @@ public enum TabminalURL {
     public static func webSocketURL(
         baseURL: URL,
         sessionID: String,
-        token: String
+        token: String = ""
     ) -> URL {
         guard
             var components = URLComponents(
@@ -146,9 +145,8 @@ public enum TabminalURL {
         }
 
         components.path = "/ws/\(sessionID)"
-        components.queryItems = token.isEmpty
-            ? []
-            : [URLQueryItem(name: "token", value: token)]
+        // Credentials belong in the upgrade header, never in URL logs.
+        components.query = nil
         return components.url ?? baseURL
     }
 }
@@ -307,6 +305,27 @@ public struct TabminalHeartbeatResponse: Codable, Sendable {
     public let sessions: [TabminalSessionSummary]
     public let system: TabminalSystemSnapshot?
     public let runtime: TabminalRuntime?
+    public let fileWriteResults: [TabminalSessionFileWriteResults]?
+}
+
+public struct TabminalSessionFileWriteResults: Codable, Sendable {
+    public let id: String
+    public let fileWrites: [TabminalFileWriteResult]
+}
+
+public struct TabminalFileWriteResult: Codable, Sendable {
+    public enum Status: String, Codable, Sendable {
+        case ok
+        case conflict
+        case error
+    }
+
+    public let path: String
+    public let status: Status
+    public let version: String?
+    public let content: String?
+    public let readonly: Bool?
+    public let error: String?
 }
 
 public struct TabminalSessionUpdate: Codable, Sendable {
@@ -353,10 +372,19 @@ public struct TabminalResizePayload: Codable, Hashable, Sendable {
 public struct TabminalFileWrite: Codable, Hashable, Sendable {
     public let path: String
     public let content: String
+    public let expectedVersion: String
+    public let force: Bool
 
-    public init(path: String, content: String) {
+    public init(
+        path: String,
+        content: String,
+        expectedVersion: String,
+        force: Bool = false
+    ) {
         self.path = path
         self.content = content
+        self.expectedVersion = expectedVersion
+        self.force = force
     }
 }
 
@@ -371,6 +399,11 @@ public struct TabminalCreateSessionResponse: Codable, Hashable, Sendable {
     public let rows: Int?
 }
 
+struct TabminalDirectoryResponse: Decodable, Sendable {
+    let items: [TabminalFileEntry]
+    let creatable: Bool
+}
+
 public struct TabminalFileEntry: Codable, Hashable, Sendable {
     public let name: String
     public let isDirectory: Bool
@@ -380,6 +413,13 @@ public struct TabminalFileEntry: Codable, Hashable, Sendable {
 public struct TabminalReadFileResponse: Codable, Hashable, Sendable {
     public let content: String
     public let readonly: Bool
+    public let version: String
+
+    public init(content: String, readonly: Bool, version: String) {
+        self.content = content
+        self.readonly = readonly
+        self.version = version
+    }
 }
 
 public struct TabminalSessionMetaDelta: Codable, Hashable, Sendable {

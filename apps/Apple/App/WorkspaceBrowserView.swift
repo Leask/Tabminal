@@ -26,6 +26,7 @@ struct WorkspaceBrowserView: View {
     let onClose: () -> Void
 
     @State private var pane: Pane = .browser
+    @FocusState private var editorFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -140,6 +141,7 @@ struct WorkspaceBrowserView: View {
                         }
                     }
                     .accessibilityIdentifier("workspace.save")
+                    .disabled(workspace.activeDocument?.canSave != true)
                 }
             }
         }
@@ -168,7 +170,7 @@ struct WorkspaceBrowserView: View {
                 Section("Open Files") {
                     ForEach(workspace.openDocuments, id: \.path) { document in
                         Button {
-                            workspace.activeFilePath = document.path
+                            workspace.selectFile(path: document.path)
                             pane = .editor
                         } label: {
                             HStack(spacing: 10) {
@@ -266,6 +268,7 @@ struct WorkspaceBrowserView: View {
                                 Spacer(minLength: 0)
                             }
                         }
+                        .accessibilityIdentifier("workspace.directory.entry")
                         .listRowBackground(Color.white.opacity(0.03))
                     }
                 }
@@ -296,6 +299,8 @@ struct WorkspaceBrowserView: View {
                             .font(.headline)
                             .foregroundStyle(.white)
                             .lineLimit(1)
+                            .truncationMode(.middle)
+                            .accessibilityIdentifier("workspace.activeFile.name")
 
                         if activeDocument.isDirty {
                             Circle()
@@ -316,8 +321,12 @@ struct WorkspaceBrowserView: View {
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.48))
                         .lineLimit(2)
+                        .accessibilityIdentifier("workspace.activeFile.path")
 
-                    TextEditor(text: activeDocumentBinding)
+                    TextEditor(text: Binding(
+                        get: { activeDocument.content },
+                        set: { activeDocument.content = $0 }
+                    ))
                         .font(.system(.body, design: .monospaced))
                         .scrollContentBackground(.hidden)
                         .foregroundStyle(.white)
@@ -339,11 +348,18 @@ struct WorkspaceBrowserView: View {
                                 lineWidth: 1
                             )
                         }
-                        .disabled(activeDocument.readonly)
+                        .disabled(activeDocument.readonly || activeDocument.isReloading)
+                        .focused($editorFocused)
+                        .onChange(of: activeDocument.conflict != nil) { _, conflicted in
+                            if conflicted { editorFocused = false }
+                        }
+                        .accessibilityIdentifier("workspace.editor.content")
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(cardBackground)
+
+                FileEditorStatusView(document: activeDocument)
 
                 if !workspace.editorErrorMessage.isEmpty {
                     Text(workspace.editorErrorMessage)
@@ -368,17 +384,31 @@ struct WorkspaceBrowserView: View {
     }
 
     private var openFileStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        SelectedFileTabScrollView(
+            selectedPath: workspace.activeDocument?.path,
+            paths: workspace.openDocuments.map(\.path),
+            revealID: workspace.fileTabRevealID
+        ) { viewportWidth in
             HStack(spacing: 10) {
                 ForEach(workspace.openDocuments, id: \.path) { document in
                     HStack(spacing: 8) {
                         Button {
-                            workspace.activeFilePath = document.path
+                            workspace.selectFile(path: document.path)
                         } label: {
                             Text(document.name)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
+                        .accessibilityIdentifier(
+                            (workspace.activeDocument?.path == document.path
+                                ? "workspace.file.tab.selected."
+                                : "workspace.file.tab.") + document.path
+                        )
+                        .accessibilityAddTraits(
+                            workspace.activeDocument?.path == document.path ? .isSelected : []
+                        )
 
                         Button {
                             workspace.closeFile(path: document.path)
@@ -390,13 +420,16 @@ struct WorkspaceBrowserView: View {
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white.opacity(0.56))
                         }
+                        .accessibilityLabel("Close \(document.name)")
+                        .accessibilityIdentifier("workspace.file.close.\(document.path)")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
+                    .frame(maxWidth: viewportWidth > 0 ? max(44, viewportWidth - 4) : nil)
                     .background(
                         Capsule()
                             .fill(
-                                workspace.activeFilePath == document.path
+                                workspace.activeDocument?.path == document.path
                                     ? Color(
                                         red: 0.18,
                                         green: 0.25,
@@ -405,21 +438,14 @@ struct WorkspaceBrowserView: View {
                                     : Color.white.opacity(0.06)
                             )
                     )
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("workspace.file.tab.container.\(document.path)")
+                    .id(document.path)
                 }
             }
             .padding(.horizontal, 2)
         }
-    }
-
-    private var activeDocumentBinding: Binding<String> {
-        Binding(
-            get: {
-                workspace.activeDocument?.content ?? ""
-            },
-            set: { newValue in
-                workspace.updateActiveDocumentContent(newValue)
-            }
-        )
     }
 
     private var cardBackground: some View {

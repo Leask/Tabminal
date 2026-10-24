@@ -1,9 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
+import { getDataDirectory } from './data-directory.mjs';
 
-const HOME_DIR = os.homedir();
-const BASE_DIR = path.join(HOME_DIR, '.tabminal');
+const BASE_DIR = getDataDirectory();
 const SESSIONS_DIR = path.join(BASE_DIR, 'sessions');
 const MEMORY_FILE = path.join(BASE_DIR, 'memory.json');
 const CLUSTER_FILE = path.join(BASE_DIR, 'cluster.json');

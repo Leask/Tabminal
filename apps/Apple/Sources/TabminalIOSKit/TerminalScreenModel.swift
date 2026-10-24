@@ -130,20 +130,19 @@ public final class TerminalScreenModel {
 
     private func connectionLoop() async {
         while wantsConnection && !Task.isCancelled {
-            let request = apiClient.makeWebSocketRequest(
-                server: server,
-                sessionID: sessionID
-            )
-
             if connectionState != .connected {
                 connectionState = connectionState == .idle
                     ? .connecting
                     : .reconnecting
             }
 
-            await socketChannel.connect(with: request)
-
             do {
+                let request = try await apiClient.makeWebSocketRequest(
+                    server: server,
+                    sessionID: sessionID
+                )
+                try Task.checkCancellation()
+                await socketChannel.connect(with: request)
                 try await receiveLoop()
             } catch {
                 if !wantsConnection || Task.isCancelled {

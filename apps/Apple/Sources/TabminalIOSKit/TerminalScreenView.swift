@@ -127,6 +127,7 @@ public struct TerminalScreenView: View {
             .frame(width: 1, height: 1)
             .accessibilityElement()
             .accessibilityLabel("Terminal View")
+            .accessibilityValue("\(renderer.rawValue):\(model.connectionState.rawValue)")
             .accessibilityIdentifier("terminal.view")
             .allowsHitTesting(false)
     }
@@ -145,7 +146,7 @@ public struct TerminalScreenView: View {
 
     private var keyboardButton: some View {
         Button {
-            inputFocused = true
+            inputFocused.toggle()
         } label: {
             Image(
                 systemName: inputFocused

@@ -2,6 +2,10 @@ import SwiftUI
 
 struct AppRootView: View {
     @State private var model = MobileAppModel()
+    @Environment(\.scenePhase) private var scenePhase
+#if DEBUG
+    @State private var debugFullWorkspaceClosed = false
+#endif
 
     var body: some View {
         ZStack {
@@ -15,11 +19,16 @@ struct AppRootView: View {
                     .accessibilityIdentifier("root.loading")
                     .transition(.opacity)
             case .ready:
-                MobileShellView(model: model)
-                .transition(.opacity)
+                readyContent
+                    .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: model.phase)
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                Task { await model.flushEditorDrafts() }
+            }
+        }
         .task {
             await Task.yield()
             model.runStartupFlowIfNeeded()
@@ -29,6 +38,31 @@ struct AppRootView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+    }
+
+    @ViewBuilder
+    private var readyContent: some View {
+#if DEBUG
+        if MobileDebugLaunchOptions.current.fullWorkspace,
+           !debugFullWorkspaceClosed,
+           let session = model.activeSession,
+           let host = model.activeHost,
+           let workspace = model.activeWorkspace {
+            WorkspaceBrowserView(
+                workspace: workspace,
+                hostName: host.displayName,
+                sessionTitle: session.title,
+                onClose: {
+                    debugFullWorkspaceClosed = true
+                    model.closeWorkspace()
+                }
+            )
+        } else {
+            MobileShellView(model: model)
+        }
+#else
+        MobileShellView(model: model)
+#endif
     }
 
     private var loadingView: some View {

@@ -20,14 +20,14 @@ tabminal_acquire_xcodebuild_lock
 xcodegen generate >/dev/null
 
 XCODEBUILD_ARGS=()
-tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "macosx" XCODEBUILD_ARGS
+tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "macosx"
 
 xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -destination "platform=macOS" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
-    "${XCODEBUILD_ARGS[@]}" \
+    ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"} \
     build
 
 osascript -e "tell application \"${APP_NAME}\" to quit" >/dev/null 2>&1 \
@@ -73,7 +73,7 @@ if [[ -n "${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY:-}" ]]; then
     )
 fi
 
-env "${LAUNCH_ENV[@]}" "${APP_EXECUTABLE}" >"${LOG_FILE}" 2>&1 &
+env ${LAUNCH_ENV[@]+"${LAUNCH_ENV[@]}"} "${APP_EXECUTABLE}" >"${LOG_FILE}" 2>&1 &
 APP_PID=$!
 
 sleep 2

@@ -169,6 +169,7 @@ export class AcpBusManager extends EventEmitter {
         this.discoveryCwd = path.resolve(
             options.discoveryCwd || process.cwd()
         );
+        this.discoveryEnabled = options.discoveryEnabled !== false;
         this.now = typeof options.now === 'function' ? options.now : nowIso;
         this.started = false;
         this.restoring = false;
@@ -1111,6 +1112,9 @@ export class AcpBusManager extends EventEmitter {
     }
 
     async #syncNowInternal(reason) {
+        if (!this.discoveryEnabled) {
+            return { complete: true, state: await this.getState() };
+        }
         const availableDefinitions = await this.#listAvailableDefinitions();
         if (availableDefinitions.length === 0) {
             return {

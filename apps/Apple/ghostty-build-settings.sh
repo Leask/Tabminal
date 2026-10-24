@@ -107,22 +107,30 @@ tabminal_ghostty_library_for_sdk() {
 tabminal_ghostty_xcodebuild_args() {
     local root_dir="$1"
     local sdk="$2"
-    local -n out_ref="$3"
     local xcframework_path
     local static_lib
     local link_flags
 
-    out_ref=()
+    # A shared array keeps this helper compatible with macOS Bash 3.2.
+    XCODEBUILD_ARGS=()
 
     if ! xcframework_path="$(
         tabminal_ghostty_resolve_xcframework "${root_dir}"
     )"; then
+        if [[ "${TABMINAL_MOBILE_TERMINAL_RENDERER:-}" == "ghostty" ]]; then
+            echo '[ghostty] Ghostty requested but no artifact was found.' >&2
+            return 1
+        fi
         return 0
     fi
 
     if ! static_lib="$(
         tabminal_ghostty_library_for_sdk "${sdk}" "${xcframework_path}"
     )"; then
+        if [[ "${TABMINAL_MOBILE_TERMINAL_RENDERER:-}" == "ghostty" ]]; then
+            echo "[ghostty] Ghostty requested but ${sdk} slice is missing." >&2
+            return 1
+        fi
         echo "[ghostty] No supported static library slice for ${sdk}; using text fallback." >&2
         return 0
     fi
@@ -132,10 +140,17 @@ tabminal_ghostty_xcodebuild_args() {
         return 0
     fi
 
+    if ! cmp -s \
+        "${root_dir}/Sources/CGhosttyShim/include/ghostty.h" \
+        "$(dirname "${static_lib}")/Headers/ghostty.h"; then
+        echo '[ghostty] Artifact header does not match the bridge ABI.' >&2
+        return 1
+    fi
+
     echo "[ghostty] Linking ${static_lib}" >&2
-    link_flags="\$(inherited) -force_load ${static_lib} -lc++"
+    link_flags="\$(inherited) -force_load \"${static_lib}\" -lc++"
     if [[ "${sdk}" == "macosx" ]]; then
         link_flags+=" -framework GameController -framework Carbon"
     fi
-    out_ref+=("OTHER_LDFLAGS=${link_flags}")
+    XCODEBUILD_ARGS+=("OTHER_LDFLAGS=${link_flags}")
 }

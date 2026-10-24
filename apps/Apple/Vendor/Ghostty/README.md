@@ -23,7 +23,7 @@ xcframework produced by the `wiedymi/ghostty` `custom-io` fork lineage.
 Recommended local workflow:
 
 ```bash
-cd /Users/leask/Documents/Tabminal
+# From the repository root
 ./apps/ghostty-vendor/scripts/build-xcframework.sh /path/to/ghostty-checkout
 ```
 

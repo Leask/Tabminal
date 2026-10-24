@@ -11,11 +11,31 @@ public actor TabminalAPIClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let authentication: TabminalAuthSession
 
-    public init(session: URLSession = .shared) {
+    public init(
+        session: URLSession = .shared,
+        authentication: TabminalAuthSession = .shared
+    ) {
         self.session = session
+        self.authentication = authentication
         self.decoder = TabminalJSONCoding.makeDecoder()
         self.encoder = TabminalJSONCoding.makeEncoder()
+    }
+
+    public func login(
+        server: TabminalServerEndpoint,
+        password: String
+    ) async throws {
+        try await authentication.login(server: server, password: password)
+    }
+
+    public func clearCredentials(server: TabminalServerEndpoint) async throws {
+        try await authentication.clear(server: server)
+    }
+
+    public func logout(server: TabminalServerEndpoint) async throws {
+        try await authentication.logout(server: server)
     }
 
     public func heartbeat(
@@ -76,11 +96,12 @@ public actor TabminalAPIClient {
         )
         request.url = request.url?
             .appending(queryItems: [URLQueryItem(name: "path", value: path)])
-        return try await send(
+        let response = try await send(
             request,
             server: server,
-            decodeAs: [TabminalFileEntry].self
+            decodeAs: TabminalDirectoryResponse.self
         )
+        return response.items
     }
 
     public func readFile(
@@ -104,21 +125,52 @@ public actor TabminalAPIClient {
 
     public func writeFile(
         server: TabminalServerEndpoint,
+        sessionID: String,
         path: String,
-        content: String
-    ) async throws {
-        struct RequestBody: Codable, Sendable {
-            let path: String
-            let content: String
+        content: String,
+        expectedVersion: String,
+        force: Bool = false
+    ) async throws -> TabminalFileWriteResult {
+        guard !expectedVersion.isEmpty else {
+            throw TabminalEditorError.missingVersion
         }
-
-        let request = try makeRequest(
+        guard content.utf8.count <= 5 * 1024 * 1024 else {
+            throw TabminalEditorError.writeFailed("File too large (maximum 5 MB).")
+        }
+        // Match the read endpoint so a save cannot make its file unreadable.
+        let controlBytes = content.utf8.filter {
+            $0 < 0x20 && $0 != 0x09 && $0 != 0x0a && $0 != 0x0d
+        }.count
+        guard !content.utf8.contains(0),
+              Double(controlBytes) <= max(1, Double(content.utf8.count) * 0.01) else {
+            throw TabminalEditorError.writeFailed("Unsupported text content. Your edits are kept.")
+        }
+        let response = try await heartbeat(
             server: server,
-            path: "/api/fs/write",
-            method: "POST",
-            body: RequestBody(path: path, content: content)
+            updates: [TabminalSessionUpdate(
+                id: sessionID,
+                fileWrites: [TabminalFileWrite(
+                    path: path, content: content,
+                    expectedVersion: expectedVersion, force: force
+                )]
+            )]
         )
-        _ = try await send(request, server: server)
+        let matches = response.fileWriteResults?
+            .filter { $0.id == sessionID }
+            .flatMap(\.fileWrites)
+            .filter { $0.path == path } ?? []
+        guard matches.count == 1, let result = matches.first else {
+            throw TabminalEditorError.unacknowledgedWrite
+        }
+        if result.status == .error {
+            throw TabminalEditorError.writeFailed(result.error ?? "Write failed.")
+        }
+        guard let version = result.version, !version.isEmpty,
+              result.readonly != nil,
+              result.status != .conflict || result.content != nil else {
+            throw TabminalClientError.invalidResponse
+        }
+        return result
     }
 
     public func loadCluster(
@@ -154,14 +206,15 @@ public actor TabminalAPIClient {
         )
     }
 
-    nonisolated public func makeWebSocketRequest(
+    public func makeWebSocketRequest(
         server: TabminalServerEndpoint,
         sessionID: String
-    ) -> URLRequest {
+    ) async throws -> URLRequest {
+        let token = try await authentication.accessToken(server: server)
         var request = URLRequest(url: server.webSocketURL(sessionID: sessionID))
-        if !server.token.isEmpty {
-            request.setValue(server.token, forHTTPHeaderField: "Authorization")
-        }
+        request.httpShouldHandleCookies = true
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("tabminal.v1", forHTTPHeaderField: "Sec-WebSocket-Protocol")
         return request
     }
 
@@ -175,9 +228,6 @@ public actor TabminalAPIClient {
         request.httpMethod = method
         request.httpShouldHandleCookies = true
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if !server.token.isEmpty {
-            request.setValue(server.token, forHTTPHeaderField: "Authorization")
-        }
 
         if let body {
             request.setValue(
@@ -199,31 +249,8 @@ public actor TabminalAPIClient {
         _ request: URLRequest,
         server: TabminalServerEndpoint
     ) async throws -> HTTPURLResponse {
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw TabminalClientError.invalidResponse
-        }
-
-        if Self.isLikelyAccessLoginResponse(
-            request: request,
-            response: httpResponse,
-            body: data,
-            server: server
-        ) {
-            throw TabminalClientError.accessLoginRequired(
-                httpResponse.url?.absoluteString
-            )
-        }
-
-        guard (200 ... 299).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? ""
-            throw TabminalClientError.invalidStatus(
-                httpResponse.statusCode,
-                message
-            )
-        }
-
-        return httpResponse
+        let (_, response) = try await sendAuthenticated(request, server: server)
+        return response
     }
 
     private func send<T: Decodable>(
@@ -231,36 +258,41 @@ public actor TabminalAPIClient {
         server: TabminalServerEndpoint,
         decodeAs type: T.Type
     ) async throws -> T {
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw TabminalClientError.invalidResponse
-        }
-
-        if Self.isLikelyAccessLoginResponse(
-            request: request,
-            response: httpResponse,
-            body: data,
-            server: server
-        ) {
-            throw TabminalClientError.accessLoginRequired(
-                httpResponse.url?.absoluteString
-            )
-        }
-
-        guard (200 ... 299).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? ""
-            throw TabminalClientError.invalidStatus(
-                httpResponse.statusCode,
-                message
-            )
-        }
-
+        let (data, _) = try await sendAuthenticated(request, server: server)
         return try decoder.decode(T.self, from: data)
+    }
+
+    private func sendAuthenticated(
+        _ request: URLRequest,
+        server: TabminalServerEndpoint
+    ) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        let token = try await authentication.accessToken(server: server)
+        try Task.checkCancellation()
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            return try await TabminalHTTPTransport.send(
+                request, server: server, session: session
+            )
+        } catch TabminalClientError.invalidStatus(401, _) {
+            // Middleware rejects unauthenticated requests before side effects.
+            // A late 401 for an old token must not rotate the new token again.
+            let refreshed = try await authentication.accessToken(
+                server: server, rejecting: token
+            )
+            try Task.checkCancellation()
+            request.setValue(
+                "Bearer \(refreshed)", forHTTPHeaderField: "Authorization"
+            )
+            return try await TabminalHTTPTransport.send(
+                request, server: server, session: session
+            )
+        }
     }
 }
 
 extension TabminalAPIClient {
-    static func isLikelyAccessLoginResponse(
+    nonisolated static func isLikelyAccessLoginResponse(
         request: URLRequest,
         response: HTTPURLResponse,
         body: Data,

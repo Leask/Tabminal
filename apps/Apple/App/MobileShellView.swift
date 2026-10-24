@@ -979,6 +979,7 @@ struct MobileShellView: View {
 
 private struct InlineWorkspacePane: View {
     @Bindable var workspace: SessionWorkspaceModel
+    @FocusState private var editorFocused: Bool
     let session: MobileAppModel.SessionRecord
     let hostName: String
     let width: CGFloat
@@ -1035,6 +1036,7 @@ private struct InlineWorkspacePane: View {
                         await workspace.saveActiveFile()
                     }
                 }
+                .disabled(workspace.activeDocument?.canSave != true)
 
                 workspaceButton("Close", systemImage: "xmark") {
                     onClose()
@@ -1088,7 +1090,7 @@ private struct InlineWorkspacePane: View {
 
                     ForEach(workspace.openDocuments, id: \.path) { document in
                         Button {
-                            workspace.activeFilePath = document.path
+                            workspace.selectFile(path: document.path)
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "doc.text")
@@ -1126,6 +1128,13 @@ private struct InlineWorkspacePane: View {
                     .foregroundStyle(.white.opacity(0.42))
                     .padding(.top, workspace.openDocuments.isEmpty ? 2 : 8)
 
+                if !workspace.browserErrorMessage.isEmpty {
+                    Text(workspace.browserErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("workspace.directory.error")
+                }
+
                 if workspace.isBrowserLoading {
                     ProgressView()
                         .tint(.white)
@@ -1139,7 +1148,12 @@ private struct InlineWorkspacePane: View {
                                 }
                             } else {
                                 Task {
-                                    try? await workspace.openFile(path: entry.path)
+                                    do {
+                                        try await workspace.openFile(path: entry.path)
+                                    } catch {
+                                        workspace.editorErrorMessage =
+                                            MobileAppModel.displayMessage(for: error)
+                                    }
                                 }
                             }
                         } label: {
@@ -1178,6 +1192,7 @@ private struct InlineWorkspacePane: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("workspace.directory.entry")
                     }
                 }
             }
@@ -1198,19 +1213,32 @@ private struct InlineWorkspacePane: View {
     }
 
     private var openFileTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        SelectedFileTabScrollView(
+            selectedPath: workspace.activeDocument?.path,
+            paths: workspace.openDocuments.map(\.path),
+            revealID: workspace.fileTabRevealID
+        ) { viewportWidth in
             HStack(spacing: 8) {
                 ForEach(workspace.openDocuments, id: \.path) { document in
                     HStack(spacing: 8) {
                         Button {
-                            workspace.activeFilePath = document.path
+                            workspace.selectFile(path: document.path)
                         } label: {
                             Text(document.name)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier(
+                            (workspace.activeDocument?.path == document.path
+                                ? "workspace.file.tab.selected."
+                                : "workspace.file.tab.") + document.path
+                        )
+                        .accessibilityAddTraits(
+                            workspace.activeDocument?.path == document.path ? .isSelected : []
+                        )
 
                         Button {
                             workspace.closeFile(path: document.path)
@@ -1220,11 +1248,14 @@ private struct InlineWorkspacePane: View {
                                 .foregroundStyle(.white.opacity(0.72))
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Close \(document.name)")
+                        .accessibilityIdentifier("workspace.file.close.\(document.path)")
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
+                    .frame(maxWidth: viewportWidth > 0 ? max(44, viewportWidth - 20) : nil)
                     .background(
-                        workspace.activeFilePath == document.path
+                        workspace.activeDocument?.path == document.path
                             ? Color.white.opacity(0.10)
                             : Color.white.opacity(0.04),
                         in: RoundedRectangle(
@@ -1232,6 +1263,10 @@ private struct InlineWorkspacePane: View {
                             style: .continuous
                         )
                     )
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("workspace.file.tab.container.\(document.path)")
+                    .id(document.path)
                 }
             }
             .padding(10)
@@ -1242,23 +1277,41 @@ private struct InlineWorkspacePane: View {
     private var editorBody: some View {
         if let activeDocument = workspace.activeDocument {
             VStack(alignment: .leading, spacing: 8) {
+                Text(activeDocument.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("workspace.activeFile.name")
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+
                 Text(activeDocument.path)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.46))
                     .lineLimit(2)
+                    .accessibilityIdentifier("workspace.activeFile.path")
                     .padding(.horizontal, 12)
-                    .padding(.top, 10)
 
                 TextEditor(text: Binding(
-                    get: { workspace.activeDocument?.content ?? "" },
-                    set: { workspace.updateActiveDocumentContent($0) }
+                    get: { activeDocument.content },
+                    set: { activeDocument.content = $0 }
                 ))
                 .font(.system(.body, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .foregroundStyle(.white)
                 .padding(10)
                 .background(Color.clear)
-                .disabled(activeDocument.readonly)
+                .disabled(activeDocument.readonly || activeDocument.isReloading)
+                .focused($editorFocused)
+                .onChange(of: activeDocument.conflict != nil) { _, conflicted in
+                    if conflicted { editorFocused = false }
+                }
+                .accessibilityIdentifier("workspace.editor.content")
+
+                FileEditorStatusView(document: activeDocument)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
 
                 if !workspace.editorErrorMessage.isEmpty {
                     Text(workspace.editorErrorMessage)

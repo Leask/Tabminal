@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
 import { parseArgs } from 'node:util';
+import { getDataDirectory } from './data-directory.mjs';
 
 const DEFAULT_CONFIG = {
     host: '127.0.0.1',
@@ -83,8 +83,8 @@ function parsePositiveIntWithMin(value, fallback, min, label) {
 }
 
 function loadConfig() {
-    // 1. Load from ~/.tabminal/config.json
-    const configDir = path.join(os.homedir(), '.tabminal');
+    // 1. Load the instance config (defaults to ~/.tabminal/config.json).
+    const configDir = getDataDirectory();
     const homeConfigPath = path.join(configDir, 'config.json');
 
     try {

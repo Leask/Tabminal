@@ -45,7 +45,7 @@ open -a Simulator --args -CurrentDeviceUDID "${DEVICE_ID}" \
     >/dev/null 2>&1 || true
 
 XCODEBUILD_ARGS=()
-tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "xrsimulator" XCODEBUILD_ARGS
+tabminal_ghostty_xcodebuild_args "${ROOT_DIR}" "xrsimulator"
 
 xcodebuild \
     -project "${PROJECT_PATH}" \
@@ -53,7 +53,7 @@ xcodebuild \
     -sdk xrsimulator \
     -destination "id=${DEVICE_ID}" \
     -derivedDataPath "${ROOT_DIR}/build-visionos" \
-    "${XCODEBUILD_ARGS[@]}" \
+    ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"} \
     build
 
 xcrun simctl boot "${DEVICE_ID}" >/dev/null 2>&1 || true
@@ -105,5 +105,5 @@ if [[ -n "${TABMINAL_MOBILE_ALLOW_UNSTABLE_GHOSTTY:-}" ]]; then
     )
 fi
 
-env "${LAUNCH_ENV[@]}" \
+env ${LAUNCH_ENV[@]+"${LAUNCH_ENV[@]}"} \
     xcrun simctl launch "${DEVICE_ID}" "${APP_ID}"

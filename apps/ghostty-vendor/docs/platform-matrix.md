@@ -12,7 +12,12 @@ Required libraries:
 - `xros-arm64`
 - `xros-arm64-simulator`
 
-## Verified status
+## Historical March 2026 Verification
+
+These are earlier local results, not current-toolchain or physical-device
+acceptance. See [current recovery](../../Apple/PROGRESS.md). The original artifact
+is not published, the visionOS PR is unmerged, and the legacy build runner
+currently fails against the Xcode 27.2 SDK.
 
 | Platform | Ghostty slice in xcframework | Tabminal consumer build | Runtime status |
 | --- | --- | --- | --- |
