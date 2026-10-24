@@ -8,6 +8,12 @@ import { LigaturesAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-ligatu
 import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify@3.3.3/+esm';
 
 const LOCAL_MODULE_VERSION = new URL(import.meta.url).search;
+const { mergeAgentMessageText, selectAgentMessageText } = await import(
+    `./modules/agent-messages.js${LOCAL_MODULE_VERSION}`
+);
+const { normalizeAgentCommands, rankAgentCommands } = await import(
+    `./modules/agent-commands.js${LOCAL_MODULE_VERSION}`
+);
 const {
     normalizeBaseUrl,
     getServerEndpointKeyFromUrl,
@@ -1478,6 +1484,7 @@ class ServerClient {
         if (
             this.acpBusSocket
             && this.acpBusSocket.readyState === WebSocket.OPEN
+            && this.acpBusClientId
         ) {
             return true;
         }
@@ -1499,29 +1506,40 @@ class ServerClient {
 
             return await new Promise((resolve) => {
                 let settled = false;
+                const timeout = setTimeout(() => {
+                    settle(false);
+                    socket.close();
+                }, 10000);
                 const settle = (value) => {
                     if (settled) {
                         return;
                     }
                     settled = true;
+                    clearTimeout(timeout);
                     resolve(value);
                 };
 
                 socket.addEventListener('open', () => {
+                    if (this.acpBusSocket !== socket) return;
                     this.handleAcpBusOpen();
-                    settle(true);
                 });
                 socket.addEventListener('message', (event) => {
+                    if (this.acpBusSocket !== socket) return;
                     try {
-                        this.handleAcpBusMessage(JSON.parse(event.data));
+                        const payload = JSON.parse(event.data);
+                        if (payload.type === 'snapshot') {
+                            this.acpBusClientId = payload.clientId;
+                            settle(true);
+                        }
+                        this.handleAcpBusMessage(payload);
                     } catch {
                         // Ignore malformed bus payloads.
                     }
                 });
                 socket.addEventListener('close', () => {
-                    if (this.acpBusSocket === socket) {
-                        this.acpBusSocket = null;
-                    }
+                    settle(false);
+                    if (this.acpBusSocket !== socket) return;
+                    this.acpBusSocket = null;
                     const shouldReconnect = !socket._tabminalIntentionalClose;
                     this.handleAcpBusClose({ shouldReconnect });
                     settle(false);
@@ -1549,6 +1567,7 @@ class ServerClient {
     }
 
     handleAcpBusClose({ shouldReconnect = true } = {}) {
+        this.acpBusClientId = '';
         this.acpBusState = null;
         for (const agentTab of getAgentTabsForServer(this.id)) {
             agentTab.handleBusDisconnected();
@@ -1569,6 +1588,7 @@ class ServerClient {
         }
         const socket = this.acpBusSocket;
         this.acpBusSocket = null;
+        this.handleAcpBusClose({ shouldReconnect: false });
         if (socket) {
             socket._tabminalIntentionalClose = true;
             try {
@@ -1578,7 +1598,6 @@ class ServerClient {
             }
             return;
         }
-        this.handleAcpBusClose({ shouldReconnect: false });
     }
 
     handleAcpBusMessage(payload) {
@@ -10268,6 +10287,9 @@ class AgentTab {
         this.key = makeAgentTabKey(this.serverId, this.id);
         this.connectionKind = 'bus';
         this.busAttachedSessionKey = '';
+        this.busAttachFailureKey = '';
+        this.busAttachFailureMessage = '';
+        this.busAttachRetryAt = 0;
         this.busSyncTimer = null;
         this.busSyncPromise = null;
         this.busSyncNeedsTimeline = false;
@@ -10399,6 +10421,9 @@ class AgentTab {
         );
         if (previousObservedSessionKey !== currentObservedSessionKey) {
             this.busAttachedSessionKey = '';
+            this.busAttachFailureKey = '';
+            this.busAttachFailureMessage = '';
+            this.busAttachRetryAt = 0;
         }
         const hasTranscriptPayload = [
             data.messages,
@@ -10498,6 +10523,12 @@ class AgentTab {
         if (hasTranscriptPayload || observedSessionChanged) {
             this.#applyPlanState(nextPlan);
         }
+        if (currentObservedSessionKey
+            && currentObservedSessionKey === this.busAttachFailureKey) {
+            this.status = 'error';
+            this.busy = false;
+            this.errorMessage = this.busAttachFailureMessage;
+        }
     }
 
     async listResumeSessions({ force = false } = {}) {
@@ -10546,6 +10577,10 @@ class AgentTab {
     connect() {
         if (!this.server.isAuthenticated) return;
         const observedSessionKey = this.getObservedSessionKey();
+        if ((observedSessionKey && observedSessionKey === this.busAttachFailureKey)
+            || Date.now() < this.busAttachRetryAt) {
+            return;
+        }
         if (
             observedSessionKey
             && this.busAttachedSessionKey === observedSessionKey
@@ -10564,6 +10599,25 @@ class AgentTab {
                 }
                 await this.syncFromBus({ attach: true });
             } catch (error) {
+                if (['not_supported', 'session_missing', 'tab_missing']
+                    .includes(error?.code)) {
+                    this.busAttachFailureKey = observedSessionKey;
+                    this.busAttachFailureMessage = error.message;
+                    try {
+                        await this.loadTimelinePage({
+                            mode: 'replace',
+                            limit: AGENT_TRANSCRIPT_INITIAL_VISIBLE_BLOCKS
+                        });
+                    } catch {
+                        // An unavailable controller must not hide cached history.
+                    }
+                    this.status = 'error';
+                    this.busy = false;
+                    this.errorMessage = error.message;
+                    this.notifyUi();
+                } else {
+                    this.busAttachRetryAt = Date.now() + 5000;
+                }
                 console.warn(
                     'Failed to attach agent tab to ACP bus:',
                     error?.message || error
@@ -11031,6 +11085,9 @@ class AgentTab {
 
     handleBusDisconnected() {
         this.busAttachedSessionKey = '';
+        this.busAttachFailureKey = '';
+        this.busAttachFailureMessage = '';
+        this.busAttachRetryAt = 0;
         if (this.busSyncTimer) {
             clearTimeout(this.busSyncTimer);
             this.busSyncTimer = null;
@@ -11816,6 +11873,15 @@ class AgentTab {
         }
         if (previousObservedSessionKey !== this.getObservedSessionKey()) {
             this.busAttachedSessionKey = '';
+            this.busAttachFailureKey = '';
+            this.busAttachFailureMessage = '';
+            this.busAttachRetryAt = 0;
+        }
+        if (this.busAttachFailureKey === this.getObservedSessionKey()
+            && this.busAttachFailureKey) {
+            this.status = 'error';
+            this.busy = false;
+            this.errorMessage = this.busAttachFailureMessage;
         }
         const nextSession = this.getLinkedSession();
         const nextSnapshot = JSON.stringify({
@@ -12584,24 +12650,6 @@ function updateAgentConfigSelect(selectEl, option) {
     }
 }
 
-function normalizeAgentCommands(commands) {
-    if (!Array.isArray(commands)) return [];
-    return commands
-        .map((command) => {
-            const name = typeof command?.name === 'string'
-                ? command.name.trim()
-                : '';
-            if (!name) return null;
-            return {
-                kind: 'command',
-                name,
-                description: command?.description || '',
-                inputHint: command?.input?.hint || ''
-            };
-        })
-        .filter(Boolean);
-}
-
 function normalizeListedAgentSessions(sessions) {
     if (!Array.isArray(sessions)) return [];
     const normalized = sessions
@@ -12833,64 +12881,6 @@ function buildAgentMessageAttachmentsNode(attachments) {
     return container;
 }
 
-function isLikelyReplayTextFragment(value) {
-    const text = String(value || '');
-    return text.length >= 3 && /[\p{L}\p{N}]/u.test(text);
-}
-
-function mergeAgentMessageText(previousText, chunkText) {
-    const previous = String(previousText || '');
-    const chunk = String(chunkText || '');
-    if (!previous) return chunk;
-    if (!chunk) return previous;
-    if (previous === chunk) {
-        return isLikelyReplayTextFragment(chunk)
-            ? previous
-            : `${previous}${chunk}`;
-    }
-    if (
-        chunk.startsWith(previous)
-        && isLikelyReplayTextFragment(previous)
-    ) {
-        return chunk;
-    }
-    if (
-        previous.startsWith(chunk)
-        && isLikelyReplayTextFragment(chunk)
-    ) {
-        return previous;
-    }
-    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
-    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
-        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
-            return `${previous}${chunk.slice(overlap)}`;
-        }
-    }
-    if (/\s$/.test(previous) || /^\s/.test(chunk)) {
-        return `${previous}${chunk}`;
-    }
-    const previousLast = previous.slice(-1);
-    const chunkFirst = chunk[0] || '';
-    if (
-        /[.!?'")\]]/.test(previousLast)
-        && /[A-Z"'[(]/.test(chunkFirst)
-    ) {
-        return `${previous}\n\n${chunk}`;
-    }
-    return `${previous}${chunk}`;
-}
-
-function selectAgentMessageText(previousText, nextText) {
-    const previous = String(previousText || '');
-    const next = String(nextText || '');
-    if (!previous) return next;
-    if (!next) return previous;
-    if (previous === next) return previous;
-    if (next.startsWith(previous)) return next;
-    if (previous.startsWith(next)) return previous;
-    return previous;
-}
-
 function getAgentCommandSuggestions(agentTab, promptValue) {
     const intent = getAgentPromptIntent(agentTab, promptValue);
     if (intent.kind !== 'commands') return [];
@@ -12904,22 +12894,7 @@ function getAgentCommandSuggestions(agentTab, promptValue) {
             inputHint: ''
         });
     }
-    const query = String(intent.query || '').toLowerCase();
-    const ranked = commands.filter((command) => {
-        const name = command.name.toLowerCase();
-        return !query || name.startsWith(query) || name.includes(query);
-    });
-
-    ranked.sort((left, right) => {
-        const leftStarts = left.name.toLowerCase().startsWith(query);
-        const rightStarts = right.name.toLowerCase().startsWith(query);
-        if (leftStarts !== rightStarts) {
-            return leftStarts ? -1 : 1;
-        }
-        return left.name.localeCompare(right.name);
-    });
-
-    return ranked.slice(0, 8);
+    return rankAgentCommands(commands, intent.query).slice(0, 8);
 }
 
 function getAgentResumeSuggestions(agentTab, promptValue, sessions = []) {
@@ -15121,6 +15096,10 @@ async function throwResponseError(response, fallbackMessage) {
 }
 
 async function sendAcpBusCommand(server, command, options = {}) {
+    if (!await server.ensureAcpBusConnected() || !server.acpBusClientId) {
+        throw new Error('Agent workspace connection is unavailable');
+    }
+    command = { ...command, clientId: server.acpBusClientId };
     const attachments = Array.isArray(options.attachments)
         ? options.attachments
         : [];

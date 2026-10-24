@@ -942,9 +942,17 @@ The ACP bus is the authoritative transcript and session-cache layer for ACP
 clients. Web and native clients should use these routes to hydrate open agent
 tabs and page transcript history.
 
-The bus websocket is only a realtime invalidation stream. HTTP responses from
-this section are the source of truth after reconnects, restore, or missed
-events.
+The bus websocket carries structured deltas and invalidations. HTTP responses
+from this section are the source of truth after reconnects, authoritative
+replacement, or missed events. Clients must refetch when `requiresFullSync` is
+set rather than attempting to infer history from text or provider ids.
+
+Negotiated Core subagent events are projected into ordinary tool items with a
+stable tool id and optional `subagent` detail. Their status is independent of
+parent prompt completion. Clients do not need a second Lody connection or a
+provider-specific ordering model; public timeline `index` remains bus-owned.
+Absent extension capabilities mean ordinary ACP behavior, not an implicit
+promise of unsupported controls.
 
 ### 13.1 `GET /api/acp-bus/state`
 
@@ -1208,13 +1216,15 @@ Recommended native behavior:
 
 The ACP bus command route is the only HTTP mutation surface for ACP tabs.
 
-Request body always includes a `type` field.
+Request body always includes a `type` field. Web clients also include the
+`clientId` from their current bus websocket snapshot (see section 15.1).
 
 #### Command envelope
 
 ```json
 {
-  "type": "tab.prompt"
+  "type": "tab.prompt",
+  "clientId": "server-issued-connection-uuid"
 }
 ```
 
@@ -1460,6 +1470,7 @@ Important command error codes:
 - `invalid_request`
 - `unknown_agent`
 - `runtime_unavailable`
+- `runtime_timeout`
 - `session_missing`
 - `tab_missing`
 - `permission_stale`
@@ -1710,10 +1721,12 @@ After the bus is ready, the server sends a bus-native inventory snapshot:
 ```json
 {
   "type": "snapshot",
+  "clientId": "server-issued-connection-uuid",
   "state": {
     "bus": {
       "started": true,
       "restoring": false,
+      "attachmentPolicy": "workspace-demand",
       "observedSessionCount": 2,
       "openTabCount": 1
     },
@@ -1729,6 +1742,29 @@ After the bus is ready, the server sends a bus-native inventory snapshot:
 `sessions` is a bounded cache summary from the ACP bus store. Clients should
 use it as a hint, not as the only source of visible tab state. `state.tabs` is
 the same lightweight open-tab inventory returned by `/api/acp-bus/state`.
+
+Wait for this snapshot before sending web commands. Include its `clientId` in
+`POST /api/acp-bus/command` (JSON or multipart) to bind subscriptions to this
+websocket. A stale connection id is rejected with HTTP 503,
+`runtime_unavailable`, and `details.reason = workspace_disconnected` before
+command dispatch. Reconnect obtains a new id and
+explicitly reattaches open workspace tabs; persisted tab identities by
+themselves never start ACP controllers. The id identifies lifetime, not auth.
+
+Each connection owns its own tab subscription. `tab.detach` releases that
+connection's reference; `tab.close` removes the shared workspace tab and all
+its references. Disconnect releases only that connection's references. A
+controller is released only when no references and no unfinished work remain.
+Headless commands may omit `clientId` for an explicit manual subscription;
+those consumers must detach/close and should prefer websocket-owned lifetimes.
+
+Background metadata discovery does not attach sessions. History synchronization
+only uses advertised Lody read-only history version 1. It skips attached
+sessions and never falls back to load/resume for unsupported providers.
+Unattached changes may therefore appear late or remain metadata-only. Successful
+atomic history imports emit `session_snapshot_updated` with `requiresFullSync`;
+failed imports preserve the old cache and emit `session_history_sync_failed`.
+Timeline reads and the resume picker still read SQLite only.
 
 ### 15.2 Event messages
 
@@ -1918,6 +1954,19 @@ Common statuses:
 ```
 
 This route is the exception to the older string-only error body.
+
+`runtime_timeout` returns HTTP `504` with `retryable: false`: the client must
+reconcile state before deciding what to do, not automatically replay a command
+whose upstream delivery is uncertain. Initialization and new/list/resume calls
+are bounded to 30 seconds after startup admission; authoritative history load
+is bounded to 120 seconds. A queued initialization can wait for an admission
+slot before its own deadline begins. These are runtime deadlines, not a global
+HTTP request deadline or a guarantee that a long-running prompt will finish.
+
+`permission_stale` returns HTTP `409` for a missing or consumed permission
+request. An option not advertised by the pending request is invalid input;
+clients must not fabricate option ids. Prompt acknowledgement is acceptance,
+not completion. Completion, errors and child activity arrive through bus events.
 
 ### 16.2 Heartbeat write conflict
 

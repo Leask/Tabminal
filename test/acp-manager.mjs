@@ -656,7 +656,7 @@ describe('AcpManager', () => {
         }
     });
 
-    it('uses the platform-specific Codex ACP package on supported platforms', async () => {
+    it('uses the installed lockfile-pinned Codex adapter', async () => {
         const manager = new AcpManager();
         try {
             const codex = (await manager.listDefinitions()).find(
@@ -664,10 +664,7 @@ describe('AcpManager', () => {
             );
             assert.ok(codex);
             if (process.platform === 'darwin' && process.arch === 'arm64') {
-                assert.match(
-                    codex.commandLabel,
-                    /@zed-industries\/codex-acp-darwin-arm64@latest/
-                );
+                assert.equal(codex.commandLabel, 'acp-extension-codex');
             }
         } finally {
             await manager.dispose().catch(() => {});
@@ -708,17 +705,17 @@ describe('AcpManager', () => {
                 {
                     role: 'assistant',
                     text: 'reply one',
-                    streamKey: 'synthetic:0:assistant_message_chunk:assistant:message'
+                    streamKey: 'synthetic:1:assistant_message_chunk:assistant:message'
                 },
                 {
                     role: 'user',
                     text: 'prompt two',
-                    streamKey: 'synthetic:1:user_message_chunk:user:message'
+                    streamKey: 'synthetic:2:user_message_chunk:user:message'
                 },
                 {
                     role: 'assistant',
                     text: 'reply two',
-                    streamKey: 'synthetic:1:assistant_message_chunk:assistant:message'
+                    streamKey: 'synthetic:3:assistant_message_chunk:assistant:message'
                 }
             ]
         );
@@ -728,7 +725,7 @@ describe('AcpManager', () => {
         const baseline = normalizeAgentTranscriptMessages([
             {
                 id: 'user-1',
-                streamKey: 'synthetic:42:user_message_chunk:user:message',
+                streamKey: 'native-user-1',
                 role: 'user',
                 kind: 'message',
                 text: 'prompt one',
@@ -736,7 +733,7 @@ describe('AcpManager', () => {
             },
             {
                 id: 'assistant-1',
-                streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                streamKey: 'native-assistant-1',
                 role: 'assistant',
                 kind: 'message',
                 text: 'reply one',
@@ -754,14 +751,14 @@ describe('AcpManager', () => {
 
         captureRestoreReplayChunk(
             tab.restoreCapture,
-            { sessionUpdate: 'user_message_chunk' },
+            { sessionUpdate: 'user_message_chunk', messageId: 'native-user-1' },
             'user',
             'message',
             'prompt one'
         );
         captureRestoreReplayChunk(
             tab.restoreCapture,
-            { sessionUpdate: 'agent_message_chunk' },
+            { sessionUpdate: 'agent_message_chunk', messageId: 'native-assistant-1' },
             'assistant',
             'message',
             'reply one'
@@ -779,14 +776,14 @@ describe('AcpManager', () => {
             [
                 {
                     id: 'user-1',
-                    streamKey: 'synthetic:42:user_message_chunk:user:message',
+                    streamKey: 'native-user-1',
                     createdAt: '2026-03-30T00:00:00.000Z',
                     role: 'user',
                     text: 'prompt one'
                 },
                 {
                     id: 'assistant-1',
-                    streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                    streamKey: 'native-assistant-1',
                     createdAt: '2026-03-30T00:00:01.000Z',
                     role: 'assistant',
                     text: 'reply one'
@@ -827,7 +824,7 @@ describe('AcpManager', () => {
         );
     });
 
-    it('moves a replayed continued message to the latest shared timeline order', () => {
+    it('keeps a replayed message at its first observed timeline position', () => {
         const capture = createRestoreCaptureState([]);
         const orders = [101, 102, 103];
         capture.nextTimelineOrder = () => orders.shift();
@@ -875,7 +872,7 @@ describe('AcpManager', () => {
             },
             {
                 text: 'Before tool. After tool.',
-                order: 103,
+                order: 101,
                 toolOrder: 102
             }
         );
@@ -953,7 +950,7 @@ describe('AcpManager', () => {
             {
                 createdAt: '',
                 updatedCreatedAt: '',
-                order: 78,
+                order: 77,
                 status: 'completed'
             }
         );
@@ -1047,12 +1044,10 @@ describe('AcpManager', () => {
             secondPass.messages.map((message) => ({
                 role: message.role,
                 text: message.text,
-                streamKey: message.streamKey
             })),
             tab.messages.map((message) => ({
                 role: message.role,
                 text: message.text,
-                streamKey: message.streamKey
             }))
         );
     });
@@ -2608,7 +2603,7 @@ describe('AcpManager', () => {
         }
     });
 
-    it('moves a continued assistant message order after later tool calls', async () => {
+    it('keeps continued assistant messages before later tools', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
             saveTabs: async () => {}
@@ -2668,14 +2663,14 @@ describe('AcpManager', () => {
                 assistantMessage.text,
                 'Before tool. After tool.'
             );
-            assert.ok(assistantMessage.order > toolCall.order);
+            assert.ok(assistantMessage.order < toolCall.order);
             assert.equal(chunkEvent.order, assistantMessage.order);
         } finally {
             await manager.dispose();
         }
     });
 
-    it('reproduces cumulative assistant chunks at the backend bridge layer', async () => {
+    it('preserves overlapping delta chunks without guessing replacements', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
             saveTabs: async () => {}
@@ -2715,7 +2710,7 @@ describe('AcpManager', () => {
                 )
             ));
             assert.ok(syntheticMessage);
-            assert.equal(syntheticMessage.text, 'Alpha Beta');
+            assert.equal(syntheticMessage.text, 'AlphaAlpha Beta');
 
             const openEvent = events.find((event) => (
                 event.type === 'message_open'
@@ -2729,13 +2724,13 @@ describe('AcpManager', () => {
             assert.ok(openEvent);
             assert.ok(chunkEvent);
             assert.equal(openEvent.message.text, 'Alpha');
-            assert.equal(chunkEvent.text, ' Beta');
+            assert.equal(chunkEvent.text, 'Alpha Beta');
         } finally {
             await manager.dispose();
         }
     });
 
-    it('deduplicates an identical synthetic restart without message ids', async () => {
+    it('preserves identical text repeated without source identity', async () => {
         const manager = new AcpManager({
             loadTabs: async () => [],
             saveTabs: async () => {}
@@ -2775,7 +2770,7 @@ describe('AcpManager', () => {
             assert.equal(syntheticMessages.length, 1);
             assert.equal(
                 syntheticMessages[0].text,
-                'Report A\nline 1\nline 2\n'
+                'Report A\nline 1\nline 2\n'.repeat(2)
             );
 
             const opens = events.filter((event) => (
@@ -3053,13 +3048,13 @@ describe('AcpManager', () => {
         }
     });
 
-    it('merges sentence chunks into separate paragraphs', () => {
+    it('does not invent paragraph boundaries', () => {
         assert.equal(
             mergeAgentMessageText(
                 'Creating the file now.',
                 'Created `file.txt` with hello.'
             ),
-            'Creating the file now.\n\nCreated `file.txt` with hello.'
+            'Creating the file now.Created `file.txt` with hello.'
         );
     });
 
@@ -3093,22 +3088,22 @@ describe('AcpManager', () => {
         );
     });
 
-    it('deduplicates cumulative assistant chunks', () => {
+    it('does not discard overlapping or repeated delta bytes', () => {
         assert.equal(
             mergeAgentMessageText('Alpha', 'Alpha Beta'),
-            'Alpha Beta'
+            'AlphaAlpha Beta'
         );
         assert.equal(
             mergeAgentMessageText('Alpha Beta', 'Beta Gamma'),
-            'Alpha Beta Gamma'
+            'Alpha BetaBeta Gamma'
         );
         assert.equal(
             mergeAgentMessageText('OK', 'OK'),
-            'OK'
+            'OKOK'
         );
     });
 
-    it('collapses repeated synthetic turn replay blocks', () => {
+    it('preserves distinct identities even when text repeats', () => {
         const messages = normalizeAgentTranscriptMessages([
             {
                 id: 'u1',
@@ -3169,6 +3164,18 @@ describe('AcpManager', () => {
                     order: 1
                 },
                 {
+                    id: 'a1',
+                    streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
+                    text: '# 進度矩陣',
+                    order: 2
+                },
+                {
+                    id: 'u2',
+                    streamKey: 'synthetic:42:user_message_chunk:user:message',
+                    text: '重新輸出一次進度表',
+                    order: 3
+                },
+                {
                     id: 'a2',
                     streamKey: 'synthetic:42:agent_message_chunk:assistant:message',
                     text: '# 進度矩陣',
@@ -3190,7 +3197,7 @@ describe('AcpManager', () => {
         );
     });
 
-    it('preserves existing message orders when collapsing replay blocks', () => {
+    it('preserves existing message order for distinct repeated turns', () => {
         const messages = normalizeAgentTranscriptMessages([
             {
                 id: 'u1',
@@ -3233,6 +3240,8 @@ describe('AcpManager', () => {
             })),
             [
                 { id: 'u1', order: 101 },
+                { id: 'a1', order: 102 },
+                { id: 'u2', order: 103 },
                 { id: 'a2', order: 104 }
             ]
         );

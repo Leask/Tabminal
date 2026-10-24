@@ -63,6 +63,7 @@ class TabminalTestAgent {
                 version: '0.1.0'
             },
             agentCapabilities: {
+                _meta: { lody: { subagentEvents: { version: 1 } } },
                 loadSession: false
             }
         };
@@ -361,7 +362,8 @@ class TabminalTestAgent {
             await sleep(30, signal);
 
             if (commandName === 'cancel' || /cancel-smoke/i.test(promptText)) {
-                for (let index = 0; index < 8; index += 1) {
+                const chunks = promptCommand?.input === 'long' ? 250 : 8;
+                for (let index = 0; index < chunks; index += 1) {
                     await this.connection.sessionUpdate({
                         sessionId: params.sessionId,
                         update: {
@@ -375,6 +377,38 @@ class TabminalTestAgent {
                     });
                     await sleep(120, signal);
                 }
+                return { stopReason: 'end_turn' };
+            }
+
+            if (commandName === 'extensions') {
+                const base = {
+                    version: 1, sessionId: params.sessionId,
+                    runId: crypto.randomUUID()
+                };
+                await this.connection.extNotification('_lody/subagents/event', {
+                    ...base, type: 'snapshot', snapshot: {
+                        state: 'running', name: 'Community adapter test',
+                        support: { stream: ['text'], progress: true,
+                            outputRead: 'none', cancel: false }
+                    }
+                });
+                await this.connection.extNotification('_lody/subagents/event', {
+                    ...base, type: 'output', update: {
+                        sessionUpdate: 'agent_message_chunk',
+                        content: { type: 'text', text: 'Child stream preserved.' }
+                    }
+                });
+                // Outlives the parent turn; parent completion must not settle it.
+                setTimeout(() => {
+                    void this.connection.extNotification('_lody/subagents/event', {
+                        ...base, type: 'snapshot', snapshot: {
+                            state: 'completed', name: 'Community adapter test',
+                            summary: 'Child completed independently.',
+                            support: { stream: ['text'], progress: true,
+                                outputRead: 'none', cancel: false }
+                        }
+                    });
+                }, 2000);
                 return { stopReason: 'end_turn' };
             }
 

@@ -21,8 +21,10 @@ export function registerAcpBusCommandRoute(router, { acpBusManager }) {
 
         const type = String(command?.type || '').trim();
         const requestId = String(command?.requestId || '').trim();
+        const clientId = String(command?.clientId || '').trim();
 
         try {
+            acpBusManager.assertWorkspaceClient(clientId);
             switch (type) {
                 case 'tab.create': {
                     const { agentId, cwd, terminalSessionId, modeId } = command;
@@ -33,6 +35,7 @@ export function registerAcpBusCommandRoute(router, { acpBusManager }) {
                         throw new Error('cwd is required');
                     }
                     const tab = await acpBusManager.createTabForUi({
+                        clientId,
                         agentId,
                         cwd,
                         terminalSessionId: typeof terminalSessionId === 'string'
@@ -73,6 +76,7 @@ export function registerAcpBusCommandRoute(router, { acpBusManager }) {
                         busSession,
                         attachSource
                     } = await acpBusManager.resumeTabForUi({
+                        clientId,
                         agentId,
                         cwd,
                         sessionId,
@@ -107,7 +111,9 @@ export function registerAcpBusCommandRoute(router, { acpBusManager }) {
                     if (!tabId) {
                         throw new Error('tabId is required');
                     }
-                    const result = await acpBusManager.attachOpenTab(tabId);
+                    const result = await acpBusManager.attachOpenTab(
+                        tabId, 'agent_tab_attach', clientId
+                    );
                     if (!result?.tab) {
                         throw new Error('Agent tab not found');
                     }
@@ -136,7 +142,7 @@ export function registerAcpBusCommandRoute(router, { acpBusManager }) {
                         throw new Error('tabId is required');
                     }
                     await acpBusManager.unpinSession(
-                        `agent-tab:${tabId}`,
+                        acpBusManager.tabPinId(tabId, clientId),
                         'agent_tab_detach'
                     );
                     ctx.body = {

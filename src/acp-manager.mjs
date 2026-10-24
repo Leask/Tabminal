@@ -8,6 +8,13 @@ import { Readable, Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as acp from '@agentclientprotocol/sdk';
+import { runtimeAdmission, withDeadline, SessionExecution } from './agents/admission.mjs';
+import { mergeAgentMessageText, messageStreamKey } from './agents/message-stream.mjs';
+import { lodyProvider } from './agents/providers.mjs';
+import {
+    clientExtensions, projectExtension, supportsExtension
+} from './agents/extensions.mjs';
+export { mergeAgentMessageText } from './agents/message-stream.mjs';
 import pkg from '../package.json' with { type: 'json' };
 import * as persistence from './persistence.mjs';
 
@@ -269,7 +276,7 @@ function normalizeAgentSessionCapabilities(
         ),
         resume: !!(
             sessionCapabilities?.resume
-            && typeof connection?.unstable_resumeSession === 'function'
+            && typeof connection?.resumeSession === 'function'
         ),
         fork: !!(
             sessionCapabilities?.fork
@@ -454,28 +461,6 @@ function hasGhCopilotCliInstalled() {
     return ghCopilotCliInstalledCache;
 }
 
-function getCodexAcpPlatformPackage() {
-    const suffixByPlatform = {
-        darwin: {
-            arm64: 'darwin-arm64',
-            x64: 'darwin-x64'
-        },
-        linux: {
-            arm64: 'linux-arm64',
-            x64: 'linux-x64'
-        },
-        win32: {
-            arm64: 'win32-arm64',
-            x64: 'win32-x64'
-        }
-    };
-    const platformSuffix = suffixByPlatform[process.platform]?.[process.arch];
-    if (!platformSuffix) {
-        return '';
-    }
-    return `@zed-industries/codex-acp-${platformSuffix}`;
-}
-
 function readGhAuthToken() {
     if (typeof ghAuthTokenCache === 'string') {
         return ghAuthTokenCache;
@@ -636,10 +621,6 @@ function makeBuiltInDefinitions() {
     const hasGeminiBinary = commandExists('gemini');
     const hasCopilotBinary = commandExists('copilot');
     const hasGhCopilot = hasGhCopilotWrapper();
-    const codexAcpPlatformPackage = getCodexAcpPlatformPackage();
-    const codexAcpPlatformBinary = codexAcpPlatformPackage
-        ? codexAcpPlatformPackage.split('/').pop()
-        : '';
     const definitions = [
         {
             id: 'gemini',
@@ -659,27 +640,14 @@ function makeBuiltInDefinitions() {
             label: 'Codex CLI',
             description: 'Codex ACP adapter',
             websiteUrl: 'https://openai.com/codex/',
-            command: NPX_COMMAND,
-            args: codexAcpPlatformPackage
-                ? [
-                    '-p',
-                    `${codexAcpPlatformPackage}@latest`,
-                    codexAcpPlatformBinary
-                ]
-                : ['@zed-industries/codex-acp@latest'],
-            commandLabel: codexAcpPlatformPackage
-                ? `npx -p ${codexAcpPlatformPackage}@latest `
-                    + `${codexAcpPlatformBinary}`
-                : 'npx @zed-industries/codex-acp@latest'
+            ...lodyProvider('codex')
         },
         {
             id: 'claude',
             label: 'Claude Agent',
             description: 'Claude Code ACP adapter',
             websiteUrl: 'https://www.anthropic.com/claude-code',
-            command: NPX_COMMAND,
-            args: ['@zed-industries/claude-code-acp@latest'],
-            commandLabel: 'npx @zed-industries/claude-code-acp@latest'
+            ...lodyProvider('claude')
         },
         {
             id: 'copilot',
@@ -909,57 +877,6 @@ export function buildTerminalSpawnRequest(request = {}) {
         args: shellArgs,
         shell: true
     };
-}
-
-function isLikelyReplayTextFragment(value) {
-    const text = String(value || '');
-    return text.length >= 2 && /[\p{L}\p{N}]/u.test(text);
-}
-
-export function mergeAgentMessageText(previousText, chunkText) {
-    const previous = String(previousText || '');
-    const chunk = String(chunkText || '');
-    if (!previous) return chunk;
-    if (!chunk) return previous;
-    if (previous === chunk) {
-        return isLikelyReplayTextFragment(chunk)
-            ? previous
-            : `${previous}${chunk}`;
-    }
-    if (
-        chunk.startsWith(previous)
-        && isLikelyReplayTextFragment(previous)
-    ) {
-        return chunk;
-    }
-    if (
-        previous.startsWith(chunk)
-        && isLikelyReplayTextFragment(chunk)
-    ) {
-        return previous;
-    }
-
-    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
-    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
-        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
-            return `${previous}${chunk.slice(overlap)}`;
-        }
-    }
-
-    if (/\s$/.test(previous) || /^\s/.test(chunk)) {
-        return `${previous}${chunk}`;
-    }
-
-    const previousLast = previous.slice(-1);
-    const chunkFirst = chunk[0] || '';
-    if (
-        /[.!?'")\]]/.test(previousLast)
-        && /[A-Z"'[(]/.test(chunkFirst)
-    ) {
-        return `${previous}\n\n${chunk}`;
-    }
-
-    return `${previous}${chunk}`;
 }
 
 function formatTerminalDisplayCommand(request = {}, spawnRequest = {}) {
@@ -1422,75 +1339,20 @@ function getSyntheticTurnKey(streamKey = '') {
     return match ? match[1] : '';
 }
 
-function buildMessageReplaySignature(message = {}) {
-    return [
-        String(message?.role || ''),
-        String(message?.kind || ''),
-        String(message?.streamKey || ''),
-        String(message?.text || '')
-    ].join('\u0000');
-}
-
 export function normalizeAgentTranscriptMessages(messages = []) {
-    const normalized = Array.isArray(messages)
-        ? messages.map((message, index) =>
-            normalizePersistedMessage(message, index + 1)
-        )
-        : [];
-    if (normalized.length <= 1) {
-        return normalized;
+    const result = [];
+    const byId = new Map();
+    for (const [index, value] of (Array.isArray(messages) ? messages : []).entries()) {
+        const message = normalizePersistedMessage(value, index + 1);
+        const existing = byId.get(message.id);
+        if (existing === undefined) {
+            byId.set(message.id, result.length);
+            result.push(message);
+        } else {
+            result[existing] = { ...message, order: result[existing].order };
+        }
     }
-
-    const blocks = [];
-    let index = 0;
-    while (index < normalized.length) {
-        const first = normalized[index];
-        const syntheticTurnKey = getSyntheticTurnKey(first.streamKey);
-        const block = [first];
-        index += 1;
-        if (!syntheticTurnKey) {
-            blocks.push(block);
-            continue;
-        }
-        while (index < normalized.length) {
-            const next = normalized[index];
-            if (getSyntheticTurnKey(next.streamKey) !== syntheticTurnKey) {
-                break;
-            }
-            block.push(next);
-            index += 1;
-        }
-        const dedupedBlock = [];
-        const dedupedIndexes = new Map();
-        for (const message of block) {
-            const signature = buildMessageReplaySignature(message);
-            const existingIndex = dedupedIndexes.get(signature);
-            if (existingIndex === undefined) {
-                dedupedIndexes.set(signature, dedupedBlock.length);
-                dedupedBlock.push(message);
-                continue;
-            }
-            if (String(message.role || '') === 'assistant') {
-                dedupedBlock[existingIndex] = message;
-            }
-        }
-        blocks.push(dedupedBlock);
-    }
-
-    const dedupedBlocks = [];
-    let previousSignature = '';
-    for (const block of blocks) {
-        const signature = block
-            .map((message) => buildMessageReplaySignature(message))
-            .join('\u0001');
-        if (signature && signature === previousSignature) {
-            continue;
-        }
-        dedupedBlocks.push(block);
-        previousSignature = signature;
-    }
-
-    return dedupedBlocks.flat();
+    return result;
 }
 
 export function createRestoreCaptureState(messages = [], options = {}) {
@@ -1552,66 +1414,14 @@ function areRestoreMessagesEquivalent(left = {}, right = {}) {
         === buildRestoreComparableMessage(right);
 }
 
-function isRestoreMessageContinuation(previousText = '', chunkText = '') {
-    const previous = String(previousText || '');
-    const chunk = String(chunkText || '');
-    if (!previous || !chunk || previous === chunk) {
-        return false;
-    }
-    if (chunk.startsWith(previous) || previous.startsWith(chunk)) {
-        return true;
-    }
-    const maxOverlap = Math.min(previous.length, chunk.length, 2048);
-    for (let overlap = maxOverlap; overlap >= 2; overlap -= 1) {
-        if (previous.slice(-overlap) === chunk.slice(0, overlap)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-function maybeAdvanceRestoreCaptureTurn(capture, update, role, kind, text) {
-    if (
-        !capture
-        || update?.messageId
-        || role !== 'user'
-        || kind !== 'message'
-    ) {
-        return;
-    }
-    const last = capture.messages[capture.messages.length - 1] || null;
-    if (!last) {
-        return;
-    }
-    if (last.role !== 'user' || last.kind !== 'message') {
-        capture.syntheticStreamTurn += 1;
-        capture.syntheticStreams.clear();
-        return;
-    }
-    if (!isRestoreMessageContinuation(last.text, text)) {
+function getRestoreCaptureStreamKey(capture, update, role, kind) {
+    const last = capture.messages.at(-1);
+    if (!update?.messageId && last
+        && (last.role !== role || last.kind !== kind)) {
         capture.syntheticStreamTurn += 1;
         capture.syntheticStreams.clear();
     }
-}
-
-function getRestoreCaptureStreamKey(capture, update, role, kind, text = '') {
-    maybeAdvanceRestoreCaptureTurn(capture, update, role, kind, text);
-    if (update?.messageId) {
-        return update.messageId;
-    }
-    const bucketKey = `${update?.sessionUpdate}:${role}:${kind}`;
-    let streamKey = capture.syntheticStreams.get(bucketKey) || '';
-    if (!streamKey) {
-        streamKey = [
-            'synthetic',
-            capture.syntheticStreamTurn,
-            update?.sessionUpdate || 'message_chunk',
-            role,
-            kind
-        ].join(':');
-        capture.syntheticStreams.set(bucketKey, streamKey);
-    }
-    return streamKey;
+    return messageStreamKey(capture, update, role, kind);
 }
 
 function findMessageIndexByStreamKey(
@@ -1675,16 +1485,13 @@ export function captureRestoreReplayChunk(capture, update, role, kind, text) {
     if (existingIndex !== -1) {
         const existing = capture.messages[existingIndex];
         existing.text = mergeAgentMessageText(existing.text, chunk);
-        if (typeof capture.nextTimelineOrder === 'function') {
-            existing.order = capture.nextTimelineOrder();
-        }
+
         return true;
     }
     if (!update?.messageId) {
         capture.messageCounter += 1;
     }
     const baselineMessage = capture.baselineMessagesByStreamKey.get(streamKey)
-        || capture.baselineMessages[capture.messages.length]
         || null;
     const canReuseBaseline = !!(
         baselineMessage
@@ -1785,10 +1592,10 @@ export function buildRestoredToolCall(
         persisted,
         'createdAt'
     );
-    const nextOrder = (
+    const nextOrder = normalizePersistedTimelineOrder(current.order, 0) || (
         typeof nextTimelineOrder === 'function'
             ? nextTimelineOrder()
-            : normalizePersistedTimelineOrder(current.order, 0)
+            : 0
     )
         || normalizePersistedTimelineOrder(persisted.order, 0)
         || 1;
@@ -2263,6 +2070,12 @@ export class AcpRuntime extends EventEmitter {
         this.cachedConfigOptions = [];
         this.cachedModelState = null;
         this.sessionLoadPromises = new Map();
+        this.lifecycle = new AbortController();
+        this.startupTimeoutMs = options.startupTimeoutMs ?? 30000;
+        this.pendingNewSessions = 0;
+        this.earlySessionMetadata = [];
+        this.readOnly = options.readOnly === true;
+        this.historyRead = null;
     }
 
     #getSessionCapabilities() {
@@ -2283,6 +2096,72 @@ export class AcpRuntime extends EventEmitter {
 
     getSessionCapabilities() {
         return { ...this.#getSessionCapabilities() };
+    }
+
+    async supportsHistoryRead() {
+        await this.start();
+        return this.agentCapabilities?._meta?.lody?.sessionHistory?.version === 1;
+    }
+
+    async readSessionHistory(sessionId, receive) {
+        if (!await this.supportsHistoryRead()) {
+            throw Object.assign(new Error('Read-only history is unsupported'), {
+                code: 'history_unsupported'
+            });
+        }
+        if (this.historyRead || this.tabs.size) {
+            throw new Error('History reader must be idle and separate from controllers');
+        }
+        let tail = Promise.resolve();
+        let failure = null;
+        let queued = 0;
+        this.historyRead = {
+            sessionId,
+            drain: async () => {
+                if (queued >= 32) await tail;
+            },
+            receive: (update) => {
+                // The read-only byte stream waits for this queue between chunks.
+                // Serialize writes without retaining the complete transcript.
+                if (failure) return;
+                queued++;
+                tail = tail.then(async () => {
+                    if (!failure) await receive(update);
+                }).catch((error) => { failure = error; })
+                    .finally(() => { queued--; });
+                return tail;
+            }
+        };
+        try {
+            await withDeadline(() => this.connection.request(
+                '_lody/session/history/read', { sessionId }
+            ), 120000, 'ACP history read');
+            await tail;
+            this.lifecycle.signal.throwIfAborted();
+            if (failure) throw failure;
+        } catch (error) {
+            // A failed RPC can still produce notifications. Never reuse it.
+            failure ||= error;
+            await this.dispose();
+            throw error;
+        } finally {
+            await tail;
+            this.historyRead = null;
+        }
+    }
+
+    async #request(method, params, timeoutMs = 30000) {
+        this.lifecycle.signal.throwIfAborted();
+        try {
+            const response = await withDeadline(
+                () => this.connection[method](params), timeoutMs, `ACP ${method}`
+            );
+            this.lifecycle.signal.throwIfAborted();
+            return response;
+        } catch (error) {
+            if (error.code === 'runtime_timeout') await this.dispose();
+            throw error;
+        }
     }
 
     #supportsGeminiCliSessionListing() {
@@ -2377,7 +2256,7 @@ export class AcpRuntime extends EventEmitter {
 
     async #listSessionsViaConnection(options = {}) {
         const all = !!options.all;
-        const response = await this.connection.listSessions({
+        const response = await this.#request('listSessions', {
             cwd: all ? null : (options.cwd || this.cwd),
             cursor: options.cursor || null
         });
@@ -2517,6 +2396,7 @@ export class AcpRuntime extends EventEmitter {
             title: typeof title === 'string' ? title : '',
             status: 'ready',
             busy: false,
+            execution: new SessionExecution(),
             errorMessage: '',
             messages: [],
             toolCalls: new Map(),
@@ -2553,18 +2433,30 @@ export class AcpRuntime extends EventEmitter {
     }
 
     async start() {
+        this.lifecycle.signal.throwIfAborted();
         if (this.started) return;
         if (this.startPromise) return this.startPromise;
 
-        this.startPromise = this.#startInternal();
+        this.startPromise = runtimeAdmission.run(async () => {
+            try {
+                await withDeadline(
+                    () => this.#startInternal(), this.startupTimeoutMs,
+                    'ACP initialization'
+                );
+                this.lifecycle.signal.throwIfAborted();
+            } catch (error) {
+                this.lifecycle.abort(error);
+                await terminateChildProcessTree(this.process, {
+                    label: 'ACP startup'
+                });
+                this.connection = null;
+                this.process = null;
+                this.started = false;
+                throw error;
+            }
+        }, this.lifecycle.signal);
         try {
             await this.startPromise;
-        } catch (error) {
-            await terminateChildProcessTree(this.process, {
-                label: `ACP runtime ${this.runtimeKey}`
-            });
-            this.process = null;
-            throw error;
         } finally {
             this.startPromise = null;
         }
@@ -2621,6 +2513,7 @@ export class AcpRuntime extends EventEmitter {
                 );
             }
             this.emit('runtime_exit', detail);
+            void this.dispose().catch(() => {});
         });
         child.on('exit', (code, signal) => {
             if (!startupSettled) {
@@ -2649,6 +2542,7 @@ export class AcpRuntime extends EventEmitter {
                     : `Agent runtime exited (${detail.code ?? 'unknown'}).`;
             }
             this.emit('runtime_exit', detail);
+            void this.dispose().catch(() => {});
         });
 
         await Promise.race([
@@ -2657,11 +2551,28 @@ export class AcpRuntime extends EventEmitter {
         ]);
 
         const input = Writable.toWeb(child.stdin);
-        const output = Readable.toWeb(child.stdout);
+        let output = Readable.toWeb(child.stdout, {
+            strategy: {
+                highWaterMark: 65536,
+                size: (chunk) => chunk.byteLength
+            }
+        });
+        if (this.readOnly) {
+            // ndJsonStream drains its input eagerly, so apply backpressure
+            // before decoding. Control transports must never wait on history.
+            output = output.pipeThrough(new TransformStream({
+                transform: async (chunk, controller) => {
+                    await this.historyRead?.drain();
+                    controller.enqueue(chunk);
+                }
+            }));
+        }
         const stream = acp.ndJsonStream(input, output);
         this.connection = new acp.ClientSideConnection(
             () => ({
                 sessionUpdate: (params) => this.#handleSessionUpdate(params),
+                extNotification: (method, params) =>
+                    this.#handleExtension(method, params),
                 requestPermission: (params) => this.#requestPermission(params),
                 readTextFile: (params) => this.#readTextFile(params),
                 writeTextFile: (params) => this.#writeTextFile(params),
@@ -2683,17 +2594,18 @@ export class AcpRuntime extends EventEmitter {
                     version: pkg.version
                 },
                 clientCapabilities: {
+                    _meta: clientExtensions,
                     fs: {
-                        readTextFile: true,
-                        writeTextFile: true
+                        readTextFile: !this.readOnly,
+                        writeTextFile: !this.readOnly
                     },
-                    terminal: true
+                    terminal: !this.readOnly
                 }
             }),
             startupError
         ]);
         startupSettled = true;
-
+        this.lifecycle.signal.throwIfAborted();
         this.agentInfo = result.agentInfo || null;
         this.agentCapabilities = result.agentCapabilities || null;
         this.authMethods = result.authMethods || [];
@@ -2717,9 +2629,27 @@ export class AcpRuntime extends EventEmitter {
     }
 
     async createTab(meta) {
+        this.pendingNewSessions += 1;
+        try {
+            const result = await this.#createTab(meta);
+            const pending = this.earlySessionMetadata.filter(
+                (params) => params.sessionId === result.acpSessionId
+            );
+            this.earlySessionMetadata = this.earlySessionMetadata.filter(
+                (params) => params.sessionId !== result.acpSessionId
+            );
+            for (const params of pending) await this.#handleSessionUpdate(params);
+            return this.serializeTab(this.tabs.get(result.id));
+        } finally {
+            this.pendingNewSessions -= 1;
+            if (!this.pendingNewSessions) this.earlySessionMetadata = [];
+        }
+    }
+
+    async #createTab(meta) {
         await this.start();
         this.clearIdleShutdown();
-        const response = await this.connection.newSession({
+        const response = await this.#request('newSession', {
             cwd: meta.cwd,
             mcpServers: []
         });
@@ -2761,7 +2691,6 @@ export class AcpRuntime extends EventEmitter {
                 // Ignore unsupported mode changes during initial tab creation.
             }
         }
-        await this.#hydrateFreshSessionMetadata(tab);
         this.tabs.set(tab.id, tab);
         this.sessionToTabId.set(tab.acpSessionId, tab.id);
         return this.serializeTab(tab);
@@ -2875,6 +2804,30 @@ export class AcpRuntime extends EventEmitter {
         throw new Error(`${this.definition.label} session history unavailable`);
     }
 
+    async reloadTab(tabId) {
+        const previous = this.tabs.get(tabId);
+        if (!previous) throw new Error('Agent tab not found');
+        if (previous.busy) throw new Error('Agent tab is already running');
+        previous.busy = true;
+        try {
+            return await this.restoreTab({
+                id: previous.id,
+                acpSessionId: previous.acpSessionId,
+                cwd: previous.cwd,
+                terminalSessionId: previous.terminalSessionId,
+                title: previous.title,
+                createdAt: previous.createdAt
+            });
+        } catch (error) {
+            previous.busy = false;
+            if (!this.disposed) {
+                this.tabs.set(tabId, previous);
+                this.sessionToTabId.set(previous.acpSessionId, tabId);
+            }
+            throw error;
+        }
+    }
+
     async resumeTab(meta, options = {}) {
         await this.start();
         this.clearIdleShutdown();
@@ -2910,7 +2863,7 @@ export class AcpRuntime extends EventEmitter {
             this.tabs.set(tab.id, tab);
             this.sessionToTabId.set(tab.acpSessionId, tab.id);
             try {
-                const response = await this.connection.unstable_resumeSession({
+                const response = await this.#request('resumeSession', {
                     cwd: meta.cwd,
                     sessionId: tab.acpSessionId,
                     mcpServers: []
@@ -3048,7 +3001,7 @@ export class AcpRuntime extends EventEmitter {
         });
         if (!replayHistory) {
             try {
-                const response = await this.connection.unstable_resumeSession({
+                const response = await this.#request('resumeSession', {
                     cwd: meta.cwd,
                     sessionId: tab.acpSessionId,
                     mcpServers: []
@@ -3153,13 +3106,26 @@ export class AcpRuntime extends EventEmitter {
         return loadPromise;
     }
 
+    async waitForSessionReady(tabId) {
+        await this.sessionLoadPromises.get(tabId);
+        const tab = this.tabs.get(tabId);
+        if (!tab || this.disposed) throw new Error('Agent session disconnected');
+        if (tab.status === 'error') throw new Error(tab.errorMessage);
+        if (tab.status === 'restoring') throw new Error('Session replay incomplete');
+        return this.serializeTab(tab);
+    }
+
     async #loadSessionIntoTab(tab, meta) {
         try {
-            const response = await this.connection.loadSession({
+            const response = await withDeadline(() => this.connection.loadSession({
                 cwd: meta.cwd,
                 sessionId: tab.acpSessionId,
                 mcpServers: []
-            });
+            }), 120000, 'ACP history replay');
+            this.lifecycle.signal.throwIfAborted();
+            if (this.tabs.get(tab.id) !== tab) {
+                throw new Error('Agent session detached during replay');
+            }
             const restoredSessionId = response?.sessionId || meta.acpSessionId;
             if (restoredSessionId !== tab.acpSessionId) {
                 this.sessionToTabId.delete(tab.acpSessionId);
@@ -3194,6 +3160,11 @@ export class AcpRuntime extends EventEmitter {
             return replacedMessages;
         } catch (error) {
             tab.restoreCapture = null;
+            if (error.code === 'runtime_timeout') {
+                // A timed-out replay may still emit notifications. Its runtime
+                // cannot be reused safely until the transport is terminated.
+                void this.dispose();
+            }
             throw error;
         }
     }
@@ -3372,10 +3343,25 @@ export class AcpRuntime extends EventEmitter {
         const promptAttachments = Array.isArray(attachments)
             ? attachments.map((attachment) => normalizePromptAttachment(attachment))
             : [];
-        const promptBlocks = await this.#buildPromptBlocks(
-            promptText,
-            promptAttachments
-        );
+        const lease = tab.execution.begin();
+        tab.busy = true;
+        let promptBlocks;
+        try {
+            promptBlocks = await this.#buildPromptBlocks(
+                promptText, promptAttachments
+            );
+            this.lifecycle.signal.throwIfAborted();
+            if (this.tabs.get(tabId) !== tab) {
+                throw new Error('Agent tab was closed');
+            }
+            tab.execution.dispatch(lease);
+        } catch (error) {
+            tab.execution.finish(lease);
+            tab.busy = false;
+            await this.#cleanupPromptAttachments(promptAttachments);
+            this.#markTabDirty(tab);
+            throw error;
+        }
         tab.errorMessage = '';
         tab.busy = true;
         tab.status = 'running';
@@ -3403,13 +3389,19 @@ export class AcpRuntime extends EventEmitter {
         });
         this.#markTabDirty(tab);
 
-        const promptPromise = this.connection.prompt({
-            sessionId: tab.acpSessionId,
-            prompt: promptBlocks
-        });
+        let promptPromise;
+        try {
+            promptPromise = Promise.resolve(this.connection.prompt({
+                sessionId: tab.acpSessionId,
+                prompt: promptBlocks
+            }));
+        } catch (error) {
+            promptPromise = Promise.reject(error);
+        }
 
         void promptPromise.then(async (response) => {
-            if (!this.tabs.has(tabId)) return;
+            if (this.tabs.get(tabId) !== tab || this.disposed) return;
+            tab.execution.finish(lease);
             tab.busy = false;
             tab.status = 'ready';
             this.#settleStaleToolCalls(
@@ -3431,8 +3423,6 @@ export class AcpRuntime extends EventEmitter {
             // Some runtimes replay the echoed user turn after prompt completion.
             // Keep the pending echo matcher alive until it is consumed or a
             // later prompt replaces it.
-            const hydratedChanges = await this.#hydrateFreshSessionMetadata(tab);
-            this.#broadcastHydratedSessionMetadata(tab, hydratedChanges);
             this.#broadcast(tab, {
                 type: 'complete',
                 stopReason: response.stopReason,
@@ -3441,7 +3431,8 @@ export class AcpRuntime extends EventEmitter {
             });
             this.#markTabDirty(tab);
         }).catch((error) => {
-            if (!this.tabs.has(tabId)) return;
+            if (this.tabs.get(tabId) !== tab || this.disposed) return;
+            tab.execution.finish(lease);
             tab.busy = false;
             tab.status = 'error';
             this.#settleStaleToolCalls(tab, 'error');
@@ -3458,6 +3449,7 @@ export class AcpRuntime extends EventEmitter {
             });
             this.#markTabDirty(tab);
         }).finally(() => {
+            tab.execution.finish(lease);
             void this.#cleanupPromptAttachments(promptAttachments);
         });
     }
@@ -3468,6 +3460,8 @@ export class AcpRuntime extends EventEmitter {
             throw new Error('Agent tab not found');
         }
         if (!tab.busy) return;
+        const dispatched = tab.execution.cancel();
+        if (!dispatched) return;
 
         for (const permission of tab.permissions.values()) {
             if (permission.status !== 'pending' || !permission.resolve) {
@@ -3480,9 +3474,9 @@ export class AcpRuntime extends EventEmitter {
                 }
             });
         }
-        await this.connection.cancel({
+        await withDeadline(() => this.connection.cancel({
             sessionId: tab.acpSessionId
-        });
+        }), 3000, 'ACP cancel');
         this.#markTabDirty(tab);
     }
 
@@ -3494,6 +3488,16 @@ export class AcpRuntime extends EventEmitter {
         const permission = tab.permissions.get(permissionId);
         if (!permission) {
             throw new Error('Permission request not found');
+        }
+        if (permission.status !== 'pending' || !permission.resolve) {
+            const error = new Error('Permission request is stale');
+            error.code = 'permission_stale';
+            throw error;
+        }
+        if (optionId && !permission.options.some(
+            (option) => option.optionId === optionId
+        )) {
+            throw new Error('Invalid permission option');
         }
         permission.status = optionId ? 'selected' : 'cancelled';
         permission.selectedOptionId = optionId || '';
@@ -3630,11 +3634,11 @@ export class AcpRuntime extends EventEmitter {
             }
         }
 
-        if (this.connection.unstable_closeSession) {
+        if (this.connection?.closeSession && !this.disposed) {
             try {
-                await this.connection.unstable_closeSession({
+                await withDeadline(() => this.connection.closeSession({
                     sessionId: tab.acpSessionId
-                });
+                }), 1000, 'ACP close');
             } catch {
                 // Ignore unsupported or failing close-session behavior.
             }
@@ -3682,7 +3686,10 @@ export class AcpRuntime extends EventEmitter {
             return this.disposePromise;
         }
         this.disposed = true;
+        this.lifecycle.abort(new Error('ACP runtime disposed'));
         this.disposePromise = (async () => {
+            await terminateChildProcessTree(this.process, { label: 'ACP shutdown' });
+            await this.startPromise?.catch(() => {});
             clearTimeout(this.idleTimer);
             this.idleTimer = null;
             for (const terminal of this.terminals.values()) {
@@ -3690,14 +3697,12 @@ export class AcpRuntime extends EventEmitter {
             }
             this.terminals.clear();
             for (const tabId of Array.from(this.tabs.keys())) {
-                await this.closeTab(tabId).catch(() => {});
+                this.tabs.get(tabId)?.execution.cancel();
+                this.detachTab(tabId);
             }
             try {
                 this.process?.stdin?.end?.();
             } catch {}
-            await terminateChildProcessTree(this.process, {
-                label: `ACP runtime ${this.runtimeKey}`
-            });
             await Promise.race([
                 this.connection?.closed?.catch(() => {}),
                 sleep(500)
@@ -3710,9 +3715,20 @@ export class AcpRuntime extends EventEmitter {
     }
 
     async #handleSessionUpdate(params) {
+        if (this.historyRead?.sessionId === params.sessionId) {
+            return await this.historyRead.receive(params.update);
+        }
         const update = params.update;
         const tab = this.#getTabBySession(params.sessionId);
-        if (!tab) return;
+        if (!tab) {
+            if (this.pendingNewSessions && this.earlySessionMetadata.length < 128
+                && ['available_commands_update', 'config_option_update',
+                    'session_info_update', 'current_mode_update']
+                    .includes(update.sessionUpdate)) {
+                this.earlySessionMetadata.push(params);
+            }
+            return;
+        }
         let broadcastUpdate = update;
         let didChange = false;
         let suppressSessionUpdateBroadcast = false;
@@ -3847,6 +3863,32 @@ export class AcpRuntime extends EventEmitter {
         }
     }
 
+    #handleExtension(method, params) {
+        if (!supportsExtension(method, this.agentCapabilities)) return;
+        const tab = this.#getTabBySession(params?.sessionId);
+        if (!tab || this.disposed) return;
+        const previous = tab.toolCalls.get(`lody:subagent:${params?.runId}`);
+        const event = projectExtension(method, params, previous);
+        if (!event) return;
+        if (event.type === 'tool') {
+            const tool = {
+                ...event.tool,
+                order: previous?.order ?? this.#nextTimelineOrder(tab)
+            };
+            tab.toolCalls.set(tool.toolCallId, tool);
+            this.#broadcast(tab, {
+                type: 'session_update',
+                update: { sessionUpdate: 'tool_call_update', ...tool }
+            });
+        } else if (event.type === 'usage') {
+            tab.usage = mergeUsageState(tab.usage, event.usage);
+            this.#broadcast(tab, {
+                type: 'usage_state', usage: serializeUsageState(tab.usage)
+            });
+        }
+        this.#markTabDirty(tab);
+    }
+
     #appendContentChunk(tab, update, role, kind) {
         const content = update.content;
         const text = content.type === 'text'
@@ -3880,9 +3922,8 @@ export class AcpRuntime extends EventEmitter {
             const existing = tab.messages[existingIndex];
             const nextText = mergeAgentMessageText(existing.text, text);
             const appendedText = nextText.slice(existing.text.length);
-            const nextOrder = this.#nextTimelineOrder(tab);
+            const nextOrder = existing.order;
             existing.text = nextText;
-            existing.order = nextOrder;
             this.#broadcast(tab, {
                 type: 'message_chunk',
                 streamKey,
@@ -3962,6 +4003,7 @@ export class AcpRuntime extends EventEmitter {
     }
 
     async #requestPermission(params) {
+        if (this.readOnly) return { outcome: { outcome: 'cancelled' } };
         const tab = this.#getTabBySession(params.sessionId);
         if (!tab) {
             return {
@@ -4006,138 +4048,20 @@ export class AcpRuntime extends EventEmitter {
         });
     }
 
-    async #hydrateFreshSessionMetadata(tab) {
-        const previous = {
-            title: tab.title || '',
-            currentModeId: tab.currentModeId || '',
-            availableModes: JSON.stringify(tab.availableModes || []),
-            availableCommands: JSON.stringify(tab.availableCommands || []),
-            configOptions: JSON.stringify(tab.configOptions || [])
-        };
-        const needsHydration = (
-            !Array.isArray(tab.availableCommands)
-            || tab.availableCommands.length === 0
-            || !Array.isArray(tab.configOptions)
-            || tab.configOptions.length === 0
-        );
-        if (
-            !needsHydration
-            || !this.agentCapabilities?.loadSession
-            || typeof this.connection.loadSession !== 'function'
-        ) {
-            return null;
-        }
-
-        try {
-            const response = await this.connection.loadSession({
-                cwd: tab.cwd,
-                sessionId: tab.acpSessionId,
-                mcpServers: []
-            });
-            const restoredSessionId = response?.sessionId || tab.acpSessionId;
-            if (restoredSessionId !== tab.acpSessionId) {
-                this.sessionToTabId.delete(tab.acpSessionId);
-                tab.acpSessionId = restoredSessionId;
-                this.sessionToTabId.set(tab.acpSessionId, tab.id);
-            }
-            if (typeof response?.title === 'string') {
-                tab.title = response.title;
-            }
-            if (response?.modes?.currentModeId) {
-                tab.currentModeId = response.modes.currentModeId;
-            }
-            tab.availableModes = this.#resolveAvailableModes(
-                response?.modes?.availableModes,
-                tab.availableModes
-            );
-            tab.availableCommands = this.#resolveAvailableCommands(
-                response?.availableCommands,
-                tab.availableCommands
-            );
-            tab.configOptions = this.#resolveConfigOptions(
-                response?.configOptions,
-                tab.configOptions,
-                response?.models
-            );
-            return {
-                titleChanged: previous.title !== (tab.title || ''),
-                modeChanged: previous.currentModeId !== (tab.currentModeId || ''),
-                modesChanged: previous.availableModes
-                    !== JSON.stringify(tab.availableModes || []),
-                commandsChanged: previous.availableCommands
-                    !== JSON.stringify(tab.availableCommands || []),
-                configChanged: previous.configOptions
-                    !== JSON.stringify(tab.configOptions || [])
-            };
-        } catch {
-            // Ignore metadata hydration failures for fresh sessions.
-            return null;
-        }
-    }
-
-    #broadcastHydratedSessionMetadata(tab, changes) {
-        if (!changes) return;
-        const tabMeta = {
-            title: tab.title,
-            currentModeId: tab.currentModeId,
-            availableModes: tab.availableModes,
-            availableCommands: tab.availableCommands,
-            configOptions: tab.configOptions
-        };
-        if (changes.titleChanged) {
-            this.#broadcast(tab, {
-                type: 'session_update',
-                update: {
-                    sessionUpdate: 'session_info_update',
-                    title: tab.title || null
-                },
-                tab: tabMeta
-            });
-        }
-        if (changes.modeChanged || changes.modesChanged) {
-            this.#broadcast(tab, {
-                type: 'session_update',
-                update: {
-                    sessionUpdate: 'current_mode_update',
-                    currentModeId: tab.currentModeId || '',
-                    availableModes: tab.availableModes
-                },
-                tab: tabMeta
-            });
-        }
-        if (changes.commandsChanged) {
-            this.#broadcast(tab, {
-                type: 'session_update',
-                update: {
-                    sessionUpdate: 'available_commands_update',
-                    availableCommands: tab.availableCommands
-                },
-                tab: tabMeta
-            });
-        }
-        if (changes.configChanged) {
-            this.#broadcast(tab, {
-                type: 'session_update',
-                update: {
-                    sessionUpdate: 'config_option_update',
-                    configOptions: tab.configOptions
-                },
-                tab: tabMeta
-            });
-        }
-    }
-
     async #readTextFile(params) {
+        if (this.readOnly) throw new Error('History reader cannot access files');
         const content = await fs.readFile(params.path, 'utf8');
         return { content };
     }
 
     async #writeTextFile(params) {
+        if (this.readOnly) throw new Error('History reader cannot write files');
         await fs.writeFile(params.path, params.content, 'utf8');
         return {};
     }
 
     async #createTerminal(params) {
+        if (this.readOnly) throw new Error('History reader cannot run terminals');
         const tab = this.#getTabBySession(params.sessionId);
         const terminal = this.terminalManager
             ? new ManagedTerminalSession(params, this.terminalManager, {
@@ -4261,6 +4185,7 @@ export class AcpRuntime extends EventEmitter {
     #settleStaleToolCalls(tab, nextStatus = 'completed') {
         let didChange = false;
         for (const [toolCallId, toolCall] of tab.toolCalls.entries()) {
+            if (toolCall.subagent) continue;
             const statusClass = normalizeToolStatusClass(toolCall?.status);
             if (
                 statusClass !== 'pending'
@@ -4313,23 +4238,7 @@ export class AcpRuntime extends EventEmitter {
     }
 
     #getStreamKey(tab, update, role, kind) {
-        if (update.messageId) {
-            return update.messageId;
-        }
-
-        const bucketKey = `${update.sessionUpdate}:${role}:${kind}`;
-        let streamKey = tab.syntheticStreams.get(bucketKey) || '';
-        if (!streamKey) {
-            streamKey = [
-                'synthetic',
-                tab.syntheticStreamTurn,
-                update.sessionUpdate,
-                role,
-                kind
-            ].join(':');
-            tab.syntheticStreams.set(bucketKey, streamKey);
-        }
-        return streamKey;
+        return messageStreamKey(tab, update, role, kind);
     }
 
     #advanceSyntheticStreamTurn(tab) {
@@ -4353,6 +4262,13 @@ export class AcpManager extends EventEmitter {
                 new AcpRuntime(definition, runtimeOptions)
         );
         this.definitions = makeBuiltInDefinitions();
+        const enabledIds = String(process.env.TABMINAL_AGENT_IDS || '')
+            .split(',').map((id) => id.trim()).filter(Boolean);
+        if (enabledIds.length) {
+            this.definitions = this.definitions.filter(
+                (definition) => enabledIds.includes(definition.id)
+            );
+        }
         this.runtimes = new Map();
         this.tabs = new Map();
         this.loadTabs = options.loadTabs || (async () => []);

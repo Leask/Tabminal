@@ -1070,6 +1070,14 @@ export class AcpBusStore {
             'INTEGER NOT NULL DEFAULT 0'
         );
         await this.#ensureTimelineIndexColumn();
+        // Staging is disposable and must use the migrated timeline schema.
+        await this.db.exec(`
+            DROP TABLE IF EXISTS acp_bus_history_items;
+            CREATE TABLE acp_bus_history_items AS
+                SELECT * FROM acp_bus_timeline_items WHERE 0;
+            CREATE UNIQUE INDEX idx_acp_bus_history_key
+                ON acp_bus_history_items(session_key, item_key);
+        `);
         const prunedSnapshots = await this.pruneOversizedSnapshots();
         if (prunedSnapshots > 0) {
             console.warn(
@@ -1592,6 +1600,90 @@ export class AcpBusStore {
         };
     }
 
+    async beginHistoryImport(sessionKey) {
+        const session = await this.getSession(sessionKey);
+        if (!session) throw new Error('History session is missing');
+        return {
+            id: crypto.randomUUID(), sessionKey, nextIndex: 1,
+            version: session.snapshotVersion, title: session.title,
+            startedAt: this.now(), closed: false
+        };
+    }
+
+    async writeHistoryItem(stage, type, id, patch, textDelta) {
+        if (stage.closed) throw new Error('History import is closed');
+        const db = this.#requireDb();
+        const key = `${type}:${id}`;
+        const previous = await db.get(`
+            SELECT item_index, payload_json FROM acp_bus_history_items
+            WHERE session_key = ? AND item_key = ?
+        `, [stage.id, key]);
+        const payload = {
+            ...parseJsonText(previous?.payload_json, {}), ...patch
+        };
+        if (textDelta !== undefined) {
+            const old = parseJsonText(previous?.payload_json, {});
+            payload.text = String(old.text || '') + String(textDelta);
+        }
+        delete payload.index;
+        delete payload.order;
+        const index = previous?.item_index ?? stage.nextIndex++;
+        const json = JSON.stringify({ ...payload, index });
+        // Reject oversized items without corrupting the prior complete history.
+        if (Buffer.byteLength(json) > 16 * 1024 * 1024) {
+            throw new Error('History item exceeds the 16 MiB ingestion limit');
+        }
+        await db.run(`
+            INSERT INTO acp_bus_history_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_key, item_key) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                status = excluded.status, updated_at = excluded.updated_at
+        `, [stage.id, key, type, id, index, payload.role || '',
+            payload.kind || '', payload.status || '', stage.startedAt, json]);
+    }
+
+    async abortHistoryImport(stage) {
+        stage.closed = true;
+        await this.#requireDb().run(
+            'DELETE FROM acp_bus_history_items WHERE session_key = ?', [stage.id]
+        );
+    }
+
+    async commitHistoryImport(stage) {
+        if (stage.closed) throw new Error('History import is closed');
+        const db = this.#requireDb();
+        // SQL guards the entire swap against a live write or a deleted session.
+        const guard = `EXISTS (SELECT 1 FROM acp_bus_sessions
+            WHERE session_key = @key AND snapshot_version = @version)`;
+        const params = {
+            key: stage.sessionKey, id: stage.id, version: stage.version,
+            title: stage.title, at: stage.startedAt
+        };
+        const result = await db.transaction([
+            { type: 'run', sql: `DELETE FROM acp_bus_timeline_items
+                WHERE session_key = @key AND ${guard}`,
+            params: { key: params.key, version: params.version } },
+            { type: 'run', sql: `INSERT INTO acp_bus_timeline_items
+                SELECT @key, item_key, item_type, item_id, item_index,
+                    role, kind, status, updated_at, payload_json
+                FROM acp_bus_history_items WHERE session_key = @id AND ${guard}`,
+            params: { key: params.key, id: params.id, version: params.version } },
+            { type: 'run', sql: `UPDATE acp_bus_sessions SET
+                snapshot_version = snapshot_version + 1, title = @title,
+                snapshot_json = '', continuity_state = 'cached',
+                busy = 0, status = 'ready', error_message = '',
+                last_loaded_at = @at, last_received_at = @at,
+                message_count = (SELECT COUNT(*) FROM acp_bus_history_items
+                    WHERE session_key = @id AND item_type = 'message'),
+                tool_call_count = (SELECT COUNT(*) FROM acp_bus_history_items
+                    WHERE session_key = @id AND item_type = 'tool')
+                WHERE session_key = @key AND snapshot_version = @version`, params }
+        ]);
+        await this.abortHistoryImport(stage);
+        const record = await this.getSession(stage.sessionKey);
+        return result.at(-1)?.changes === 1 ? record : null;
+    }
+
     async saveObservedSession(snapshot, options = {}) {
         const rawSnapshot = cloneSerializable(snapshot, null);
         const agentId = String(rawSnapshot?.agentId || '').trim();
@@ -1711,20 +1803,8 @@ export class AcpBusStore {
             errorMessage: String(
                 safeSnapshot.errorMessage || previous?.errorMessage || ''
             ),
-            messageCount: (
-                options.authoritativeSnapshot === true
-                || (Array.isArray(safeSnapshot.messages)
-                    && safeSnapshot.messages.length > 0)
-            )
-                ? (safeSnapshot.messages || []).length
-                : (previous?.messageCount || 0),
-            toolCallCount: (
-                options.authoritativeSnapshot === true
-                || (Array.isArray(safeSnapshot.toolCalls)
-                    && safeSnapshot.toolCalls.length > 0)
-            )
-                ? (safeSnapshot.toolCalls || []).length
-                : (previous?.toolCallCount || 0),
+            messageCount: deltaRows.filter((row) => row.itemType === 'message').length,
+            toolCallCount: deltaRows.filter((row) => row.itemType === 'tool').length,
             isPresent: options.isPresent === false
                 ? false
                 : (previous?.isPresent ?? true),
@@ -2032,37 +2112,6 @@ export class AcpBusStore {
         );
     }
 
-    async listHotCandidates(limit, options = {}) {
-        const db = this.#requireDb();
-        const selectColumns = this.#sessionSelectColumns(
-            options.includeSnapshot === true
-        );
-        const safeLimit = Number.isFinite(limit)
-            ? Math.max(1, Math.floor(limit))
-            : 10;
-        const clauses = [];
-        if (options.presentOnly !== false) {
-            clauses.push('is_present = 1');
-        }
-        const whereClause = clauses.length > 0
-            ? `WHERE ${clauses.join(' AND ')}`
-            : '';
-        const rows = await db.all(`
-            SELECT ${selectColumns}
-            FROM acp_bus_sessions
-            ${whereClause}
-            ORDER BY
-                upstream_updated_at DESC,
-                last_activity_at DESC,
-                last_seen_at DESC,
-                title COLLATE NOCASE ASC
-            LIMIT ${safeLimit}
-        `);
-        return rows.map((row) =>
-            rowToSession(row, options.includeSnapshot === true)
-        );
-    }
-
     async listColdRepairCandidates(limit, options = {}) {
         const db = this.#requireDb();
         const selectColumns = this.#sessionSelectColumns(
@@ -2079,10 +2128,12 @@ export class AcpBusStore {
         const minAgeMs = Number.isFinite(options.minAgeMs)
             ? Math.max(0, Math.floor(options.minAgeMs))
             : 10 * 60 * 1000;
+        const agents = Array.isArray(options.agentIds) ? options.agentIds : [];
         const rows = await db.all(`
             SELECT ${selectColumns}
             FROM acp_bus_sessions
             WHERE is_present = 1
+            ${agents.length ? `AND agent_id IN (${agents.map(() => '?').join(',')})` : ''}
             ORDER BY
                 CASE
                     WHEN continuity_state = 'resync_required' THEN 0
@@ -2096,7 +2147,7 @@ export class AcpBusStore {
                 last_received_at ASC,
                 upstream_updated_at ASC,
                 title COLLATE NOCASE ASC
-        `);
+        `, agents);
         const candidates = [];
         for (const row of rows) {
             const session = rowToSession(

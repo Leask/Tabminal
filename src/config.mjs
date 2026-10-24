@@ -22,7 +22,6 @@ const DEFAULT_CONFIG = {
     shell: null,
     acpBusDbPath: '',
     acpBusPollIntervalMs: 30000,
-    acpBusHotSessionLimit: 10,
     acpBusCacheSessionLimit: 1000,
     acpBusEventLimit: 2000
 };
@@ -226,10 +225,6 @@ Options:
     if (finalConfig['acp-bus-db-path']) {
         finalConfig.acpBusDbPath = finalConfig['acp-bus-db-path'];
     }
-    if (finalConfig['acp-bus-hot-session-limit']) {
-        finalConfig.acpBusHotSessionLimit =
-            finalConfig['acp-bus-hot-session-limit'];
-    }
     if (finalConfig['acp-bus-cache-session-limit']) {
         finalConfig.acpBusCacheSessionLimit =
             finalConfig['acp-bus-cache-session-limit'];
@@ -309,14 +304,6 @@ Options:
     if (process.env.TABMINAL_ACP_BUS_DB_PATH) {
         finalConfig.acpBusDbPath = process.env.TABMINAL_ACP_BUS_DB_PATH;
     }
-    if (process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT) {
-        finalConfig.acpBusHotSessionLimit =
-            process.env.TABMINAL_ACP_BUS_HOT_SESSION_LIMIT;
-    }
-    if (process.env.TABMINAL_ACP_BUS_HOT_LIMIT) {
-        finalConfig.acpBusHotSessionLimit =
-            process.env.TABMINAL_ACP_BUS_HOT_LIMIT;
-    }
     if (process.env.TABMINAL_ACP_BUS_CACHE_SESSION_LIMIT) {
         finalConfig.acpBusCacheSessionLimit =
             process.env.TABMINAL_ACP_BUS_CACHE_SESSION_LIMIT;
@@ -352,14 +339,10 @@ Options:
         500,
         'ACP bus poll interval'
     );
-    finalConfig.acpBusHotSessionLimit = parsePositiveInt(
-        finalConfig.acpBusHotSessionLimit,
-        DEFAULT_CONFIG.acpBusHotSessionLimit
-    );
     finalConfig.acpBusCacheSessionLimit = parsePositiveIntWithMin(
         finalConfig.acpBusCacheSessionLimit,
         DEFAULT_CONFIG.acpBusCacheSessionLimit,
-        finalConfig.acpBusHotSessionLimit,
+        1,
         'ACP bus cache session limit'
     );
     finalConfig.acpBusEventLimit = parsePositiveIntWithMin(

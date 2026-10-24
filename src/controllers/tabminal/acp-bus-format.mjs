@@ -130,6 +130,12 @@ export function classifyBusCommandFailure(error, fallbackMessage) {
     const details = error?.details && typeof error.details === 'object'
         ? error.details
         : null;
+    if (error?.code === 'runtime_timeout') {
+        return {
+            status: 504,
+            body: buildBusCommandError('runtime_timeout', message, { details })
+        };
+    }
     if (error?.code === 'idempotency_conflict') {
         return {
             status: 409,
@@ -140,7 +146,8 @@ export function classifyBusCommandFailure(error, fallbackMessage) {
             )
         };
     }
-    if (/permission request not found/i.test(message)) {
+    if (error?.code === 'permission_stale'
+        || /permission request not found/i.test(message)) {
         return {
             status: 409,
             body: buildBusCommandError(
@@ -200,7 +207,8 @@ export function classifyBusCommandFailure(error, fallbackMessage) {
             )
         };
     }
-    if (/agent unavailable|not ready on the current host/i.test(message)) {
+    if (error?.code === 'runtime_unavailable'
+        || /agent unavailable|not ready on the current host/i.test(message)) {
         return {
             status: 503,
             body: buildBusCommandError(

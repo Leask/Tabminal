@@ -4,7 +4,7 @@
 
 Branch: `acp_bus`
 
-Last reviewed: 2026-04-28
+Last reviewed: 2026-10-05
 
 The ACP bus is now the primary backend path for ACP agent tabs. Existing web
 agent tabs keep the current per-tab workspace UX, but their transcript hydration
@@ -51,8 +51,8 @@ agentId + '::' + sessionId
 - `cold`: discovered from metadata only; local transcript may be absent.
 - `cached`: local transcript exists, but no active observer is attached.
 - `live`: a bus-owned ACP runtime handle is attached and receiving updates.
-- `resync_required`: local history may be incomplete; an authoritative
-  `loadSession` is needed before claiming full continuity.
+- `resync_required`: local history may be incomplete. A capability-gated
+  read-only history import may repair it; this state never triggers attachment.
 
 ### Backend Store
 
@@ -67,6 +67,7 @@ Important tables:
 - `acp_bus_sessions`
 - `acp_bus_timeline_items`
 - `acp_bus_events`
+- `acp_bus_history_items`: disposable staging for an atomic history replacement
 
 The timeline table uses a single contiguous `item_index` integer. Timeline HTTP
 responses expose this as `index`; no `order` alias is part of the bus timeline
@@ -99,19 +100,19 @@ Timeline rules:
 `src/acp-bus-manager.mjs` owns the ACP bus lifecycle:
 
 - polls ACP providers for global session metadata
-- keeps the hot set attached based on ACP metadata `updatedAt`
+- never auto-attaches a recent/hot set, including after restart
 - treats provider discovery as additive metadata, not deletion-authoritative
-- attaches hot or UI-pinned sessions through bus-owned runtime handles
+- attaches only for explicit workspace subscriptions or headless commands
+- retains controllers while subscribed or while work is unfinished
 - owns lightweight open agent tab metadata
 - persists bus events for downstream clients
 - routes prompt, cancel, permission, mode, config, terminal release, create,
   resume, and close operations through bus-owned runtime handles
 
-Hot set defaults:
+Maintenance defaults:
 
 ```text
 poll interval: 30000ms
-hot session limit: 10
 cached session retention: 1000
 ```
 
@@ -134,26 +135,48 @@ Worker pipeline:
    workspace cwd.
 5. Upsert all discovered metadata into `acp_bus_sessions`.
 6. Never delete missing metadata just because it was absent from a scan.
-7. Rebalance the hot set from metadata `updatedAt`.
-8. On non-startup polls, repair at most one stale session when CPU load is below
-   the configured threshold.
+7. Release unreferenced, idle controllers. This reconciliation also runs on
+   disconnect and runtime updates, independently of a slow metadata/history RPC.
+8. On non-startup polls, import at most one stale unattached session when CPU
+   load is below the threshold and its adapter advertises read-only history.
 
 Repair selection:
 
-- `resync_required` rows are first priority, even if currently hot/observed.
-- Otherwise, only present non-hot rows are eligible.
+- Attached sessions and in-flight attachments are excluded.
+- Among eligible readers, `resync_required` rows are first priority.
 - A normal row is stale only when local receive/load time is more than 10
   minutes old and upstream `updatedAt` is newer than that local sync marker.
-- Repair uses authoritative replay and rewrites the structured timeline.
+- Only `_meta.lody.sessionHistory.version = 1` enables
+  `_lody/session/history/read`. Unsupported providers remain metadata-only.
+- There is no fallback to `loadSession`, `resumeSession`, or a hidden controller.
+- Notifications are projected incrementally into SQLite staging with transport
+  backpressure. A complete successful import atomically replaces the timeline.
+- Failure, disposal, or a concurrent workspace attach keeps the prior history.
+  Failures back off for ten minutes so one bad session cannot starve others.
 
 Attach behavior:
 
 - attach/resume is lightweight and does not block UI on full replay
 - if attach sees an upstream/local gap greater than 10 minutes, it marks the row
   `resync_required` and clears local receive/load markers
-- the next low-load worker pass performs the authoritative repair
+- read-only repair is eligible after the session is no longer attached; there
+  is no promise of immediate catch-up for an existing cache gap
 - if attach/load fails with an explicit upstream session-missing error, the bus
   deletes that session metadata and emits `session_index_removed`
+
+Subscription lifecycle:
+
+- Persisted workspace tab identities alone do not keep a process alive.
+- Each bus websocket gets a server-issued `clientId`. Web commands associate
+  subscriptions with that connection. Disconnect releases only its references.
+- Multiple browsers share a controller; changing the visible workspace does
+  not cancel a still-subscribed session.
+- Prompt preparation/execution, pending permissions, active tools, and running
+  managed terminals retain ownership even after the last workspace closes.
+- Once the last reference and unfinished work are gone, persist the tail, close
+  the upstream session, and dispose an otherwise unused runtime.
+- Headless commands without `clientId` are explicit manual subscriptions and
+  must pair attach/resume/create with detach/close. They are never restored.
 
 ### Server API Surface
 
@@ -284,8 +307,10 @@ The current resume flow is intentionally lightweight:
 10. Frontend reconciles through bus metadata and timeline APIs.
 11. Later bus events continue to invalidate and refresh visible state.
 
-Resume picker and resume execution never wait for upstream history or
-session-list replay on the UI critical path.
+The resume picker reads only the database. Resume execution may wait for
+runtime initialization and the native resume acknowledgement, but full history
+replay is asynchronous. Cached history availability does not prove that a new
+upstream controller is ready for prompts.
 
 ## Active Limitations
 
@@ -300,8 +325,9 @@ window state as signals to fetch authoritative metadata and timeline pages.
 
 If Tabminal is down while an upstream ACP session updates, the bus may miss the
 live update. The worker catches the common case by comparing upstream `updatedAt`
-with local receive/load markers. Gaps greater than 10 minutes are repaired
-opportunistically; smaller gaps are accepted as live-stream continuity.
+with local receive/load markers. Supported read-only adapters can repair stale,
+unattached history opportunistically. Unattached notifications are delayed, not
+realtime. Unsupported adapters do not synchronize history in the background.
 
 ### No Global Notification Surface
 
@@ -314,6 +340,19 @@ Native apps, Telegram, and other adapters are future consumers of the shared bus
 API, but they are not implemented in this branch.
 
 ## Next Plan
+
+### Agent Infrastructure Evolution
+
+The first integration uses published Lody adapters and Core contracts while
+retaining Tabminal's bus, host isolation, structured history and existing UI.
+Runtime admission, prompt ownership, exact message assembly, replay fencing and
+subagent event projection are implemented. No whole-Lody product dependency is
+introduced.
+
+The current module boundaries, completed foundation and remaining adapter,
+session-preference, large-history and extension-control work are tracked in
+`docs/AGENT_ARCHITECTURE.md`. Validation limitations are recorded separately in
+`docs/AGENT_VALIDATION.md`; fixture success is not real-provider feature parity.
 
 ### Phase 2E: Global Notifications
 
@@ -331,7 +370,7 @@ Behavior model:
 
 - if the session is already open, route attention to that tab
 - if not open, clicking notification resumes/attaches that session
-- notification eligibility should respect hot set and pinned/open sessions first
+- realtime notification eligibility follows actual subscriptions and running work
 
 Prerequisite: Phase 2C deltas or stronger event payloads, otherwise the UI must
 fetch too much state to classify events cheaply.

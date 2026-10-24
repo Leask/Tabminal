@@ -169,7 +169,7 @@ async function createRuntimeManagers() {
             terminalManager.saveOpenAgentTabsToWorkspace(tabs),
         listWorkspaceCwds: () => listWorkspaceCwdsForAcpBus(terminalManager),
         pollIntervalMs: config.acpBusPollIntervalMs,
-        hotSessionLimit: config.acpBusHotSessionLimit,
+
         cacheSessionLimit: config.acpBusCacheSessionLimit,
         eventLimit: config.acpBusEventLimit
     });
@@ -319,13 +319,16 @@ function installWebSockets({
         if (target.kind === 'acp-bus') {
             debugLog('[Server] WebSocket connected to ACP bus stream');
             acpBusSockets.add(socket);
+            const clientId = acpBusManager.registerWorkspaceClient();
             socket.on('close', () => {
                 acpBusSockets.delete(socket);
+                void acpBusManager.releaseWorkspaceClient(clientId);
             });
             void (async () => {
                 const state = await acpBusManager.listState();
                 sendWebSocketJson(socket, {
                     type: 'snapshot',
+                    clientId,
                     state,
                     sessions: await acpBusManager.listSessions({
                         limit: config.acpBusCacheSessionLimit

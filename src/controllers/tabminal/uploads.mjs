@@ -59,6 +59,7 @@ export async function parseAcpBusCommand(ctx) {
             tabId: firstFormFieldValue(fields?.tabId),
             text: firstFormFieldValue(fields?.text),
             requestId: firstFormFieldValue(fields?.requestId),
+            clientId: firstFormFieldValue(fields?.clientId),
             attachments: normalizePromptAttachments(
                 files.filter((file) => file?.fieldname === AGENT_ATTACHMENT_FIELD)
             )
