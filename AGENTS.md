@@ -1,6 +1,6 @@
 # Tabminal Agent Notes
 
-Last updated: 2026-03-27
+Last updated: 2026-11-13
 
 This file is for future coding agents working in this repo.
 Keep it current, specific, and operational. The main goal is to preserve the
@@ -465,6 +465,13 @@ Expected behavior:
 
 ## 9) Deployment and Ops Notes
 
+- npm releases use GitHub Actions trusted publishing (OIDC), with no
+  `NPM_TOKEN` or `NODE_AUTH_TOKEN` secret. The npm trusted publisher must match
+  owner `Leask`, repository `Tabminal`, workflow filename `elease.yml`, and
+  GitHub environment `npm`, with direct `npm publish` allowed. Keep those
+  settings aligned if the workflow is renamed. The release job uses Node 26
+  and `id-token: write`; pushes to `main` retain the existing patch-version
+  bump and automatic publication with provenance.
 - Local helper script:
   - `reploy.sh`
 - It restarts one macOS launchctl node plus several Linux `pm2` nodes via SSH.

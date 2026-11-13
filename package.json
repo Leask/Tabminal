@@ -51,7 +51,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/leask/tabminal.git"
+    "url": "git+https://github.com/Leask/Tabminal.git"
   },
   "bugs": {
     "url": "https://github.com/leask/tabminal/issues"
